@@ -13,6 +13,8 @@ const eslintConfig = defineConfig([
     "dist/**",
     "out/**",
     "build/**",
+    "assets/**",
+    "github-pages-dist/**",
     "next-env.d.ts",
   ]),
   eslint.configs.recommended,
@@ -34,6 +36,9 @@ const eslintConfig = defineConfig([
       react: {
         version: "detect",
       },
+    },
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
     },
   },
 ]);

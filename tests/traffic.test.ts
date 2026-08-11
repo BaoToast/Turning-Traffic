@@ -1,48 +1,134 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
-import { canonicalIntersectionKey, computeVC, createDemoRecords, DEFAULT_PCE, inspectWorkbook, normalizeIntersectionName, qualityIssues, rollingPeak, stationFromFilename } from "../lib/traffic.ts";
+import {
+  ACTIVE_LANE_CLASSES,
+  bearingFromAngle,
+  canonicalIntersectionKey,
+  createDemoRecords,
+  DEFAULT_PCE,
+  inspectWorkbook,
+  normalizeIntersectionName,
+  qualityIssues,
+  referenceMovementForOd,
+  rollingPeak,
+  stationFromFilename,
+} from "../lib/traffic.ts";
 
 test("normalizes filenames without deleting real road names", () => {
-  assert.equal(normalizeIntersectionName("11017Ｔ１－０４【中山路-國昌路-民強街路口】(修正版)V2.xls"), "中山路－國昌路－民強街路口");
-  assert.equal(normalizeIntersectionName("11017T1-05(台1-台28路口)..xls"), "台1－台28路口");
+  assert.equal(
+    normalizeIntersectionName(
+      "11017Ｔ１－０４【中山路-國昌路-民強街路口】(修正版)V2.xls",
+    ),
+    "中山路－國昌路－民強街路口",
+  );
+  assert.equal(
+    normalizeIntersectionName("11017T1-05(台1-台28路口)..xls"),
+    "台1－台28路口",
+  );
+  assert.equal(
+    normalizeIntersectionName("15-01-中山北路-岡山路口(七叉路口).xlsx"),
+    "中山北路－岡山路口",
+  );
+  assert.equal(
+    normalizeIntersectionName("中山北路－岡山路口七叉路口"),
+    "中山北路－岡山路口",
+  );
+  assert.equal(
+    normalizeIntersectionName("T15-02 · 岡山北路-育才路口.xls"),
+    "岡山北路－育才路口",
+  );
   assert.equal(stationFromFilename("11017T1-03(台1-路科一路口).xls"), "T1-03");
-  assert.equal(canonicalIntersectionKey("台1－台28路口（湖內區）"), canonicalIntersectionKey("台1-台28路口"));
+  assert.equal(
+    canonicalIntersectionKey("台1－台28路口（湖內區）"),
+    canonicalIntersectionKey("台1-台28路口"),
+  );
+});
+
+test("derives compass bearing from the editable diagram angle", () => {
+  assert.equal(bearingFromAngle(0), "東");
+  assert.equal(bearingFromAngle(45), "東南");
+  assert.equal(bearingFromAngle(90), "南");
+  assert.equal(bearingFromAngle(180), "西");
+  assert.equal(bearingFromAngle(270), "北");
+  assert.equal(bearingFromAngle(-90), "北");
+  assert.equal(bearingFromAngle(315), "東北");
+});
+
+test("keeps the confirmed T15-01 seven-arm movement classification", () => {
+  const name = "中山北路－岡山路口（七岔路口）";
+  assert.equal(referenceMovementForOd(name, "A", "E"), "through");
+  assert.equal(referenceMovementForOd(name, "A", "B"), "left");
+  assert.equal(referenceMovementForOd(name, "A", "G"), "right");
+  assert.equal(referenceMovementForOd(name, "D", "E"), "left");
+  assert.equal(referenceMovementForOd(name, "D", "A"), "right");
+  assert.equal(referenceMovementForOd("其他路口", "A", "E"), null);
 });
 
 test("reads side-by-side approach blocks from legacy Excel without mixing time columns", async () => {
-  const rows: unknown[][] = Array.from({ length: 10 }, () => Array(56).fill(null));
+  const rows: unknown[][] = Array.from({ length: 10 }, () =>
+    Array(56).fill(null),
+  );
   const vehicles = ["機車", "小型車", "大型車", "特種車"];
   const movements = ["左轉", "直進", "右轉"];
   const times = ["07:00~07:15", "07:15~07:30", "07:30~07:45", "07:45~08:00"];
   for (let approach = 0; approach < 4; approach++) {
     const base = approach * 14;
     rows[1][base] = "站號：11017T15-99";
-    rows[1][base + 4] = "日期：115年05月04日(平日)";
+    rows[1][base + 4] = "日期：115.05.04 (平日)";
     rows[2][base] = "站名：測試路/驗證路口";
     rows[3][base] = `路口編號：路口${String.fromCharCode(65 + approach)}`;
     rows[4][base] = "時間";
     vehicles.forEach((vehicle, vehicleIndex) => {
       rows[4][base + 1 + vehicleIndex * 3] = vehicle;
-      movements.forEach((movement, movementIndex) => { rows[5][base + 1 + vehicleIndex * 3 + movementIndex] = movement; });
+      movements.forEach((movement, movementIndex) => {
+        rows[5][base + 1 + vehicleIndex * 3 + movementIndex] = movement;
+      });
     });
     times.forEach((time, rowIndex) => {
       rows[6 + rowIndex][base] = time;
-      for (let column = 1; column <= 12; column++) rows[6 + rowIndex][base + column] = 1;
+      for (let column = 1; column <= 12; column++)
+        rows[6 + rowIndex][base + column] = 1;
     });
   }
   const sheet = XLSX.utils.aoa_to_sheet(rows);
-  sheet["!merges"] = Array.from({ length: 4 }).flatMap((_, approach) => vehicles.map((__, vehicleIndex) => ({ s: { r: 4, c: approach * 14 + 1 + vehicleIndex * 3 }, e: { r: 4, c: approach * 14 + 3 + vehicleIndex * 3 } })));
+  sheet["!merges"] = Array.from({ length: 4 }).flatMap((_, approach) =>
+    vehicles.map((__, vehicleIndex) => ({
+      s: { r: 4, c: approach * 14 + 1 + vehicleIndex * 3 },
+      e: { r: 4, c: approach * 14 + 3 + vehicleIndex * 3 },
+    })),
+  );
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, "平日");
   const binary = XLSX.write(workbook, { type: "array", bookType: "biff8" });
-  const preview = await inspectWorkbook(new File([binary], "11017T15-99-old.xls"));
+  const preview = await inspectWorkbook(
+    new File([binary], "11017T15-99-old.xls"),
+  );
   assert.equal(preview.layout, "turning");
   assert.deepEqual(preview.approaches, ["A", "B", "C", "D"]);
   assert.equal(preview.columns.length, 48);
   assert.equal(preview.date, "2026-05-04");
+  assert.equal(preview.dateSource?.cell, "E2");
   assert.equal(preview.intervals, 4);
-  assert.ok(preview.warnings.some((warning) => warning.includes("Excel 97–2003")));
+  assert.equal(preview.survey?.minutes, 60);
+  assert.equal(preview.survey?.values.length, 48);
+  assert.ok(preview.survey?.values.every((value) => value === 4));
+  assert.deepEqual(
+    Object.fromEntries(
+      ["motorcycle", "car", "heavy", "special"].map(function (vehicle) {
+        return [
+          vehicle,
+          preview.columns.filter(function (column) {
+            return column.vehicle === vehicle;
+          }).length,
+        ];
+      }),
+    ),
+    { motorcycle: 12, car: 12, heavy: 12, special: 12 },
+  );
+  assert.ok(
+    preview.warnings.some((warning) => warning.includes("Excel 97–2003")),
+  );
 });
 
 test("selects a continuous four-interval peak and breaks ties early", () => {
@@ -63,24 +149,28 @@ test("demo data covers three through seven approaches and four quarters", () => 
   const records = createDemoRecords();
   assert.equal(records.length, 20);
   assert.deepEqual([...new Set(records.map((r) => r.quarter))].length, 4);
-  assert.deepEqual([...new Set(records.map((r) => r.approaches.length))].sort(), [3, 4, 5, 7]);
+  assert.deepEqual(
+    [...new Set(records.map((r) => r.approaches.length))].sort(),
+    [3, 4, 5, 7],
+  );
 });
 
 test("keeps the supplied four-vehicle turning-equivalent matrix editable by movement", () => {
   assert.deepEqual(DEFAULT_PCE.special, { left: 2.5, through: 2, right: 2.3 });
-  assert.deepEqual(DEFAULT_PCE.motorcycle, { left: 0.5, through: 0.3, right: 0.4 });
+  assert.deepEqual(DEFAULT_PCE.motorcycle, {
+    left: 0.5,
+    through: 0.3,
+    right: 0.4,
+  });
 });
 
-test("calculates lane capacity from saturation flow and effective green ratio", () => {
-  const record = createDemoRecords()[0];
-  for (const approach of record.approaches) {
-    approach.saturationFlow = 1800;
-    approach.effectiveGreen = 45;
-    approach.cycleLength = 90;
-  }
-  const result = computeVC(record, "AM");
-  assert.equal(result.calculable, true);
-  assert.equal(result.rows[0].capacity, 1800);
+test("uses physical lane classes only for geometry metadata", () => {
+  assert.deepEqual(ACTIVE_LANE_CLASSES, [
+    "fast",
+    "slow",
+    "motorcycle",
+    "other",
+  ]);
 });
 
 test("never compares classified vehicles in vehicles/hr with PCU/hr", () => {
@@ -88,5 +178,22 @@ test("never compares classified vehicles in vehicles/hr with PCU/hr", () => {
   const movement = record.approaches[0].movements.AM;
   movement.rawVehicleTotal = null;
   movement.vehicle.car = 1;
-  assert.equal(qualityIssues([record]).some((issue) => issue.category === "車種統計異常" && issue.station === record.station), false);
+  assert.equal(
+    qualityIssues([record]).some(
+      (issue) =>
+        issue.category === "車種統計異常" && issue.station === record.station,
+    ),
+    false,
+  );
+});
+
+test("does not flag a legitimately high surveyed direction as an anomaly", () => {
+  const record = createDemoRecords()[0];
+  record.approaches[0].movements.AM.left = 99999;
+  assert.equal(
+    qualityIssues([record]).some((issue) =>
+      String(issue.category).includes("異常流量"),
+    ),
+    false,
+  );
 });

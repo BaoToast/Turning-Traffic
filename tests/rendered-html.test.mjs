@@ -5,9 +5,13 @@ async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
-  return worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), {
-    ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
-  }, { waitUntil() {}, passThroughOnException() {} });
+  return worker.fetch(
+    new Request("http://localhost/", { headers: { accept: "text/html" } }),
+    {
+      ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+    },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
 }
 
 test("renders the Turning Traffic application shell", async () => {
@@ -22,6 +26,18 @@ test("renders the Turning Traffic application shell", async () => {
 test("ships required analysis surfaces", async () => {
   const response = await render();
   const html = await response.text();
-  for (const text of ["總覽儀表板", "多計畫管理", "季度批次匯入", "當量與容量參數", "路口轉向圖", "跨計畫", "歷季趨勢比較", "資料品質檢查", "備份、還原與版本"]) assert.match(html, new RegExp(text));
+  for (const text of [
+    "總覽儀表板",
+    "多計畫管理",
+    "季度批次匯入",
+    "車種轉向當量",
+    "車種組成分析",
+    "路口轉向圖",
+    "跨計畫",
+    "歷季趨勢比較",
+    "資料品質檢查",
+    "備份、還原與版本",
+  ])
+    assert.match(html, new RegExp(text));
   assert.doesNotMatch(html, /HCM|服務水準|LOS/);
 });
