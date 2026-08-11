@@ -186,8 +186,13 @@ export type QualityIssue = {
   };
 };
 
-export const VERSION = "v1.5.0";
+export const VERSION = "v1.5.1";
 export const VERSION_HISTORY = [
+  {
+    version: "v1.5.1",
+    date: "2026-08-11",
+    note: "歷季趨勢 Excel 圖表移至資料表下方並重新整理座標軸與留白；跨計畫／多路口比較新增各支線 AM／PM 駛入中央路口與駛出至支線的尖峰流量明細。",
+  },
   {
     version: "v1.5.0",
     date: "2026-08-11",

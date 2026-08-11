@@ -890,6 +890,98 @@ button {
 .compare-card dl > div {
   padding: 8px 0;
 }
+.compare-flow-section {
+  border-top: 1px solid var(--line);
+  padding: 22px;
+  background: #f8faf7;
+}
+.compare-flow-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 16px;
+}
+.compare-flow-heading h3 {
+  margin: 4px 0 0;
+  font-size: 15px;
+}
+.compare-flow-heading p {
+  max-width: 640px;
+  margin: 0;
+  color: #687a7e;
+  font-size: 9px;
+  line-height: 1.7;
+}
+.compare-flow-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.compare-flow-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #d9e3e0;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 7px 18px rgba(21, 51, 59, 0.05);
+}
+.compare-flow-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e4ebe8;
+}
+.compare-flow-card > header span {
+  color: var(--teal);
+  font-size: 9px;
+  font-weight: 700;
+}
+.compare-flow-card > header h3 {
+  margin: 3px 0 0;
+  font-size: 12px;
+}
+.compare-flow-card > header strong {
+  flex: 0 0 auto;
+  color: #40575d;
+  font-size: 9px;
+  line-height: 1.5;
+  text-align: right;
+}
+.branch-flow-table th,
+.branch-flow-table td {
+  text-align: right;
+}
+.branch-flow-table th:first-child,
+.branch-flow-table td:first-child {
+  text-align: left;
+}
+.branch-flow-table thead tr:first-child th:not(:first-child) {
+  color: var(--teal);
+  text-align: center;
+}
+.branch-flow-table td {
+  font-variant-numeric: tabular-nums;
+}
+.branch-flow-table tfoot th {
+  border-top: 2px solid #cbdad6;
+  background: #edf6f2;
+  color: #245c57;
+  padding: 9px 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.branch-flow-table tfoot th:first-child {
+  text-align: left;
+}
+.branch-flow-table td small {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .trend-controls {
   padding: 13px 16px;
   display: flex;
@@ -2014,6 +2106,14 @@ input:focus {
   max-width: 100%;
 }
 @media (max-width: 900px) {
+  .compare-flow-grid {
+    grid-template-columns: 1fr;
+  }
+  .compare-flow-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
   .vc-explainer {
     grid-template-columns: 1fr;
   }

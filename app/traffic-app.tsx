@@ -200,8 +200,8 @@ async function downloadEditableTrendWorkbook(
     "xl/drawings/drawing1.xml",
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
-      '<xdr:twoCellAnchor><xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>' +
-      '<xdr:to><xdr:col>13</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>22</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>' +
+      `<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${lastRow + 2}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>` +
+      `<xdr:to><xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${lastRow + 24}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>` +
       '<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="歷季趨勢圖"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/>' +
       '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/></a:graphicData></a:graphic>' +
       '</xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>',
@@ -219,8 +219,8 @@ async function downloadEditableTrendWorkbook(
       return (
         `<c:ser><c:idx val="${index}"/><c:order val="${index}"/>` +
         `<c:tx><c:v>${esc(item.name)}</c:v></c:tx>` +
-        `<c:spPr><a:ln w="28575"><a:solidFill><a:srgbClr val="${item.color}"/></a:solidFill></a:ln></c:spPr>` +
-        '<c:marker><c:symbol val="circle"/><c:size val="7"/></c:marker>' +
+        `<c:spPr><a:ln w="38100" cap="rnd"><a:solidFill><a:srgbClr val="${item.color}"/></a:solidFill></a:ln></c:spPr>` +
+        `<c:marker><c:symbol val="circle"/><c:size val="6"/><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="${item.color}"/></a:solidFill></a:ln></c:spPr></c:marker>` +
         `<c:cat><c:strRef><c:f>${quotedSheet}!$A$2:$A$${lastRow}</c:f></c:strRef></c:cat>` +
         `<c:val><c:numRef><c:f>${quotedSheet}!$${item.column}$2:$${item.column}$${lastRow}</c:f></c:numRef></c:val>` +
         "</c:ser>"
@@ -230,14 +230,14 @@ async function downloadEditableTrendWorkbook(
   zip.file(
     "xl/charts/chart1.xml",
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-      '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
-      '<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-TW"/><a:t>歷季尖峰交通量趨勢</a:t></a:r></a:p></c:rich></c:tx><c:layout/></c:title>' +
-      '<c:plotArea><c:layout/><c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>' +
+      '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:style val="10"/>' +
+      '<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-TW" sz="1500" b="1"><a:solidFill><a:srgbClr val="17333B"/></a:solidFill></a:rPr><a:t>歷季尖峰交通量趨勢（單位：PCU/hr）</a:t></a:r></a:p></c:rich></c:tx><c:layout/>' +
+      '<c:overlay val="0"/></c:title><c:plotArea><c:layout><c:manualLayout><c:layoutTarget val="inner"/><c:xMode val="factor"/><c:yMode val="factor"/><c:wMode val="factor"/><c:hMode val="factor"/><c:x val="0.13"/><c:y val="0.12"/><c:w val="0.82"/><c:h val="0.70"/></c:manualLayout></c:layout><c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/><c:smooth val="0"/>' +
       seriesXml +
       '<c:axId val="48650112"/><c:axId val="48672768"/></c:lineChart>' +
-      '<c:catAx><c:axId val="48650112"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:tickLblPos val="nextTo"/><c:crossAx val="48672768"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>' +
-      '<c:valAx><c:axId val="48672768"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-TW"/><a:t>尖峰小時交通量（PCU/hr）</a:t></a:r></a:p></c:rich></c:tx><c:layout/></c:title><c:numFmt formatCode="#,##0" sourceLinked="0"/><c:majorGridlines/><c:tickLblPos val="nextTo"/><c:crossAx val="48650112"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>' +
-      '</c:plotArea><c:legend><c:legendPos val="b"/><c:layout/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>',
+      '<c:catAx><c:axId val="48650112"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:tickLblPos val="nextTo"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr><c:crossAx val="48672768"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>' +
+      '<c:valAx><c:axId val="48672768"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:title><c:tx><c:rich><a:bodyPr vert="vert"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-TW" sz="1000"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:rPr><a:t>尖峰小時交通量</a:t></a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title><c:numFmt formatCode="#,##0.0" sourceLinked="0"/><c:majorGridlines><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="DDE6E3"/></a:solidFill></a:ln></c:spPr></c:majorGridlines><c:tickLblPos val="nextTo"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr><c:crossAx val="48650112"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>' +
+      '</c:plotArea><c:legend><c:legendPos val="b"/><c:layout/><c:overlay val="0"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="DDE6E3"/></a:solidFill></a:ln></c:spPr></c:chartSpace>',
   );
   const contentTypesFile = zip.file("[Content_Types].xml");
   if (!contentTypesFile) throw new Error("Excel 格式缺少內容型別設定。");
@@ -334,13 +334,6 @@ function roundedPcu(value: number) {
   return Math.round(value * 10) / 10;
 }
 
-function hasExplicitOdRoutes(record: TrafficRecord) {
-  return Boolean(
-    record.routes?.length &&
-      record.routes.length > record.approaches.length * 3,
-  );
-}
-
 function destinationFlowTotal(
   record: TrafficRecord,
   peak: PeakKey,
@@ -357,7 +350,7 @@ function destinationFlowTotal(
         return sum + Number(route.volumes[peak].vehicle[vehicle] || 0);
       }, 0);
   }
-  if (hasExplicitOdRoutes(record)) {
+  if (record.routes?.length) {
     const destination = record.approaches[destinationIndex];
     return roundedPcu(
       (record.routes || [])
@@ -388,6 +381,36 @@ function destinationFlowTotal(
       );
     }, 0),
   );
+}
+
+function sourceFlowTotal(
+  record: TrafficRecord,
+  peak: PeakKey,
+  sourceIndex: number,
+) {
+  const source = record.approaches[sourceIndex];
+  if (!source) return 0;
+  if (record.routes?.length)
+    return roundedPcu(
+      record.routes
+        .filter(function (route) {
+          return route.fromApproachId === source.id;
+        })
+        .reduce(function (sum, route) {
+          return sum + Number(route.volumes[peak].pcu || 0);
+        }, 0),
+    );
+  return roundedPcu(totalMovement(source, peak));
+}
+
+function branchPeakFlows(record: TrafficRecord, peak: PeakKey) {
+  return record.approaches.map(function (approach, index) {
+    return {
+      approach,
+      enteringIntersection: sourceFlowTotal(record, peak, index),
+      leavingIntersection: destinationFlowTotal(record, peak, index, "all"),
+    };
+  });
 }
 
 function movementFromGeometry(
@@ -2032,21 +2055,35 @@ export default function TrafficApp() {
       .sort(function (a, b) {
         return recordTotal(b, "AM") - recordTotal(a, "AM");
       })
-      .map(function (record) {
+      .flatMap(function (record) {
         const project = projects.find(function (item) {
           return item.id === record.projectId;
         });
-        return {
-          計畫代碼: project?.code || "",
-          計畫名稱: project?.name || "",
-          季度: record.quarter,
-          站號: record.station,
-          路口名稱: record.name,
-          "AM 尖峰時段": record.peaks.AM.start + "–" + record.peaks.AM.end,
-          "AM Peak（PCU/hr）": recordTotal(record, "AM"),
-          "PM 尖峰時段": record.peaks.PM.start + "–" + record.peaks.PM.end,
-          "PM Peak（PCU/hr）": recordTotal(record, "PM"),
-        };
+        const amFlows = branchPeakFlows(record, "AM");
+        const pmFlows = branchPeakFlows(record, "PM");
+        return record.approaches.map(function (approach, index) {
+          return {
+            計畫代碼: project?.code || "",
+            計畫名稱: project?.name || "",
+            季度: record.quarter,
+            站號: record.station,
+            路口名稱: record.name,
+            支線代碼: approach.sourceCode || String.fromCharCode(65 + index),
+            支線名稱: approach.name,
+            "AM 尖峰時段": record.peaks.AM.start + "–" + record.peaks.AM.end,
+            "AM 路口轉向總量（PCU/hr）": recordTotal(record, "AM"),
+            "AM 由支線駛入中央路口（PCU/hr）":
+              amFlows[index].enteringIntersection,
+            "AM 由中央路口駛出至支線（PCU/hr）":
+              amFlows[index].leavingIntersection,
+            "PM 尖峰時段": record.peaks.PM.start + "–" + record.peaks.PM.end,
+            "PM 路口轉向總量（PCU/hr）": recordTotal(record, "PM"),
+            "PM 由支線駛入中央路口（PCU/hr）":
+              pmFlows[index].enteringIntersection,
+            "PM 由中央路口駛出至支線（PCU/hr）":
+              pmFlows[index].leavingIntersection,
+          };
+        });
       });
     const workbook = XLSX.utils.book_new();
     const trendSheet = XLSX.utils.json_to_sheet(trendRows);
@@ -2054,6 +2091,10 @@ export default function TrafficApp() {
       return { wch };
     });
     trendSheet["!autofilter"] = { ref: trendSheet["!ref"] || "A1:A1" };
+    for (let row = 2; row <= trendRows.length + 1; row++)
+      ["B", "C"].forEach(function (column) {
+        if (trendSheet[column + row]) trendSheet[column + row].z = "#,##0.0";
+      });
     XLSX.utils.book_append_sheet(workbook, trendSheet, "歷季趨勢比較");
     const compositionSheet = XLSX.utils.json_to_sheet(vehicleComposition);
     compositionSheet["!cols"] = [20, 10, 10, 30, 15, 26, 18, 16, 16, 14].map(
@@ -2069,14 +2110,19 @@ export default function TrafficApp() {
       if (compositionSheet["J" + row]) compositionSheet["J" + row].z = "0.0%";
     }
     const comparisonSheet = XLSX.utils.json_to_sheet(comparisonRows);
-    comparisonSheet["!cols"] = [14, 26, 10, 12, 30, 18, 20, 18, 20].map(
-      function (wch) {
-        return { wch };
-      },
-    );
+    comparisonSheet["!cols"] = [
+      14, 26, 10, 12, 30, 12, 24, 18, 22, 28, 30, 18, 22, 28, 30,
+    ].map(function (wch) {
+      return { wch };
+    });
     comparisonSheet["!autofilter"] = {
       ref: comparisonSheet["!ref"] || "A1:A1",
     };
+    for (let row = 2; row <= comparisonRows.length + 1; row++)
+      ["I", "J", "K", "M", "N", "O"].forEach(function (column) {
+        if (comparisonSheet[column + row])
+          comparisonSheet[column + row].z = "#,##0.0";
+      });
     XLSX.utils.book_append_sheet(
       workbook,
       comparisonSheet,
@@ -4296,6 +4342,116 @@ export default function TrafficApp() {
                       </tbody>
                     </table>
                   </div>
+                  <div className="compare-flow-section">
+                    <div className="compare-flow-heading">
+                      <div>
+                        <span className="eyebrow">BRANCH FLOW DETAIL</span>
+                        <h3>各支線駛入／駛出尖峰流量</h3>
+                      </div>
+                      <p>
+                        「駛入」為車流由支線進入中央路口；「駛出」為車流由中央路口進入該支線。各支線駛入或駛出合計皆應等於路口尖峰轉向總量，單位均為 PCU/hr。
+                      </p>
+                    </div>
+                    <div className="compare-flow-grid">
+                      {records
+                        .filter(function (record) {
+                          return (
+                            compareProjects.includes(record.projectId) &&
+                            record.quarter === quarter
+                          );
+                        })
+                        .sort(function (a, b) {
+                          return recordTotal(b, peak) - recordTotal(a, peak);
+                        })
+                        .map(function (record) {
+                          const project = projects.find(function (item) {
+                            return item.id === record.projectId;
+                          });
+                          const amFlows = branchPeakFlows(record, "AM");
+                          const pmFlows = branchPeakFlows(record, "PM");
+                          return (
+                            <article className="compare-flow-card" key={record.id}>
+                              <header>
+                                <div>
+                                  <span>{project?.code || "—"} · {record.station}</span>
+                                  <h3>{record.name}</h3>
+                                </div>
+                                <strong>
+                                  AM {recordTotal(record, "AM").toLocaleString()} ／ PM{" "}
+                                  {recordTotal(record, "PM").toLocaleString()} PCU/hr
+                                </strong>
+                              </header>
+                              <div className="table-scroll">
+                                <table className="branch-flow-table">
+                                  <thead>
+                                    <tr>
+                                      <th rowSpan={2}>支線</th>
+                                      <th colSpan={2}>AM Peak（PCU/hr）</th>
+                                      <th colSpan={2}>PM Peak（PCU/hr）</th>
+                                    </tr>
+                                    <tr>
+                                      <th>駛入路口</th>
+                                      <th>駛出至支線</th>
+                                      <th>駛入路口</th>
+                                      <th>駛出至支線</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {record.approaches.map(function (approach, index) {
+                                      return (
+                                        <tr key={approach.id}>
+                                          <td>
+                                            <b>{approach.sourceCode || String.fromCharCode(65 + index)}</b>
+                                            <small>{approach.name}</small>
+                                          </td>
+                                          <td>{amFlows[index].enteringIntersection.toLocaleString()}</td>
+                                          <td>{amFlows[index].leavingIntersection.toLocaleString()}</td>
+                                          <td>{pmFlows[index].enteringIntersection.toLocaleString()}</td>
+                                          <td>{pmFlows[index].leavingIntersection.toLocaleString()}</td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                  <tfoot>
+                                    <tr>
+                                      <th>支線合計</th>
+                                      <th>
+                                        {amFlows
+                                          .reduce(function (sum, item) {
+                                            return sum + item.enteringIntersection;
+                                          }, 0)
+                                          .toLocaleString()}
+                                      </th>
+                                      <th>
+                                        {amFlows
+                                          .reduce(function (sum, item) {
+                                            return sum + item.leavingIntersection;
+                                          }, 0)
+                                          .toLocaleString()}
+                                      </th>
+                                      <th>
+                                        {pmFlows
+                                          .reduce(function (sum, item) {
+                                            return sum + item.enteringIntersection;
+                                          }, 0)
+                                          .toLocaleString()}
+                                      </th>
+                                      <th>
+                                        {pmFlows
+                                          .reduce(function (sum, item) {
+                                            return sum + item.leavingIntersection;
+                                          }, 0)
+                                          .toLocaleString()}
+                                      </th>
+                                    </tr>
+                                  </tfoot>
+                                </table>
+                              </div>
+                            </article>
+                          );
+                        })}
+                    </div>
+                  </div>
                 </section>
               )}
               {!compareProjects.length && (
@@ -4897,6 +5053,10 @@ function TrendView(props: {
       return { wch };
     });
     sheet["!autofilter"] = { ref: sheet["!ref"] || "A1:A1" };
+    for (let row = 2; row <= data.length + 1; row++)
+      ["B", "C"].forEach(function (column) {
+        if (sheet[column + row]) sheet[column + row].z = "#,##0.0";
+      });
     for (let row = 2; row <= data.length + 1; row++)
       ["D", "E"].forEach(function (column) {
         if (sheet[column + row]) sheet[column + row].z = "0.0%";
