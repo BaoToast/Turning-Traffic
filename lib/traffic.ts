@@ -3,6 +3,37 @@ import * as XLSX from "xlsx";
 export type PeakKey = "AM" | "PM";
 export type MovementKey = "left" | "through" | "right";
 export type VehicleKey = "all" | "motorcycle" | "car" | "lightTruck" | "heavy" | "bus";
+export type PceVehicle = "special" | "heavy" | "car" | "motorcycle";
+export type LaneType = "fast" | "mixed" | "slow" | "left" | "custom";
+
+export type Project = {
+  id: string;
+  code: string;
+  name: string;
+  client: string;
+  note: string;
+  createdAt: string;
+};
+
+export type PceMatrix = Record<PceVehicle, Record<MovementKey, number>>;
+
+// The user-supplied training deck (slide 15) is the only supplied source with a
+// complete 4-vehicle × 3-movement matrix. The UI identifies it as an editable,
+// legacy project default rather than attributing it to the 2022 manual.
+export const DEFAULT_PCE: PceMatrix = {
+  special: { left: 2.5, through: 2, right: 2.3 },
+  heavy: { left: 2.3, through: 1.5, right: 2 },
+  car: { left: 1.5, through: 1, right: 1.3 },
+  motorcycle: { left: 0.5, through: 0.3, right: 0.4 },
+};
+
+export const LANE_GUIDANCE: Record<LaneType, { label: string; min: number; max: number; recommended: number; note: string }> = {
+  fast: { label: "直行快車道", min: 1600, max: 2000, recommended: 1800, note: "初估飽和流率；需依車道寬、坡度、車種與現地校估" },
+  mixed: { label: "直右混合車道", min: 1100, max: 1700, recommended: 1400, note: "初估飽和流率；右轉、行人與機車比例會影響" },
+  slow: { label: "慢車道／高度混合車道", min: 700, max: 1300, recommended: 1000, note: "僅供資料不足時初篩，不等於實際容量" },
+  left: { label: "保護左轉車道", min: 1200, max: 1700, recommended: 1450, note: "初估飽和流率；需配合左轉時相與綠燈比" },
+  custom: { label: "自訂", min: 100, max: 3000, recommended: 1400, note: "請填入專案校估值與依據" },
+};
 
 export type Movement = {
   left: number;
@@ -17,12 +48,17 @@ export type Approach = {
   bearing: string;
   angle: number;
   lanes: number | null;
+  laneType?: LaneType;
+  saturationFlow?: number | null;
+  effectiveGreen?: number | null;
+  cycleLength?: number | null;
   capacity: number | null;
   movements: Record<PeakKey, Movement>;
 };
 
 export type TrafficRecord = {
   id: string;
+  projectId?: string;
   station: string;
   name: string;
   rawName: string;
@@ -45,8 +81,9 @@ export type QualityIssue = {
   message: string;
 };
 
-export const VERSION = "v1.0.0";
+export const VERSION = "v1.1.0";
 export const VERSION_HISTORY = [
+  { version: "v1.1.0", date: "2026-08-11", note: "新增多計畫管理、可調整轉向當量、容量建議與號誌欄位、跨電腦備份；重製轉向箭頭、單位與報表。" },
   { version: "v1.0.0", date: "2026-08-11", note: "首版：批次匯入、尖峰分析、SVG 轉向圖、比較、品質檢查、報表與備份。" },
 ];
 
@@ -152,8 +189,13 @@ export function computeVC(record: TrafficRecord, peak: PeakKey) {
   const missing: string[] = [];
   const rows = record.approaches.map((approach) => {
     if (!approach.lanes) missing.push(`${approach.name}：車道數`);
-    if (!approach.capacity) missing.push(`${approach.name}：容量/飽和流率`);
-    const capacity = approach.capacity && approach.lanes ? approach.capacity * approach.lanes : null;
+    const saturationFlow = approach.saturationFlow ?? approach.capacity;
+    if (!saturationFlow) missing.push(`${approach.name}：每車道飽和流率`);
+    if (!approach.effectiveGreen) missing.push(`${approach.name}：有效綠燈秒數`);
+    if (!approach.cycleLength) missing.push(`${approach.name}：號誌週期秒數`);
+    const capacity = saturationFlow && approach.lanes && approach.effectiveGreen && approach.cycleLength
+      ? saturationFlow * approach.lanes * approach.effectiveGreen / approach.cycleLength
+      : null;
     return { approach: approach.name, volume: totalMovement(approach, peak), capacity, ratio: capacity ? totalMovement(approach, peak) / capacity : null };
   });
   return { calculable: missing.length === 0, missing: [...new Set(missing)], rows };

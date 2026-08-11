@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createDemoRecords, normalizeIntersectionName, rollingPeak, stationFromFilename } from "../lib/traffic.ts";
+import { computeVC, createDemoRecords, DEFAULT_PCE, normalizeIntersectionName, rollingPeak, stationFromFilename } from "../lib/traffic.ts";
 
 test("normalizes filenames without deleting real road names", () => {
   assert.equal(normalizeIntersectionName("11017Ｔ１－０４【中山路-國昌路-民強街路口】(修正版)V2.xls"), "中山路－國昌路－民強街路口");
@@ -27,4 +27,21 @@ test("demo data covers three through seven approaches and four quarters", () => 
   assert.equal(records.length, 20);
   assert.deepEqual([...new Set(records.map((r) => r.quarter))].length, 4);
   assert.deepEqual([...new Set(records.map((r) => r.approaches.length))].sort(), [3, 4, 5, 7]);
+});
+
+test("keeps the supplied four-vehicle turning-equivalent matrix editable by movement", () => {
+  assert.deepEqual(DEFAULT_PCE.special, { left: 2.5, through: 2, right: 2.3 });
+  assert.deepEqual(DEFAULT_PCE.motorcycle, { left: 0.5, through: 0.3, right: 0.4 });
+});
+
+test("calculates lane capacity from saturation flow and effective green ratio", () => {
+  const record = createDemoRecords()[0];
+  for (const approach of record.approaches) {
+    approach.saturationFlow = 1800;
+    approach.effectiveGreen = 45;
+    approach.cycleLength = 90;
+  }
+  const result = computeVC(record, "AM");
+  assert.equal(result.calculable, true);
+  assert.equal(result.rows[0].capacity, 1800);
 });

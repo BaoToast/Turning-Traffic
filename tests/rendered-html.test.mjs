@@ -22,6 +22,6 @@ test("renders the Turning Traffic application shell", async () => {
 test("ships required analysis surfaces", async () => {
   const response = await render();
   const html = await response.text();
-  for (const text of ["總覽儀表板", "季度批次匯入", "路口轉向圖", "多路口比較", "歷季趨勢比較", "資料品質檢查", "備份、還原與版本"]) assert.match(html, new RegExp(text));
+  for (const text of ["總覽儀表板", "多計畫管理", "季度批次匯入", "當量與容量參數", "路口轉向圖", "跨計畫", "歷季趨勢比較", "資料品質檢查", "備份、還原與版本"]) assert.match(html, new RegExp(text));
   assert.doesNotMatch(html, /HCM|服務水準|LOS/);
 });
