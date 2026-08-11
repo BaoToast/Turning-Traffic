@@ -240,6 +240,16 @@ export function computeVC(record: TrafficRecord, peak: PeakKey) {
 export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
   const issues: QualityIssue[] = [];
   for (const record of records) {
+    if (!record.routes?.length && record.sourceFiles.some(function (file) { return /\.xls(?:x|m)?$/i.test(file); })) {
+      issues.push({
+        id: `${record.id}-legacy-import`,
+        severity: "error",
+        category: "缺值",
+        station: record.station,
+        quarter: record.quarter,
+        message: "此筆由舊版匯入器建立，缺少可追溯的起點→終點流向；請刪除本筆後，以 v1.2.0 重新匯入原始 Excel。",
+      });
+    }
     for (const peak of ["AM", "PM"] as PeakKey[]) {
       const hour = Number(record.peaks[peak].start.split(":")[0]);
       if ((peak === "AM" && (hour < 5 || hour >= 12)) || (peak === "PM" && (hour < 12 || hour >= 23))) {
