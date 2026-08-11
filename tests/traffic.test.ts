@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { computeVC, createDemoRecords, DEFAULT_PCE, normalizeIntersectionName, rollingPeak, stationFromFilename } from "../lib/traffic.ts";
+import { computeVC, createDemoRecords, DEFAULT_PCE, normalizeIntersectionName, qualityIssues, rollingPeak, stationFromFilename } from "../lib/traffic.ts";
 
 test("normalizes filenames without deleting real road names", () => {
   assert.equal(normalizeIntersectionName("11017Ｔ１－０４【中山路-國昌路-民強街路口】(修正版)V2.xls"), "中山路－國昌路－民強街路口");
@@ -44,4 +44,12 @@ test("calculates lane capacity from saturation flow and effective green ratio", 
   const result = computeVC(record, "AM");
   assert.equal(result.calculable, true);
   assert.equal(result.rows[0].capacity, 1800);
+});
+
+test("never compares classified vehicles in vehicles/hr with PCU/hr", () => {
+  const record = createDemoRecords()[0];
+  const movement = record.approaches[0].movements.AM;
+  movement.rawVehicleTotal = null;
+  movement.vehicle.car = 1;
+  assert.equal(qualityIssues([record]).some((issue) => issue.category === "車種統計異常" && issue.station === record.station), false);
 });

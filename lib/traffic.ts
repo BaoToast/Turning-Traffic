@@ -2,7 +2,7 @@ import * as XLSX from "xlsx";
 
 export type PeakKey = "AM" | "PM";
 export type MovementKey = "left" | "through" | "right";
-export type VehicleKey = "all" | "motorcycle" | "car" | "lightTruck" | "heavy" | "bus";
+export type VehicleKey = "all" | "motorcycle" | "car" | "heavy" | "special";
 export type PceVehicle = "special" | "heavy" | "car" | "motorcycle";
 export type LaneType = "fast" | "mixed" | "slow" | "left" | "custom";
 
@@ -40,6 +40,8 @@ export type Movement = {
   through: number;
   right: number;
   vehicle: Record<Exclude<VehicleKey, "all">, number>;
+  /** Actual-vehicle total for the same scope/time as vehicle, never PCU. */
+  rawVehicleTotal?: number | null;
 };
 
 export type Approach = {
@@ -79,6 +81,13 @@ export type QualityIssue = {
   station: string;
   quarter: string;
   message: string;
+  details?: {
+    turningVehicleTotal: number;
+    classifiedVehicleTotal: number;
+    difference: number;
+    unit: "輛/hr";
+    explanation: string;
+  };
 };
 
 export const VERSION = "v1.1.0";
@@ -87,7 +96,7 @@ export const VERSION_HISTORY = [
   { version: "v1.0.0", date: "2026-08-11", note: "首版：批次匯入、尖峰分析、SVG 轉向圖、比較、品質檢查、報表與備份。" },
 ];
 
-const vehicleShare = { motorcycle: 0.42, car: 0.39, lightTruck: 0.09, heavy: 0.05, bus: 0.05 };
+const vehicleShare = { motorcycle: 0.42, car: 0.48, heavy: 0.08, special: 0.02 };
 
 function movement(total: number, split = [0.16, 0.68, 0.16]): Movement {
   const left = Math.round(total * split[0]);
@@ -97,6 +106,7 @@ function movement(total: number, split = [0.16, 0.68, 0.16]): Movement {
     left,
     through,
     right,
+    rawVehicleTotal: total,
     vehicle: Object.fromEntries(
       Object.entries(vehicleShare).map(([key, share]) => [key, Math.round(total * share)]),
     ) as Movement["vehicle"],
@@ -215,8 +225,19 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
         if (!Number.isFinite(value)) issues.push({ id: `${record.id}-${peak}-${index}-missing`, severity: "error", category: "缺值", station: record.station, quarter: record.quarter, message: `${record.approaches[index].name} ${peak} 含非數值欄位。` });
         if (mean > 0 && value > mean * 2.2) issues.push({ id: `${record.id}-${peak}-${index}-anomaly`, severity: "warning", category: "異常流量", station: record.station, quarter: record.quarter, message: `${record.approaches[index].name} ${peak} 流量為方向平均的 ${(value / mean).toFixed(1)} 倍，建議核對。` });
         const m = record.approaches[index].movements[peak];
-        const vehicle = Object.values(m.vehicle).reduce((a, b) => a + b, 0);
-        if (Math.abs(vehicle - value) > Math.max(5, value * 0.05)) issues.push({ id: `${record.id}-${peak}-${index}-vehicle`, severity: "warning", category: "車種統計異常", station: record.station, quarter: record.quarter, message: `${record.approaches[index].name} ${peak} 車種合計與轉向總量差 ${Math.abs(vehicle - value)} 輛。` });
+        const classifiedVehicleTotal = Object.values(m.vehicle).reduce((a, b) => a + b, 0);
+        const turningVehicleTotal = m.rawVehicleTotal;
+        // left/through/right are PCU/hr and cannot be compared with classified
+        // vehicles. Only run this rule when the importer has retained the
+        // same-scope actual-vehicle total (vehicles/hr).
+        if (turningVehicleTotal != null) {
+          const difference = Math.abs(classifiedVehicleTotal - turningVehicleTotal);
+          if (difference > Math.max(5, turningVehicleTotal * 0.05)) issues.push({
+            id: `${record.id}-${peak}-${index}-vehicle`, severity: "warning", category: "車種統計異常", station: record.station, quarter: record.quarter,
+            message: `${record.approaches[index].name} ${peak}：左直右實際車輛合計 ${turningVehicleTotal.toLocaleString()} 輛/hr，四車種合計 ${classifiedVehicleTotal.toLocaleString()} 輛/hr，差 ${difference.toLocaleString()} 輛/hr。`,
+            details: { turningVehicleTotal, classifiedVehicleTotal, difference, unit: "輛/hr", explanation: "兩邊均須來自同一方向、同一尖峰時段的實際車輛數；PCU/hr 不參與此項加總檢查。" },
+          });
+        }
       });
     }
     if (!record.date) issues.push({ id: `${record.id}-date`, severity: "error", category: "缺值", station: record.station, quarter: record.quarter, message: "缺少調查日期。" });
@@ -257,8 +278,40 @@ export type ImportPreview = {
   intervals: number;
   am: ReturnType<typeof rollingPeak>;
   pm: ReturnType<typeof rollingPeak>;
+  columns: Array<{ valueIndex: number; sourceColumn: number; label: string; approach: string; movement: MovementKey; vehicle: PceVehicle }>;
+  mappingConfidence: "high" | "medium" | "low";
   warnings: string[];
 };
+
+function mergedCellValue(sheet: XLSX.WorkSheet, row: number, col: number) {
+  const direct = sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
+  if (direct != null && String(direct).trim()) return String(direct).trim();
+  const merge = (sheet["!merges"] || []).find((item) => row >= item.s.r && row <= item.e.r && col >= item.s.c && col <= item.e.c);
+  if (!merge) return "";
+  return String(sheet[XLSX.utils.encode_cell(merge.s)]?.v ?? "").trim();
+}
+
+function movementFromHeader(label: string): MovementKey | null {
+  if (/左轉|左彎|\bL\b/i.test(label)) return "left";
+  if (/直行|直進|\bT\b/i.test(label)) return "through";
+  if (/右轉|右彎|\bR\b/i.test(label)) return "right";
+  return null;
+}
+
+function vehicleFromHeader(label: string): PceVehicle | null {
+  if (/機車|機踏車|motor/i.test(label)) return "motorcycle";
+  if (/特種|特車|special/i.test(label)) return "special";
+  if (/大客|大貨|大型|聯結|曳引|heavy|truck|bus/i.test(label)) return "heavy";
+  if (/小客|小貨|小型|轎車|car|light/i.test(label)) return "car";
+  return null;
+}
+
+function approachFromHeader(label: string) {
+  const stripped = label
+    .replace(/左轉|左彎|直行|直進|右轉|右彎|機車|機踏車|特種車?|大客車?|大貨車?|大型車?|聯結車?|曳引車?|小客車?|小貨車?|小型車?|交通量|車種|合計|總計/gi, " ")
+    .replace(/[|｜>＞/\\]+/g, " ").replace(/\s+/g, " ").trim();
+  return stripped || "未命名方向";
+}
 
 export async function inspectWorkbook(file: File): Promise<ImportPreview> {
   const array = await file.arrayBuffer();
@@ -271,12 +324,33 @@ export async function inspectWorkbook(file: File): Promise<ImportPreview> {
     else buckets.traffic.push(sheet);
   });
   const intervalRows: IntervalRow[] = [];
+  let detectedColumns: ImportPreview["columns"] = [];
   for (const sheetName of buckets.traffic) {
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, raw: true, defval: null });
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: null });
+    const firstDataRow = rows.findIndex((row) => parseTime(row[0]) !== null);
+    const columns: ImportPreview["columns"] = [];
+    if (firstDataRow >= 0) {
+      const maxColumns = Math.max(...rows.slice(firstDataRow, firstDataRow + 8).map((row) => row.length), 0);
+      for (let col = 1; col < maxColumns; col++) {
+        const parts: string[] = [];
+        for (let headerRow = Math.max(0, firstDataRow - 8); headerRow < firstDataRow; headerRow++) {
+          const value = mergedCellValue(sheet, headerRow, col);
+          if (value && !parts.includes(value)) parts.push(value);
+        }
+        const label = parts.join("｜");
+        const movement = movementFromHeader(label);
+        const vehicle = vehicleFromHeader(label);
+        if (movement && vehicle) columns.push({ valueIndex: columns.length, sourceColumn: col, label, approach: approachFromHeader(label), movement, vehicle });
+      }
+    }
+    if (columns.length > detectedColumns.length) detectedColumns = columns;
     for (const row of rows) {
       const start = parseTime(row[0]);
       if (start === null) continue;
-      const values = row.slice(1).map(Number).filter(Number.isFinite);
+      const values = columns.length
+        ? columns.map((column) => Number(row[column.sourceColumn]) || 0)
+        : row.slice(1).map((value) => Number(value) || 0);
       if (values.length) intervalRows.push({ start, label: String(row[0]), values });
     }
   }
@@ -286,6 +360,10 @@ export async function inspectWorkbook(file: File): Promise<ImportPreview> {
   if (!buckets.log.length) warnings.push("未找到監測日誌工作表，路口幾何需人工確認。");
   if (!buckets.phase.length) warnings.push("未找到時相圖工作表；V/C 可能缺少號誌參數。");
   if (!intervalRows.length) warnings.push("未辨識到以時間開頭的交通量資料列。");
+  const distinctApproaches = new Set(detectedColumns.map((column) => column.approach)).size;
+  const mappingConfidence = detectedColumns.length >= 12 && distinctApproaches >= 2 ? "high" : detectedColumns.length >= 4 ? "medium" : "low";
+  if (mappingConfidence === "low") warnings.push("未能可靠辨識方向×左直右×四車種欄位；只保留尖峰數列，不執行車種加總一致性判定。");
+  else warnings.push(`已辨識 ${detectedColumns.length} 個轉向車種欄位、${distinctApproaches} 個方向；請於寫入前核對欄位摘要。`);
   return {
     file: file.name,
     station: stationFromFilename(file.name),
@@ -295,6 +373,8 @@ export async function inspectWorkbook(file: File): Promise<ImportPreview> {
     intervals: intervalRows.length,
     am: rollingPeak(intervalRows, [5 * 60, 12 * 60]),
     pm: rollingPeak(intervalRows, [12 * 60, 23 * 60]),
+    columns: detectedColumns,
+    mappingConfidence,
     warnings,
   };
 }

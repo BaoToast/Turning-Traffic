@@ -47,7 +47,7 @@ const NAV: { id: View; label: string; icon: string; group?: string }[] = [
 ];
 
 const VEHICLE_LABELS: Record<VehicleKey, string> = {
-  all: "全部車種", motorcycle: "機車", car: "小客車", lightTruck: "小貨車", heavy: "大型車", bus: "大客車",
+  all: "全部車種", motorcycle: "機車", car: "小客車", heavy: "大型車", special: "特種車",
 };
 const PCE_LABELS = { special: "特種車", heavy: "大型車", car: "小客車", motorcycle: "機車" };
 const MOVE_LABELS = { left: "左轉", through: "直行", right: "右轉" };
@@ -201,20 +201,38 @@ function emptyMovement(values: number[] | undefined, index: number) {
   const total = left + through + right;
   return {
     left: left, through: through, right: right,
-    vehicle: { motorcycle: 0, car: total, lightTruck: 0, heavy: 0, bus: 0 },
+    vehicle: { motorcycle: 0, car: 0, heavy: 0, special: 0 },
+    rawVehicleTotal: null,
   };
 }
 
-function recordFromPreview(item: ImportPreview, projectId: string, quarter: string): TrafficRecord {
+function mappedMovement(item: ImportPreview, peak: PeakKey, approachName: string, pce: PceMatrix) {
+  const values = peak === "AM" ? item.am?.values : item.pm?.values;
+  const vehicle = { motorcycle: 0, car: 0, heavy: 0, special: 0 };
+  const raw = { left: 0, through: 0, right: 0 };
+  const pcu = { left: 0, through: 0, right: 0 };
+  item.columns.filter(function (column) { return column.approach === approachName; }).forEach(function (column) {
+    const count = Number(values?.[column.valueIndex]) || 0;
+    vehicle[column.vehicle] += count;
+    raw[column.movement] += count;
+    pcu[column.movement] += count * pce[column.vehicle][column.movement];
+  });
+  return { left: Math.round(pcu.left), through: Math.round(pcu.through), right: Math.round(pcu.right), vehicle: vehicle, rawVehicleTotal: raw.left + raw.through + raw.right };
+}
+
+function recordFromPreview(item: ImportPreview, projectId: string, quarter: string, pce: PceMatrix): TrafficRecord {
   const length = Math.max(item.am?.values.length || 0, item.pm?.values.length || 0);
-  const armCount = length >= 9 && length <= 21 && length % 3 === 0 ? length / 3 : 4;
+  const mappedNames = Array.from(new Set(item.columns.map(function (column) { return column.approach; })));
+  const useMapping = item.mappingConfidence !== "low" && mappedNames.length >= 3 && mappedNames.length <= 7;
+  const armCount = useMapping ? mappedNames.length : length >= 9 && length <= 21 && length % 3 === 0 ? length / 3 : 4;
   const bearings = armCount === 3 ? ["北", "東", "南"] : ["北", "東", "南", "西", "東北", "東南", "西南"];
   const approaches: Approach[] = Array.from({ length: armCount }, function (_, index) {
+    const approachName = useMapping ? mappedNames[index] : "支線 " + (index + 1);
     return {
-      id: item.station + "-A" + (index + 1), name: "支線 " + (index + 1), bearing: bearings[index] || "支線",
+      id: item.station + "-A" + (index + 1), name: approachName, bearing: bearings[index] || "支線",
       angle: -90 + index * 360 / armCount, lanes: null, laneType: "custom", saturationFlow: null,
       effectiveGreen: null, cycleLength: null, capacity: null,
-      movements: { AM: emptyMovement(item.am?.values, index), PM: emptyMovement(item.pm?.values, index) },
+      movements: { AM: useMapping ? mappedMovement(item, "AM", approachName, pce) : emptyMovement(item.am?.values, index), PM: useMapping ? mappedMovement(item, "PM", approachName, pce) : emptyMovement(item.pm?.values, index) },
     };
   });
   return {
@@ -225,7 +243,7 @@ function recordFromPreview(item: ImportPreview, projectId: string, quarter: stri
       PM: item.pm ? { start: formatMinutes(item.pm.start), end: formatMinutes(item.pm.end) } : { start: "", end: "" },
     },
     approaches: approaches, sourceFiles: [item.file], importedAt: new Date().toISOString(),
-    validation: { referenceFound: false, matchRate: null, notes: ["已使用連續 4 個 15 分鐘區間重算；欄位與支線對應需人工確認。"] },
+    validation: { referenceFound: false, matchRate: null, notes: [useMapping ? "已依表頭辨識方向、左直右與四車種並套用當量；仍需於匯入摘要人工確認。" : "欄位語意辨識不足，只保留尖峰數列；不執行車種合計一致性判定。"] },
   };
 }
 
@@ -245,6 +263,8 @@ export default function TrafficApp() {
   const [activeProjectId, setActiveProjectId] = useState("");
   const [records, setRecords] = useState<TrafficRecord[]>([]);
   const [quarter, setQuarter] = useState("");
+  const [importYear, setImportYear] = useState("");
+  const [importQuarterNo, setImportQuarterNo] = useState("");
   const [station, setStation] = useState("");
   const [peak, setPeak] = useState<PeakKey>("AM");
   const [diagramStyle, setDiagramStyle] = useState<DiagramStyle>("formal");
@@ -261,6 +281,7 @@ export default function TrafficApp() {
   const [projectForm, setProjectForm] = useState({ code: "", name: "", client: "", note: "" });
   const [compareProjects, setCompareProjects] = useState<string[]>([]);
   const [calc, setCalc] = useState({ count: "", seconds: "", green: "", yellow: "", lost: "", cycle: "" });
+  const [selectedIssueId, setSelectedIssueId] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(function () {
@@ -269,8 +290,18 @@ export default function TrafficApp() {
     try {
       const data = JSON.parse(saved);
       const oldDemo = data.version === "v1.0.0" && Array.isArray(data.records) && data.records.length === 20 && data.records.every(function (r: TrafficRecord) { return r.importedAt === "2026-08-11T09:00:00+08:00"; });
-      if (!oldDemo && Array.isArray(data.records)) setRecords(data.records);
-      if (Array.isArray(data.projects)) { setProjects(data.projects); setActiveProjectId(data.activeProjectId || data.projects[0]?.id || ""); }
+      if (!oldDemo && Array.isArray(data.records)) {
+        if (Array.isArray(data.projects) && data.projects.length) {
+          setRecords(data.records);
+          setProjects(data.projects);
+          setActiveProjectId(data.activeProjectId || data.projects[0].id);
+        } else if (data.records.length) {
+          const migratedId = "P-migrated-v1";
+          setProjects([{ id: migratedId, code: "MIGRATED", name: "舊版資料移轉", client: "", note: "由 v1.0 本機資料自動移轉；請重新核對匯入欄位。", createdAt: new Date().toISOString() }]);
+          setActiveProjectId(migratedId);
+          setRecords(data.records.map(function (record: TrafficRecord) { return { ...record, projectId: migratedId }; }));
+        }
+      }
       if (data.nameMap) setNameMap(data.nameMap);
       if (data.pce) setPce(data.pce);
     } catch { /* Invalid stale local data is ignored. */ }
@@ -290,6 +321,7 @@ export default function TrafficApp() {
   useEffect(function () { if (selected && selected.station !== station) setStation(selected.station); }, [selected, station]);
   const issues = useMemo(function () { return qualityIssues(projectRecords); }, [projectRecords]);
   const currentIssues = issues.filter(function (issue) { return issue.quarter === quarter; });
+  const selectedIssue = currentIssues.find(function (issue) { return issue.id === selectedIssueId; }) || null;
   const ranked = [...current].sort(function (a, b) { return recordTotal(b, peak) - recordTotal(a, peak); });
   const top = ranked[0];
   const previousQuarter = quarters[quarters.indexOf(quarter) - 1];
@@ -298,6 +330,13 @@ export default function TrafficApp() {
   const previousSum = previous.reduce(function (sum, record) { return sum + recordTotal(record, "AM") + recordTotal(record, "PM"); }, 0);
   const change = previousSum ? (currentSum / previousSum - 1) * 100 : null;
   const maxRank = Math.max(1, ...ranked.map(function (record) { return recordTotal(record, peak); }));
+  const importPeriod = importYear && importQuarterNo ? importYear + "Q" + importQuarterNo : "";
+
+  useEffect(function () {
+    if (view !== "import" || importYear || importQuarterNo) return;
+    const match = quarter.match(/^(\d{2,4})Q([1-4])$/i);
+    if (match) { setImportYear(match[1]); setImportQuarterNo(match[2]); }
+  }, [view, quarter, importYear, importQuarterNo]);
 
   function addProject() {
     if (!projectForm.name.trim()) return notify("請先輸入計畫名稱。");
@@ -312,12 +351,13 @@ export default function TrafficApp() {
 
   async function handleFiles(files: FileList | null) {
     if (!files?.length) return;
+    if (!importPeriod) return notify("請先選擇調查年度與季度，再選取檔案。");
     setImporting(true);
     const rows: ImportPreview[] = [];
     for (const file of Array.from(files)) {
       try { rows.push(await inspectWorkbook(file)); }
       catch (error) {
-        rows.push({ file: file.name, station: "—", name: normalizeIntersectionName(file.name), role: "無法辨識", sheets: { traffic: [], log: [], phase: [], ignored: [] }, intervals: 0, am: null, pm: null, warnings: ["讀取失敗：" + (error instanceof Error ? error.message : "未知錯誤")] });
+        rows.push({ file: file.name, station: "—", name: normalizeIntersectionName(file.name), role: "無法辨識", sheets: { traffic: [], log: [], phase: [], ignored: [] }, intervals: 0, am: null, pm: null, columns: [], mappingConfidence: "low", warnings: ["讀取失敗：" + (error instanceof Error ? error.message : "未知錯誤")] });
       }
     }
     setImportRows(rows);
@@ -326,14 +366,14 @@ export default function TrafficApp() {
 
   function commitImport() {
     if (!activeProjectId) return notify("請先建立並選擇計畫。");
-    const q = quarter || window.prompt("請輸入季度，例如 115Q3", "")?.trim() || "";
-    if (!q) return notify("尚未填入季度。");
+    const q = importPeriod;
+    if (!q) return notify("請先選擇調查年度與季度。");
     const originals = importRows.filter(function (row) { return row.role === "原始交通量" && Boolean(row.am || row.pm); });
     if (!originals.length) return notify("沒有可寫入的原始交通量檔。");
     const next = [...records];
     originals.forEach(function (item) {
       const found = next.findIndex(function (record) { return record.projectId === activeProjectId && record.quarter === q && record.station === item.station; });
-      const created = recordFromPreview(item, activeProjectId, q);
+      const created = recordFromPreview(item, activeProjectId, q, pce);
       created.name = nameMap[item.file] || created.name;
       created.validation.referenceFound = importRows.some(function (row) { return row.role === "參考計算檔" && row.station === item.station; });
       if (found >= 0) next[found] = created; else next.push(created);
@@ -470,9 +510,10 @@ export default function TrafficApp() {
         </>}
 
         {view === "import" && <>
-          <section className="page-head"><div><span className="eyebrow">BATCH IMPORT</span><h1>季度批次匯入與刪除</h1><p>先預覽再寫入；同計畫＋同季度＋同站號採覆蓋，錯誤資料可單筆或整季刪除。</p></div><label className="quarter-entry">本次季度<input value={quarter} placeholder="例如 115Q3" onChange={function (e) { setQuarter(e.target.value.toUpperCase()); }} /></label></section>
-          <section className="import-layout"><article className="panel upload-card" onDragOver={function (e) { e.preventDefault(); }} onDrop={function (e) { e.preventDefault(); handleFiles(e.dataTransfer.files); }}><span className="upload-icon">⇧</span><h2>拖曳 Excel 檔案到這裡</h2><p>支援 .xls、.xlsx、.xlsm，多路口一次選取；照片工作表忽略。</p><input ref={fileRef} hidden type="file" multiple accept=".xls,.xlsx,.xlsm" onChange={function (e) { handleFiles(e.target.files); }} /><button className="primary" onClick={function () { fileRef.current?.click(); }}>{importing ? "正在解析…" : "選擇檔案"}</button></article><article className="panel import-rules"><span className="eyebrow">CALCULATION RULE</span><h2>尖峰小時計算</h2><ol><li><b>15 分鐘資料</b><span>連續 4 區間組成 60 分鐘。</span></li><li><b>AM／PM 分開搜尋</b><span>同值取較早時段。</span></li><li><b>參考檔只做驗證</b><span>不盲目照抄計算檔。</span></li><li><b>欄位映射可調整</b><span>匯入後需確認道路支線與左直右欄位。</span></li></ol></article></section>
-          <section className="panel"><div className="panel-head"><div><span className="eyebrow">IMPORT PREVIEW</span><h2>匯入辨識結果</h2></div><button className="primary" disabled={!importRows.length} onClick={commitImport}>確認寫入</button></div>{!importRows.length ? <Empty title="尚未選取檔案" text="預覽階段不會更動正式資料。" /> : <div className="table-scroll"><table><thead><tr><th>檔案</th><th>角色</th><th>站號／名稱</th><th>AM Peak（PCU/hr）</th><th>PM Peak（PCU/hr）</th><th>檢查</th><th></th></tr></thead><tbody>{importRows.map(function (row) { return <tr key={row.file}><td>{row.file}</td><td><span className={"tag " + (row.role === "無法辨識" ? "red" : row.role === "參考計算檔" ? "blue" : "green")}>{row.role}</span></td><td>{row.station}<small>{row.name}</small></td><td>{row.am ? formatMinutes(row.am.start) + "–" + formatMinutes(row.am.end) + " · " + row.am.total.toLocaleString() + " PCU/hr" : "—"}</td><td>{row.pm ? formatMinutes(row.pm.start) + "–" + formatMinutes(row.pm.end) + " · " + row.pm.total.toLocaleString() + " PCU/hr" : "—"}</td><td>{row.warnings.map(function (warning) { return <small className="warning-text" key={warning}>{warning}</small>; })}</td><td><button className="icon-danger" onClick={function () { setImportRows(importRows.filter(function (item) { return item.file !== row.file; })); }}>刪除</button></td></tr>; })}</tbody></table></div>}</section>
+          <section className="page-head"><div><span className="eyebrow">BATCH IMPORT</span><h1>季度批次匯入與刪除</h1><p>先指定調查年度與季度，再選取檔案；同計畫＋同季度＋同站號採覆蓋。</p></div></section>
+          <section className="panel import-period"><div><span className="step-no">01</span><div><strong>先指定這批資料的調查年度與季度</strong><p>此設定會套用到本次選取的全部路口，寫入前仍可更改。</p></div></div><label>調查年度（民國年）<input type="number" min="1" max="999" placeholder="例如 115" value={importYear} onChange={function (e) { setImportYear(e.target.value.replace(/\D/g, "").slice(0, 3)); }} /></label><label>季度<select value={importQuarterNo} onChange={function (e) { setImportQuarterNo(e.target.value); }}><option value="">請選擇</option><option value="1">第 1 季</option><option value="2">第 2 季</option><option value="3">第 3 季</option><option value="4">第 4 季</option></select></label><output>{importPeriod ? importYear + " 年第 " + importQuarterNo + " 季（" + importPeriod + "）" : "尚未完成設定"}</output></section>
+          <section className="import-layout"><article className="panel upload-card" onDragOver={function (e) { e.preventDefault(); }} onDrop={function (e) { e.preventDefault(); handleFiles(e.dataTransfer.files); }}><span className="upload-icon">⇧</span><h2>再拖曳 Excel 檔案到這裡</h2><p>支援 .xls、.xlsx、.xlsm，多路口一次選取；照片工作表忽略。</p><input ref={fileRef} hidden type="file" multiple accept=".xls,.xlsx,.xlsm" onChange={function (e) { handleFiles(e.target.files); }} /><button className="primary" disabled={!importPeriod} onClick={function () { fileRef.current?.click(); }}>{importing ? "正在解析…" : importPeriod ? "選擇檔案" : "請先選年度與季度"}</button><small>{importPeriod ? "本批次將寫入 " + importPeriod : "年度與季度為必填"}</small></article><article className="panel import-rules"><span className="eyebrow">CALCULATION RULE</span><h2>尖峰小時計算</h2><ol><li><b>15 分鐘資料</b><span>連續 4 區間組成 60 分鐘。</span></li><li><b>AM／PM 分開搜尋</b><span>同值取較早時段。</span></li><li><b>參考檔只做驗證</b><span>不盲目照抄計算檔。</span></li><li><b>欄位映射可調整</b><span>匯入後需確認道路支線與左直右欄位。</span></li></ol></article></section>
+          <section className="panel"><div className="panel-head"><div><span className="eyebrow">IMPORT PREVIEW</span><h2>匯入辨識結果</h2></div><button className="primary" disabled={!importRows.length || !importPeriod} onClick={commitImport}>確認寫入 {importPeriod || "未選季度"}</button></div>{!importRows.length ? <Empty title="尚未選取檔案" text="預覽階段不會更動正式資料。" /> : <div className="table-scroll"><table><thead><tr><th>檔案</th><th>角色</th><th>站號／名稱</th><th>AM Peak（PCU/hr）</th><th>PM Peak（PCU/hr）</th><th>檢查</th><th></th></tr></thead><tbody>{importRows.map(function (row) { return <tr key={row.file}><td>{row.file}</td><td><span className={"tag " + (row.role === "無法辨識" ? "red" : row.role === "參考計算檔" ? "blue" : "green")}>{row.role}</span></td><td>{row.station}<small>{row.name}</small></td><td>{row.am ? formatMinutes(row.am.start) + "–" + formatMinutes(row.am.end) + " · " + row.am.total.toLocaleString() + " PCU/hr" : "—"}</td><td>{row.pm ? formatMinutes(row.pm.start) + "–" + formatMinutes(row.pm.end) + " · " + row.pm.total.toLocaleString() + " PCU/hr" : "—"}</td><td>{row.warnings.map(function (warning) { return <small className="warning-text" key={warning}>{warning}</small>; })}</td><td><button className="icon-danger" onClick={function () { setImportRows(importRows.filter(function (item) { return item.file !== row.file; })); }}>刪除</button></td></tr>; })}</tbody></table></div>}</section>
           <section className="panel imported-data"><div className="panel-head"><div><span className="eyebrow">IMPORTED DATA</span><h2>已匯入季度資料</h2></div></div>{quarters.length ? quarters.map(function (q) { const rows = projectRecords.filter(function (r) { return r.quarter === q; }); return <div className="imported-quarter" key={q}><div><strong>{q}</strong><span>{rows.length} 個路口</span></div><div>{rows.map(function (record) { return <button key={record.id} onClick={function () { if (confirm("刪除 " + record.station + " " + record.name + "？")) setRecords(records.filter(function (r) { return r.id !== record.id; })); }}>{record.station} ×</button>; })}</div><button className="danger-small" onClick={function () { deleteQuarter(q); }}>刪除整季</button></div>; }) : <Empty title="尚無已匯入資料" text="正式環境保持空白，等待使用者建置。" />}</section>
         </>}
 
@@ -508,7 +549,7 @@ export default function TrafficApp() {
 
         {view === "quality" && <>
           <section className="page-head"><div><span className="eyebrow">DATA QUALITY</span><h1>資料品質與異常流量偵測</h1><p>缺值、總數不一致、尖峰時段、車種統計與方向離群值，單位隨訊息標示。</p></div></section>
-          {!projectRecords.length ? renderNoData("尚無可檢查資料") : <><section className="quality-grid">{(["缺值", "總數不一致", "尖峰時段異常", "車種統計異常", "異常流量"] as const).map(function (category) { return <article className="panel" key={category}><span>{category}</span><strong>{currentIssues.filter(function (issue) { return issue.category === category; }).length} 項</strong><small>依匯入規則即時檢查</small></article>; })}</section><section className="panel"><div className="issue-list">{currentIssues.map(function (issue) { return <div key={issue.id}><span className={"severity " + issue.severity} /><b>{issue.category}</b><strong>{issue.station}</strong><p>{issue.message}</p></div>; })}</div></section></>}
+          {!projectRecords.length ? renderNoData("尚無可檢查資料") : <><section className="quality-grid">{(["缺值", "總數不一致", "尖峰時段異常", "車種統計異常", "異常流量"] as const).map(function (category) { return <article className="panel" key={category}><span>{category}</span><strong>{currentIssues.filter(function (issue) { return issue.category === category; }).length} 項</strong><small>{category === "車種統計異常" ? "僅比較同範圍的實際車輛數（輛/hr）" : "依匯入規則即時檢查"}</small></article>; })}</section><section className="quality-layout"><article className="panel"><div className="panel-head"><div><span className="eyebrow">ISSUE LIST</span><h2>{quarter} 檢查結果</h2></div><span className="status-dot">{currentIssues.length} 項</span></div>{currentIssues.length ? <div className="issue-list">{currentIssues.map(function (issue) { return <div className={selectedIssueId === issue.id ? "selected" : ""} key={issue.id}><span className={"severity " + issue.severity} /><b>{issue.category}</b><strong>{issue.station}</strong><p>{issue.message}</p><button onClick={function () { setSelectedIssueId(issue.id); }}>查看原因</button></div>; })}</div> : <Empty title="本季沒有異常" text="目前規則未發現需核對項目。" />}</article><aside className="panel issue-detail">{selectedIssue ? <><span className="eyebrow">WHY FLAGGED</span><h2>異常原因與計算方式</h2><b>{selectedIssue.category} · {selectedIssue.station}</b><p>{selectedIssue.message}</p>{selectedIssue.details ? <dl><div><dt>左直右實際車輛合計</dt><dd>{selectedIssue.details.turningVehicleTotal.toLocaleString()} {selectedIssue.details.unit}</dd></div><div><dt>四車種分類合計</dt><dd>{selectedIssue.details.classifiedVehicleTotal.toLocaleString()} {selectedIssue.details.unit}</dd></div><div><dt>差異</dt><dd>{selectedIssue.details.difference.toLocaleString()} {selectedIssue.details.unit}</dd></div></dl> : <div className="issue-explain">此項不是車種加總差異，請依訊息核對原始欄位。</div>}<div className="issue-explain"><b>判定前提</b><p>{selectedIssue.details?.explanation || "系統依同一季度路口的資料品質規則判定。"}</p><p>若一邊是 PCU/hr、另一邊是輛/hr，系統不會比較，也不會報車種統計異常。</p></div><button className="primary full" onClick={function () { setView("import"); }}>重新匯入並核對欄位</button></> : <Empty title="選擇一筆異常" text="點「查看原因」可看到數值、單位、公式與處理方向。" />}</aside></section></>}
         </>}
 
         {view === "names" && <>
