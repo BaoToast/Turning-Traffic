@@ -6,6 +6,7 @@ import JSZip from "jszip";
 import { jsPDF } from "jspdf";
 import {
   Approach,
+  canonicalIntersectionKey,
   computeVC,
   DEFAULT_PCE,
   formatMinutes,
@@ -19,6 +20,7 @@ import {
   Project,
   qualityIssues,
   recordTotal,
+  RouteFlow,
   totalMovement,
   TrafficRecord,
   VehicleKey,
@@ -30,6 +32,7 @@ type View = "dashboard" | "projects" | "import" | "parameters" | "diagram" | "co
 type DiagramStyle = "formal" | "standard" | "simple";
 type DisplayMode = "volume" | "percent" | "both";
 type ArrowMode = "all" | "focus";
+type ImportResolution = { action: "auto" | "new" | "merge" | "skip"; targetId?: string };
 
 const NAV: { id: View; label: string; icon: string; group?: string }[] = [
   { id: "dashboard", label: "總覽儀表板", icon: "⌂" },
@@ -76,10 +79,11 @@ function closestDestination(approaches: Approach[], sourceIndex: number, targetA
   }).sort(function (a, b) { return a.distance - b.distance; })[0].index;
 }
 
-function diagramMarkup(record: TrafficRecord, peak: PeakKey, style: DiagramStyle, mode: DisplayMode, vehicle: VehicleKey, arrowMode: ArrowMode, focusIndex: number) {
-  const width = 1000, height = 820, cx = 500, cy = 430;
+export function diagramMarkup(record: TrafficRecord, peak: PeakKey, style: DiagramStyle, mode: DisplayMode, vehicle: VehicleKey, arrowMode: ArrowMode, focusIndex: number) {
+  const width = style === "formal" ? 1200 : 1000, height = style === "formal" ? 900 : 820, cx = width / 2, cy = style === "formal" ? 470 : 430;
   const n = record.approaches.length;
-  const total = Math.max(1, recordTotal(record, peak));
+  const unit = vehicle === "all" ? "PCU/hr" : "輛/hr";
+  const total = Math.max(1, record.approaches.reduce(function (sum, approach) { return sum + totalMovement(approach, peak, undefined, vehicle); }, 0));
   const point = function (angle: number, radius: number) {
     const rad = angle * Math.PI / 180;
     return { x: cx + Math.cos(rad) * radius, y: cy + Math.sin(rad) * radius };
@@ -93,7 +97,7 @@ function diagramMarkup(record: TrafficRecord, peak: PeakKey, style: DiagramStyle
 
   record.approaches.forEach(function (approach, index) {
     const p = point(approach.angle, 205);
-    const cardP = point(approach.angle, n > 4 ? 320 : 300);
+    const cardP = point(approach.angle, n > 4 ? 355 : 315);
     const roadWidth = n > 5 ? 62 : 90;
     roadParts.push(
       '<g transform="rotate(' + (approach.angle + 90) + ' ' + cx + ' ' + cy + ')">' +
@@ -110,59 +114,79 @@ function diagramMarkup(record: TrafficRecord, peak: PeakKey, style: DiagramStyle
       closestDestination(record.approaches, index, approach.angle + 180),
       closestDestination(record.approaches, index, approach.angle - 90),
     ];
-
-    names.forEach(function (key, moveIndex) {
-      if (arrowMode === "focus" && index !== focusIndex) return;
-      const start = point(approach.angle, 145 + offsets[moveIndex]);
-      const destination = record.approaches[destinations[moveIndex]];
-      const end = point(destination.angle, 158 + offsets[moveIndex]);
-      const sourceRad = approach.angle * Math.PI / 180;
-      const normalX = -Math.sin(sourceRad) * offsets[moveIndex];
-      const normalY = Math.cos(sourceRad) * offsets[moveIndex];
-      const c1x = cx + normalX * 2.2, c1y = cy + normalY * 2.2;
-      const klass = arrowMode === "focus" ? "movement-path focus " + key : "movement-path " + key;
-      pathParts.push(
-        '<path class="' + klass + '" d="M ' + start.x.toFixed(1) + ' ' + start.y.toFixed(1) +
-        ' Q ' + c1x.toFixed(1) + ' ' + c1y.toFixed(1) + ' ' + end.x.toFixed(1) + ' ' + end.y.toFixed(1) +
-        '" marker-end="url(#arrow-' + key + ')"><title>' + esc(approach.name) + ' ' + MOVE_LABELS[key] + ' → ' + esc(destination.name) + '</title></path>'
-      );
-    });
+    const explicitRoutes = (record.routes || []).filter(function (route) { return route.fromApproachId === approach.id; });
+    if (explicitRoutes.length) {
+      explicitRoutes.forEach(function (route, routeIndex) {
+        if (arrowMode === "focus" && index !== focusIndex) return;
+        const destinationIndex = record.approaches.findIndex(function (item) { return item.id === route.toApproachId; });
+        if (destinationIndex < 0) return;
+        const destination = record.approaches[destinationIndex];
+        const routeValue = vehicle === "all" ? route.volumes[peak].pcu : route.volumes[peak].vehicle[vehicle];
+        if (!routeValue) return;
+        const laneOffset = (routeIndex - (explicitRoutes.length - 1) / 2) * 1.6;
+        const start = point(approach.angle + laneOffset, 145);
+        const end = point(destination.angle - laneOffset, 158);
+        const klass = arrowMode === "focus" ? "movement-path focus " + route.movement : "movement-path " + route.movement;
+        pathParts.push('<path class="' + klass + '" d="M ' + start.x.toFixed(1) + ' ' + start.y.toFixed(1) + ' Q ' + cx + ' ' + cy + ' ' + end.x.toFixed(1) + ' ' + end.y.toFixed(1) + '" marker-end="url(#arrow-' + route.movement + ')"><title>' + esc(approach.name) + ' → ' + esc(destination.name) + '：' + routeValue.toLocaleString() + ' ' + unit + '</title></path>');
+      });
+    } else {
+      names.forEach(function (key, moveIndex) {
+        if (arrowMode === "focus" && index !== focusIndex) return;
+        const start = point(approach.angle, 145 + offsets[moveIndex]);
+        const destination = record.approaches[destinations[moveIndex]];
+        const end = point(destination.angle, 158 + offsets[moveIndex]);
+        const sourceRad = approach.angle * Math.PI / 180;
+        const normalX = -Math.sin(sourceRad) * offsets[moveIndex];
+        const normalY = Math.cos(sourceRad) * offsets[moveIndex];
+        const c1x = cx + normalX * 2.2, c1y = cy + normalY * 2.2;
+        const klass = arrowMode === "focus" ? "movement-path focus " + key : "movement-path " + key;
+        pathParts.push('<path class="' + klass + '" d="M ' + start.x.toFixed(1) + ' ' + start.y.toFixed(1) + ' Q ' + c1x.toFixed(1) + ' ' + c1y.toFixed(1) + ' ' + end.x.toFixed(1) + ' ' + end.y.toFixed(1) + '" marker-end="url(#arrow-' + key + ')"><title>' + esc(approach.name) + ' ' + MOVE_LABELS[key] + ' → ' + esc(destination.name) + '</title></path>');
+      });
+    }
 
     if (style === "simple") return;
-    const cardWidth = n > 4 ? 174 : 230;
-    const x = Math.max(8, Math.min(width - cardWidth - 8, cardP.x - cardWidth / 2));
-    const y = Math.max(112, Math.min(height - 112, cardP.y - 48));
+    const cardWidth = style === "formal" ? 246 : n > 4 ? 210 : 230;
+    const formalSlots = n === 7 ? [[477, 112], [790, 150], [942, 342], [795, 680], [158, 680], [12, 390], [145, 150]] : null;
+    const x = formalSlots ? formalSlots[index][0] : Math.max(8, Math.min(width - cardWidth - 8, cardP.x - cardWidth / 2));
+    const y = formalSlots ? formalSlots[index][1] : Math.max(112, Math.min(height - 112, cardP.y - 48));
     const cell = cardWidth / 3;
     const formatter = function (value: number) {
       const pct = approachTotal ? Math.round(value / approachTotal * 100) + "%" : "0%";
       if (mode === "percent") return pct;
-      if (mode === "volume") return value.toLocaleString() + " PCU/hr";
-      return value.toLocaleString() + " PCU/hr | " + pct;
+      if (mode === "volume") return value.toLocaleString() + " " + unit;
+      return value.toLocaleString() + " " + unit + " | " + pct;
     };
-    const destinationLabels = destinations.map(function (dest) { return record.approaches[dest].name; });
+    const destinationLabels = names.map(function (key, movementIndex) {
+      const explicit = explicitRoutes.filter(function (route) { return route.movement === key; }).map(function (route) { return record.approaches.find(function (item) { return item.id === route.toApproachId; })?.name.replace(/^路口\s*/, "") || ""; }).filter(Boolean);
+      return explicit.length ? explicit.join("、") : record.approaches[destinations[movementIndex]].name;
+    });
     cardParts.push(
       '<g transform="translate(' + x + ' ' + y + ')"><rect width="' + cardWidth + '" height="96" rx="9" class="flow-card"/>' +
       '<text x="' + (cardWidth / 2) + '" y="-9" class="bearing">' + esc(approach.bearing) + '向 · ' + esc(approach.name) + '</text>' +
       '<line x1="' + cell + '" x2="' + cell + '" y1="0" y2="70" class="cell-line"/><line x1="' + (cell * 2) + '" x2="' + (cell * 2) + '" y1="0" y2="70" class="cell-line"/>' +
       names.map(function (key, moveIndex) {
+        const percentage = approachTotal ? Math.round(values[moveIndex] / approachTotal * 100) + "%" : "0%";
+        const valueMarkup = mode === "both"
+          ? '<text x="' + (cell * (moveIndex + 0.5)) + '" y="51" class="value">' + esc(values[moveIndex].toLocaleString() + " " + unit) + '</text><text x="' + (cell * (moveIndex + 0.5)) + '" y="64" class="percent">' + percentage + '</text>'
+          : '<text x="' + (cell * (moveIndex + 0.5)) + '" y="58" class="value">' + esc(formatter(values[moveIndex])) + '</text>';
         return '<text x="' + (cell * (moveIndex + 0.5)) + '" y="18" class="turn ' + key + '">' + MOVE_LABELS[key] + '</text>' +
           '<text x="' + (cell * (moveIndex + 0.5)) + '" y="36" class="destination">→' + esc(destinationLabels[moveIndex].slice(0, 8)) + '</text>' +
-          '<text x="' + (cell * (moveIndex + 0.5)) + '" y="58" class="value">' + esc(formatter(values[moveIndex])) + '</text>';
+          valueMarkup;
       }).join("") +
-      '<line x1="0" x2="' + cardWidth + '" y1="70" y2="70" class="cell-line"/><text x="' + (cardWidth / 2) + '" y="88" class="sum">方向合計 ' + approachTotal.toLocaleString() + ' PCU/hr</text></g>'
+      '<line x1="0" x2="' + cardWidth + '" y1="70" y2="70" class="cell-line"/><text x="' + (cardWidth / 2) + '" y="88" class="sum">方向合計 ' + approachTotal.toLocaleString() + ' ' + unit + '</text></g>'
     );
   });
 
   const peakText = peak + " Peak " + record.peaks[peak].start + "–" + record.peaks[peak].end;
   const meta = style === "simple" ? "" :
     '<g class="meta"><text x="30" y="38" class="title">' + esc(record.station) + '｜' + esc(record.name) + '</text>' +
-    '<text x="30" y="64">調查日期 ' + esc(record.date || "未填") + '　' + esc(peakText) + '　單位：PCU/hr</text>' +
-    '<text x="30" y="86">季度 ' + esc(record.quarter) + '　車種 ' + esc(VEHICLE_LABELS[vehicle]) + '　全路口流量 ' + total.toLocaleString() + ' PCU/hr</text></g>';
+    '<text x="30" y="64">調查日期 ' + esc(record.date || "未填") + '　' + esc(peakText) + '　單位：' + unit + '</text>' +
+    '<text x="30" y="86">季度 ' + esc(record.quarter) + '　車種 ' + esc(VEHICLE_LABELS[vehicle]) + '　全路口流量 ' + total.toLocaleString() + ' ' + unit + '</text></g>';
   const focusNote = arrowMode === "focus" && record.approaches[focusIndex]
     ? '<g transform="translate(30 775)"><text class="legend-title">聚焦：' + esc(record.approaches[focusIndex].name) + '</text></g>' : "";
 
   return '<svg id="turning-svg" xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="' + esc(record.name) + ' ' + esc(peakText) + ' 轉向圖">' +
-    '<style>.canvas{fill:#fffdf8}.road{fill:#e8edf0;stroke:#9eabb1;stroke-width:1.4}.divider{fill:none;stroke:#fff;stroke-width:2;stroke-dasharray:9 8}.road-label-bg{fill:#fffdf8;stroke:#d5dddf}.road-name{font:600 12px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#334d56;text-anchor:middle}.junction{fill:#dfe6e8;stroke:#819198;stroke-width:2}.flow-card{fill:#fff;stroke:#1b5364;stroke-width:1.5;filter:url(#shadow)}.cell-line{stroke:#cfdbdf}.bearing{font:600 11px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#274b58;text-anchor:middle}.turn{font:700 10px sans-serif;text-anchor:middle}.turn.left{fill:#b82d89}.turn.through{fill:#1656b4}.turn.right{fill:#c6352a}.destination{font:8px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#718188;text-anchor:middle}.value{font:700 9px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#102c36;text-anchor:middle}.sum{font:600 9px sans-serif;fill:#087f75;text-anchor:middle}.title{font:700 19px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#102c36}.meta text:not(.title){font:11px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#5f7076}.north{font:700 13px sans-serif;fill:#183d49}.center-label{font:700 12px sans-serif;fill:#fff;text-anchor:middle}.center-dot{fill:#0e7c75}.movement-path{fill:none;stroke-width:2;opacity:.54}.movement-path.left{stroke:' + colors.left + '}.movement-path.through{stroke:' + colors.through + '}.movement-path.right{stroke:' + colors.right + '}.movement-path.focus{stroke-width:5;opacity:.98}.legend text{font:700 10px Noto Sans TC,sans-serif;fill:#415961}.legend-title{font:700 11px Noto Sans TC,sans-serif;fill:#173d49}</style>' +
+    '<style>.canvas{fill:#fffdf8}.road{fill:#e8edf0;stroke:#9eabb1;stroke-width:1.4}.divider{fill:none;stroke:#fff;stroke-width:2;stroke-dasharray:9 8}.road-label-bg{fill:#fffdf8;stroke:#d5dddf}.road-name{font:600 12px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#334d56;text-anchor:middle}.junction{fill:#dfe6e8;stroke:#819198;stroke-width:2}.flow-card{fill:#fff;stroke:#1b5364;stroke-width:1.5;filter:url(#shadow)}.cell-line{stroke:#cfdbdf}.bearing{font:600 11px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#274b58;text-anchor:middle}.turn{font:700 10px sans-serif;text-anchor:middle}.turn.left{fill:#b82d89}.turn.through{fill:#1656b4}.turn.right{fill:#c6352a}.destination{font:8px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#718188;text-anchor:middle}.value{font:700 8px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#102c36;text-anchor:middle}.percent{font:700 8px sans-serif;fill:#60747b;text-anchor:middle}.sum{font:600 9px sans-serif;fill:#087f75;text-anchor:middle}.title{font:700 19px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#102c36}.meta text:not(.title){font:11px Noto Sans TC,Microsoft JhengHei,sans-serif;fill:#5f7076}.north{font:700 13px sans-serif;fill:#183d49}.center-label{font:700 12px sans-serif;fill:#fff;text-anchor:middle}.center-dot{fill:#0e7c75}.movement-path{fill:none;stroke-width:2;opacity:.54}.movement-path.left{stroke:' + colors.left + '}.movement-path.through{stroke:' + colors.through + '}.movement-path.right{stroke:' + colors.right + '}.movement-path.focus{stroke-width:5;opacity:.98}.legend text{font:700 10px Noto Sans TC,sans-serif;fill:#415961}.legend-title{font:700 11px Noto Sans TC,sans-serif;fill:#173d49}</style>' +
     '<defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity=".12"/></filter>' +
     '<marker id="arrow-left" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="' + colors.left + '"/></marker>' +
     '<marker id="arrow-through" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="' + colors.through + '"/></marker>' +
@@ -170,8 +194,8 @@ function diagramMarkup(record: TrafficRecord, peak: PeakKey, style: DiagramStyle
     '<rect class="canvas" width="' + width + '" height="' + height + '" rx="12"/>' + meta + roadParts.join("") +
     '<rect x="' + (cx - 82) + '" y="' + (cy - 82) + '" width="164" height="164" rx="18" class="junction"/>' + pathParts.join("") +
     '<circle cx="' + cx + '" cy="' + cy + '" r="31" class="center-dot"/><text x="' + cx + '" y="' + (cy - 3) + '" class="center-label">' + esc(record.station) + '</text><text x="' + cx + '" y="' + (cy + 15) + '" class="center-label">' + peak + '</text>' +
-    cardParts.join("") + '<g class="legend" transform="translate(720 785)"><text x="0">● 左轉</text><text x="70">● 直行</text><text x="140">● 右轉</text></g>' + focusNote +
-    '<g transform="translate(948 26)"><text x="12" y="12" class="north">N</text><path d="M12 56V21M12 21L5 32M12 21l7 11" fill="none" stroke="#183d49" stroke-width="2"/></g></svg>';
+    cardParts.join("") + '<g class="legend" transform="translate(' + (width - 280) + ' ' + (height - 26) + ')"><text x="0">● 左轉</text><text x="70">● 直行</text><text x="140">● 右轉</text></g>' + focusNote +
+    '<g transform="translate(' + (width - 52) + ' 26)"><text x="12" y="12" class="north">N</text><path d="M12 56V21M12 21L5 32M12 21l7 11" fill="none" stroke="#183d49" stroke-width="2"/></g></svg>';
 }
 
 async function svgToPng(svg: string, scale = 2) {
@@ -198,7 +222,6 @@ function emptyMovement(values: number[] | undefined, index: number) {
   const left = Number(values?.[index * 3]) || 0;
   const through = Number(values?.[index * 3 + 1]) || 0;
   const right = Number(values?.[index * 3 + 2]) || 0;
-  const total = left + through + right;
   return {
     left: left, through: through, right: right,
     vehicle: { motorcycle: 0, car: 0, heavy: 0, special: 0 },
@@ -213,37 +236,76 @@ function mappedMovement(item: ImportPreview, peak: PeakKey, approachName: string
   const pcu = { left: 0, through: 0, right: 0 };
   item.columns.filter(function (column) { return column.approach === approachName; }).forEach(function (column) {
     const count = Number(values?.[column.valueIndex]) || 0;
+    const movement = column.movement || "through";
     vehicle[column.vehicle] += count;
-    raw[column.movement] += count;
-    pcu[column.movement] += count * pce[column.vehicle][column.movement];
+    raw[movement] += count;
+    pcu[movement] += count * pce[column.vehicle][movement];
   });
   return { left: Math.round(pcu.left), through: Math.round(pcu.through), right: Math.round(pcu.right), vehicle: vehicle, rawVehicleTotal: raw.left + raw.through + raw.right };
 }
 
+function routeDestination(approaches: string[], sourceIndex: number, movement: "left" | "through" | "right") {
+  const count = approaches.length;
+  if (!count) return "";
+  const offset = movement === "left" ? count - 1 : movement === "right" ? 1 : Math.max(1, Math.round(count / 2));
+  return approaches[(sourceIndex + offset) % count];
+}
+
 function recordFromPreview(item: ImportPreview, projectId: string, quarter: string, pce: PceMatrix): TrafficRecord {
   const length = Math.max(item.am?.values.length || 0, item.pm?.values.length || 0);
-  const mappedNames = Array.from(new Set(item.columns.map(function (column) { return column.approach; })));
+  const mappedNames = item.approaches.length ? item.approaches : Array.from(new Set(item.columns.map(function (column) { return column.approach; })));
   const useMapping = item.mappingConfidence !== "low" && mappedNames.length >= 3 && mappedNames.length <= 7;
   const armCount = useMapping ? mappedNames.length : length >= 9 && length <= 21 && length % 3 === 0 ? length / 3 : 4;
   const bearings = armCount === 3 ? ["北", "東", "南"] : ["北", "東", "南", "西", "東北", "東南", "西南"];
   const approaches: Approach[] = Array.from({ length: armCount }, function (_, index) {
-    const approachName = useMapping ? mappedNames[index] : "支線 " + (index + 1);
+    const approachName = useMapping ? "路口 " + mappedNames[index] : "支線 " + (index + 1);
     return {
-      id: item.station + "-A" + (index + 1), name: approachName, bearing: bearings[index] || "支線",
+      id: item.station + "-" + (mappedNames[index] || "A" + (index + 1)), name: approachName, bearing: bearings[index] || "支線",
       angle: -90 + index * 360 / armCount, lanes: null, laneType: "custom", saturationFlow: null,
       effectiveGreen: null, cycleLength: null, capacity: null,
-      movements: { AM: useMapping ? mappedMovement(item, "AM", approachName, pce) : emptyMovement(item.am?.values, index), PM: useMapping ? mappedMovement(item, "PM", approachName, pce) : emptyMovement(item.pm?.values, index) },
+      movements: { AM: useMapping ? mappedMovement(item, "AM", mappedNames[index], pce) : emptyMovement(item.am?.values, index), PM: useMapping ? mappedMovement(item, "PM", mappedNames[index], pce) : emptyMovement(item.pm?.values, index) },
     };
   });
+  const routeKeys = new Map<string, { from: string; to: string; movement: "left" | "through" | "right" }>();
+  item.columns.forEach(function (column) {
+    const movement = column.movement || "through";
+    const sourceIndex = mappedNames.indexOf(column.approach);
+    const destination = column.destination || routeDestination(mappedNames, sourceIndex, movement);
+    if (destination) routeKeys.set(column.approach + "→" + destination, { from: column.approach, to: destination, movement });
+  });
+  const routes = [...routeKeys.values()].map(function (route, index) {
+    const volumes = Object.fromEntries((["AM", "PM"] as PeakKey[]).map(function (key) {
+      const values = key === "AM" ? item.am?.values : item.pm?.values;
+      const vehicle = { motorcycle: 0, car: 0, heavy: 0, special: 0 };
+      let routePcu = 0;
+      item.columns.filter(function (column) {
+        const destination = column.destination || routeDestination(mappedNames, mappedNames.indexOf(column.approach), column.movement || "through");
+        return column.approach === route.from && destination === route.to;
+      }).forEach(function (column) {
+        const count = Number(values?.[column.valueIndex]) || 0;
+        const movement = column.movement || route.movement;
+        vehicle[column.vehicle] += count;
+        routePcu += count * pce[column.vehicle][movement];
+      });
+      return [key, { pcu: Math.round(routePcu), vehicle }];
+    })) as RouteFlow["volumes"];
+    return {
+      id: item.station + "-R" + (index + 1),
+      fromApproachId: approaches[mappedNames.indexOf(route.from)]?.id || "",
+      toApproachId: approaches[mappedNames.indexOf(route.to)]?.id || "",
+      movement: route.movement,
+      volumes,
+    };
+  }).filter(function (route) { return route.fromApproachId && route.toApproachId; });
   return {
     id: projectId + "-" + quarter + "-" + item.station, projectId: projectId, station: item.station, name: item.name,
-    rawName: item.file, quarter: quarter, date: "", surveyType: "待設定",
+    rawName: item.file, quarter: quarter, date: item.date, surveyType: item.surveyType,
     peaks: {
       AM: item.am ? { start: formatMinutes(item.am.start), end: formatMinutes(item.am.end) } : { start: "", end: "" },
       PM: item.pm ? { start: formatMinutes(item.pm.start), end: formatMinutes(item.pm.end) } : { start: "", end: "" },
     },
-    approaches: approaches, sourceFiles: [item.file], importedAt: new Date().toISOString(),
-    validation: { referenceFound: false, matchRate: null, notes: [useMapping ? "已依表頭辨識方向、左直右與四車種並套用當量；仍需於匯入摘要人工確認。" : "欄位語意辨識不足，只保留尖峰數列；不執行車種合計一致性判定。"] },
+    approaches: approaches, routes: routes, sourceFiles: [item.file], importedAt: new Date().toISOString(),
+    validation: { referenceFound: false, matchRate: null, notes: [useMapping ? (item.layout === "od" ? "已依原始表保留每一組起點→終點與四車種流量。" : "已依各入口區塊辨識左直右與四車種並套用當量。") : "欄位語意辨識不足，只保留尖峰數列；不執行車種合計一致性判定。"] },
   };
 }
 
@@ -275,6 +337,7 @@ export default function TrafficApp() {
   const [nameMap, setNameMap] = useState<Record<string, string>>({});
   const [pce, setPce] = useState<PceMatrix>(DEFAULT_PCE);
   const [importRows, setImportRows] = useState<ImportPreview[]>([]);
+  const [importResolutions, setImportResolutions] = useState<Record<string, ImportResolution>>({});
   const [importing, setImporting] = useState(false);
   const [toast, setToast] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
@@ -292,14 +355,14 @@ export default function TrafficApp() {
       const oldDemo = data.version === "v1.0.0" && Array.isArray(data.records) && data.records.length === 20 && data.records.every(function (r: TrafficRecord) { return r.importedAt === "2026-08-11T09:00:00+08:00"; });
       if (!oldDemo && Array.isArray(data.records)) {
         if (Array.isArray(data.projects) && data.projects.length) {
-          setRecords(data.records);
+          setRecords(data.records.map(function (record: TrafficRecord) { return { ...record, intersectionId: record.intersectionId || "I-" + canonicalIntersectionKey(record.name) }; }));
           setProjects(data.projects);
           setActiveProjectId(data.activeProjectId || data.projects[0].id);
         } else if (data.records.length) {
           const migratedId = "P-migrated-v1";
           setProjects([{ id: migratedId, code: "MIGRATED", name: "舊版資料移轉", client: "", note: "由 v1.0 本機資料自動移轉；請重新核對匯入欄位。", createdAt: new Date().toISOString() }]);
           setActiveProjectId(migratedId);
-          setRecords(data.records.map(function (record: TrafficRecord) { return { ...record, projectId: migratedId }; }));
+          setRecords(data.records.map(function (record: TrafficRecord) { return { ...record, projectId: migratedId, intersectionId: record.intersectionId || "I-" + canonicalIntersectionKey(record.name) }; }));
         }
       }
       if (data.nameMap) setNameMap(data.nameMap);
@@ -317,6 +380,9 @@ export default function TrafficApp() {
   const quarters = useMemo(function () { return Array.from(new Set(projectRecords.map(function (record) { return record.quarter; }))).sort(); }, [projectRecords]);
   useEffect(function () { if (!quarter || !quarters.includes(quarter)) setQuarter(quarters.at(-1) || ""); }, [quarters, quarter]);
   const current = projectRecords.filter(function (record) { return record.quarter === quarter; });
+  const canonicalRecords = useMemo(function () {
+    return [...new Map(projectRecords.map(function (record) { return [record.intersectionId || canonicalIntersectionKey(record.name), record]; })).values()];
+  }, [projectRecords]);
   const selected = current.find(function (record) { return record.station === station; }) || current[0] || projectRecords[0] || null;
   useEffect(function () { if (selected && selected.station !== station) setStation(selected.station); }, [selected, station]);
   const issues = useMemo(function () { return qualityIssues(projectRecords); }, [projectRecords]);
@@ -357,10 +423,19 @@ export default function TrafficApp() {
     for (const file of Array.from(files)) {
       try { rows.push(await inspectWorkbook(file)); }
       catch (error) {
-        rows.push({ file: file.name, station: "—", name: normalizeIntersectionName(file.name), role: "無法辨識", sheets: { traffic: [], log: [], phase: [], ignored: [] }, intervals: 0, am: null, pm: null, columns: [], mappingConfidence: "low", warnings: ["讀取失敗：" + (error instanceof Error ? error.message : "未知錯誤")] });
+        rows.push({ file: file.name, station: "—", name: normalizeIntersectionName(file.name), role: "無法辨識", sheets: { traffic: [], log: [], phase: [], ignored: [] }, intervals: 0, am: null, pm: null, date: "", surveyType: "待設定", layout: "unknown", approaches: [], columns: [], mappingConfidence: "low", warnings: ["讀取失敗：" + (error instanceof Error ? error.message : "未知錯誤")] });
       }
     }
+    const known = new Map<string, TrafficRecord>();
+    projectRecords.forEach(function (record) { known.set(record.intersectionId || canonicalIntersectionKey(record.name), record); });
+    const resolutions: Record<string, ImportResolution> = {};
+    rows.forEach(function (row) {
+      const key = canonicalIntersectionKey(row.name);
+      const existing = [...known.values()].find(function (record) { return canonicalIntersectionKey(record.name) === key; });
+      resolutions[row.file] = existing ? { action: "auto", targetId: existing.intersectionId || canonicalIntersectionKey(existing.name) } : { action: "new" };
+    });
     setImportRows(rows);
+    setImportResolutions(resolutions);
     setImporting(false);
   }
 
@@ -368,19 +443,23 @@ export default function TrafficApp() {
     if (!activeProjectId) return notify("請先建立並選擇計畫。");
     const q = importPeriod;
     if (!q) return notify("請先選擇調查年度與季度。");
-    const originals = importRows.filter(function (row) { return row.role === "原始交通量" && Boolean(row.am || row.pm); });
+    const originals = importRows.filter(function (row) { return row.role === "原始交通量" && Boolean(row.am || row.pm) && importResolutions[row.file]?.action !== "skip"; });
     if (!originals.length) return notify("沒有可寫入的原始交通量檔。");
     const next = [...records];
     originals.forEach(function (item) {
       const found = next.findIndex(function (record) { return record.projectId === activeProjectId && record.quarter === q && record.station === item.station; });
       const created = recordFromPreview(item, activeProjectId, q, pce);
-      created.name = nameMap[item.file] || created.name;
+      const resolution = importResolutions[item.file] || { action: "new" };
+      const mergeTarget = resolution.targetId ? projectRecords.find(function (record) { return (record.intersectionId || canonicalIntersectionKey(record.name)) === resolution.targetId; }) : undefined;
+      created.intersectionId = mergeTarget?.intersectionId || resolution.targetId || "I-" + canonicalIntersectionKey(created.name);
+      created.name = mergeTarget?.name || nameMap[item.file] || created.name;
       created.validation.referenceFound = importRows.some(function (row) { return row.role === "參考計算檔" && row.station === item.station; });
       if (found >= 0) next[found] = created; else next.push(created);
     });
     setRecords(next);
     setQuarter(q);
     setImportRows([]);
+    setImportResolutions({});
     notify("已寫入 " + originals.length + " 個路口；同計畫、同季度、同站號採覆蓋更新。");
   }
 
@@ -415,7 +494,7 @@ export default function TrafficApp() {
     pdf.save((activeProject?.code || "Project") + "_" + (quarter || "all") + "_" + peak + "_轉向交通量報表.pdf");
   }
 
-  function exportExcel() {
+  function exportExcel(format: "xlsx" | "xls" = "xlsx") {
     if (!current.length) return notify("本季度沒有可輸出的資料。");
     const summary = current.flatMap(function (record) { return (["AM", "PM"] as PeakKey[]).map(function (key) { return {
       計畫代碼: activeProject?.code, 計畫名稱: activeProject?.name, 季度: record.quarter, 站號: record.station, 路口名稱: record.name,
@@ -443,7 +522,9 @@ export default function TrafficApp() {
     add(movements, "轉向與容量明細", [20, 10, 10, 25, 8, 8, 22, 16, 16, 16, 16, 18, 10, 24, 16, 12, 18]);
     add(trend, "歷季趨勢可編輯資料", [10, 10, 28, 10, 25]);
     add(quality, "品質檢查", [10, 18, 10, 10, 55]);
-    XLSX.writeFile(workbook, (activeProject?.code || "Project") + "_" + quarter + "_尖峰轉向交通量報表.xlsx");
+    const baseName = (activeProject?.code || "Project") + "_" + quarter + "_尖峰轉向交通量報表";
+    if (format === "xls") XLSX.writeFile(workbook, baseName + ".xls", { bookType: "biff8" });
+    else XLSX.writeFile(workbook, baseName + ".xlsx", { bookType: "xlsx" });
   }
 
   async function exportPngZip() {
@@ -475,7 +556,7 @@ export default function TrafficApp() {
       const fallbackId = restoredProjects[0].id;
       setProjects(restoredProjects);
       setActiveProjectId(data.activeProjectId || fallbackId);
-      setRecords(data.records.map(function (record: TrafficRecord) { return { ...record, projectId: record.projectId || fallbackId }; }));
+      setRecords(data.records.map(function (record: TrafficRecord) { return { ...record, projectId: record.projectId || fallbackId, intersectionId: record.intersectionId || "I-" + canonicalIntersectionKey(record.name) }; }));
       setNameMap(data.nameMap || {});
       setPce(data.pce || DEFAULT_PCE);
       notify("還原完成，可在這台電腦繼續使用。");
@@ -513,7 +594,7 @@ export default function TrafficApp() {
           <section className="page-head"><div><span className="eyebrow">BATCH IMPORT</span><h1>季度批次匯入與刪除</h1><p>先指定調查年度與季度，再選取檔案；同計畫＋同季度＋同站號採覆蓋。</p></div></section>
           <section className="panel import-period"><div><span className="step-no">01</span><div><strong>先指定這批資料的調查年度與季度</strong><p>此設定會套用到本次選取的全部路口，寫入前仍可更改。</p></div></div><label>調查年度（民國年）<input type="number" min="1" max="999" placeholder="例如 115" value={importYear} onChange={function (e) { setImportYear(e.target.value.replace(/\D/g, "").slice(0, 3)); }} /></label><label>季度<select value={importQuarterNo} onChange={function (e) { setImportQuarterNo(e.target.value); }}><option value="">請選擇</option><option value="1">第 1 季</option><option value="2">第 2 季</option><option value="3">第 3 季</option><option value="4">第 4 季</option></select></label><output>{importPeriod ? importYear + " 年第 " + importQuarterNo + " 季（" + importPeriod + "）" : "尚未完成設定"}</output></section>
           <section className="import-layout"><article className="panel upload-card" onDragOver={function (e) { e.preventDefault(); }} onDrop={function (e) { e.preventDefault(); handleFiles(e.dataTransfer.files); }}><span className="upload-icon">⇧</span><h2>再拖曳 Excel 檔案到這裡</h2><p>支援 .xls、.xlsx、.xlsm，多路口一次選取；照片工作表忽略。</p><input ref={fileRef} hidden type="file" multiple accept=".xls,.xlsx,.xlsm" onChange={function (e) { handleFiles(e.target.files); }} /><button className="primary" disabled={!importPeriod} onClick={function () { fileRef.current?.click(); }}>{importing ? "正在解析…" : importPeriod ? "選擇檔案" : "請先選年度與季度"}</button><small>{importPeriod ? "本批次將寫入 " + importPeriod : "年度與季度為必填"}</small></article><article className="panel import-rules"><span className="eyebrow">CALCULATION RULE</span><h2>尖峰小時計算</h2><ol><li><b>15 分鐘資料</b><span>連續 4 區間組成 60 分鐘。</span></li><li><b>AM／PM 分開搜尋</b><span>同值取較早時段。</span></li><li><b>參考檔只做驗證</b><span>不盲目照抄計算檔。</span></li><li><b>欄位映射可調整</b><span>匯入後需確認道路支線與左直右欄位。</span></li></ol></article></section>
-          <section className="panel"><div className="panel-head"><div><span className="eyebrow">IMPORT PREVIEW</span><h2>匯入辨識結果</h2></div><button className="primary" disabled={!importRows.length || !importPeriod} onClick={commitImport}>確認寫入 {importPeriod || "未選季度"}</button></div>{!importRows.length ? <Empty title="尚未選取檔案" text="預覽階段不會更動正式資料。" /> : <div className="table-scroll"><table><thead><tr><th>檔案</th><th>角色</th><th>站號／名稱</th><th>AM Peak（PCU/hr）</th><th>PM Peak（PCU/hr）</th><th>檢查</th><th></th></tr></thead><tbody>{importRows.map(function (row) { return <tr key={row.file}><td>{row.file}</td><td><span className={"tag " + (row.role === "無法辨識" ? "red" : row.role === "參考計算檔" ? "blue" : "green")}>{row.role}</span></td><td>{row.station}<small>{row.name}</small></td><td>{row.am ? formatMinutes(row.am.start) + "–" + formatMinutes(row.am.end) + " · " + row.am.total.toLocaleString() + " PCU/hr" : "—"}</td><td>{row.pm ? formatMinutes(row.pm.start) + "–" + formatMinutes(row.pm.end) + " · " + row.pm.total.toLocaleString() + " PCU/hr" : "—"}</td><td>{row.warnings.map(function (warning) { return <small className="warning-text" key={warning}>{warning}</small>; })}</td><td><button className="icon-danger" onClick={function () { setImportRows(importRows.filter(function (item) { return item.file !== row.file; })); }}>刪除</button></td></tr>; })}</tbody></table></div>}</section>
+          <section className="panel"><div className="panel-head"><div><span className="eyebrow">IMPORT PREVIEW</span><h2>匯入辨識結果</h2></div><button className="primary" disabled={!importRows.length || !importPeriod} onClick={commitImport}>確認寫入 {importPeriod || "未選季度"}</button></div>{!importRows.length ? <Empty title="尚未選取檔案" text="預覽階段不會更動正式資料。支援 .xls、.xlsx、.xlsm。" /> : <div className="table-scroll"><table><thead><tr><th>檔案</th><th>角色</th><th>站號／名稱</th><th>名稱處理</th><th>AM Peak（PCU/hr）</th><th>PM Peak（PCU/hr）</th><th>檢查</th><th></th></tr></thead><tbody>{importRows.map(function (row) { const resolution = importResolutions[row.file] || { action: "new" }; const matched = canonicalRecords.find(function (record) { return (record.intersectionId || canonicalIntersectionKey(record.name)) === resolution.targetId; }); return <tr key={row.file}><td>{row.file}</td><td><span className={"tag " + (row.role === "無法辨識" ? "red" : row.role === "參考計算檔" ? "blue" : "green")}>{row.role}</span></td><td>{row.station}<small>{row.name}</small><small>{row.date ? "調查日 " + row.date : "未讀到調查日"}</small></td><td>{resolution.action === "auto" ? <span className="tag green">自動併入 · {matched?.name}</span> : <select value={resolution.action === "merge" ? "merge:" + (resolution.targetId || "") : resolution.action} onChange={function (e) { const value = e.target.value; setImportResolutions({ ...importResolutions, [row.file]: value.startsWith("merge:") ? { action: "merge", targetId: value.slice(6) } : { action: value as "new" | "skip" } }); }}><option value="new">建立新路口</option>{canonicalRecords.map(function (record) { const id = record.intersectionId || canonicalIntersectionKey(record.name); return <option key={id} value={"merge:" + id}>併入：{record.name}</option>; })}<option value="skip">取消建置此檔</option></select>}</td><td>{row.am ? formatMinutes(row.am.start) + "–" + formatMinutes(row.am.end) + " · " + Math.round(row.am.total).toLocaleString() + " PCU/hr" : "—"}</td><td>{row.pm ? formatMinutes(row.pm.start) + "–" + formatMinutes(row.pm.end) + " · " + Math.round(row.pm.total).toLocaleString() + " PCU/hr" : "—"}</td><td>{row.warnings.map(function (warning) { return <small className="warning-text" key={warning}>{warning}</small>; })}</td><td><button className="icon-danger" onClick={function () { setImportRows(importRows.filter(function (item) { return item.file !== row.file; })); }}>刪除</button></td></tr>; })}</tbody></table></div>}</section>
           <section className="panel imported-data"><div className="panel-head"><div><span className="eyebrow">IMPORTED DATA</span><h2>已匯入季度資料</h2></div></div>{quarters.length ? quarters.map(function (q) { const rows = projectRecords.filter(function (r) { return r.quarter === q; }); return <div className="imported-quarter" key={q}><div><strong>{q}</strong><span>{rows.length} 個路口</span></div><div>{rows.map(function (record) { return <button key={record.id} onClick={function () { if (confirm("刪除 " + record.station + " " + record.name + "？")) setRecords(records.filter(function (r) { return r.id !== record.id; })); }}>{record.station} ×</button>; })}</div><button className="danger-small" onClick={function () { deleteQuarter(q); }}>刪除整季</button></div>; }) : <Empty title="尚無已匯入資料" text="正式環境保持空白，等待使用者建置。" />}</section>
         </>}
 
@@ -533,8 +614,9 @@ export default function TrafficApp() {
         </>}</>}
 
         {view === "geometry" && <>{!selected ? renderNoData("尚無道路支線資料") : <>
-          <section className="page-head"><div><span className="eyebrow">GEOMETRY & SIGNAL</span><h1>道路、車道與號誌管理</h1><p>每支線設定角度、車道類型、飽和流率、有效綠燈與週期；V/C 才會啟用。</p></div><button className="primary" disabled={selected.approaches.length >= 7} onClick={function () { updateSelected(function (record) { const i = record.approaches.length; record.approaches.push({ ...structuredClone(record.approaches[0]), id: record.station + "-A" + (i + 1), name: "新增支線 " + (i + 1), angle: -90 + i * 360 / (i + 1), bearing: "待設定", lanes: null, laneType: "custom", saturationFlow: null, effectiveGreen: null, cycleLength: null, capacity: null }); return record; }); }}>＋ 新增支線</button></section>
-          <section className="geometry-layout"><article className="panel"><div className="panel-head"><h2>{selected.station} · {selected.name}</h2><span className="status-dot">{selected.approaches.length} 叉</span></div><div className="geometry-list geometry-expanded">{selected.approaches.map(function (approach, index) { const laneType = approach.laneType || "custom"; const guide = LANE_GUIDANCE[laneType]; return <div key={approach.id}><b>{index + 1}</b><label>道路支線<input value={approach.name} onChange={function (e) { updateSelected(function (record) { record.approaches[index].name = e.target.value; return record; }); }} /></label><label>方位<input value={approach.bearing} onChange={function (e) { updateSelected(function (record) { record.approaches[index].bearing = e.target.value; return record; }); }} /></label><label>角度（°）<input type="number" value={approach.angle} onChange={function (e) { updateSelected(function (record) { record.approaches[index].angle = Number(e.target.value); return record; }); }} /></label><label>車道類型<select value={laneType} onChange={function (e) { updateSelected(function (record) { const type = e.target.value as LaneType; record.approaches[index].laneType = type; return record; }); }}>{(Object.keys(LANE_GUIDANCE) as LaneType[]).map(function (key) { return <option key={key} value={key}>{LANE_GUIDANCE[key].label}</option>; })}</select><small>建議 {guide.min}–{guide.max}；起始 {guide.recommended}</small></label><label>車道數（車道）<input type="number" min="1" value={approach.lanes ?? ""} onChange={function (e) { updateSelected(function (record) { record.approaches[index].lanes = e.target.value ? Number(e.target.value) : null; return record; }); }} /></label><label>飽和流率 S<input type="number" placeholder={String(guide.recommended)} value={approach.saturationFlow ?? approach.capacity ?? ""} onChange={function (e) { updateSelected(function (record) { record.approaches[index].saturationFlow = e.target.value ? Number(e.target.value) : null; record.approaches[index].capacity = null; return record; }); }} /><small>PCU／有效綠燈小時／車道 <button onClick={function () { updateSelected(function (record) { record.approaches[index].saturationFlow = guide.recommended; return record; }); }}>帶入建議</button></small></label><label>有效綠燈 Ge（秒）<input type="number" value={approach.effectiveGreen ?? ""} onChange={function (e) { updateSelected(function (record) { record.approaches[index].effectiveGreen = e.target.value ? Number(e.target.value) : null; return record; }); }} /><small>綠燈＋可利用黃燈－損失時間</small></label><label>週期 C（秒）<input type="number" value={approach.cycleLength ?? ""} onChange={function (e) { updateSelected(function (record) { record.approaches[index].cycleLength = e.target.value ? Number(e.target.value) : null; return record; }); }} /><small>同一燈色開始到下次開始</small></label><button className="icon-danger" disabled={selected.approaches.length <= 3} onClick={function () { updateSelected(function (record) { record.approaches.splice(index, 1); return record; }); }}>×</button></div>; })}</div></article><article className="panel geometry-preview" dangerouslySetInnerHTML={{ __html: diagramMarkup(selected, peak, "simple", "volume", "all", "focus", 0) }} /></section>
+          <section className="page-head"><div><span className="eyebrow">GEOMETRY & SIGNAL</span><h1>道路、車道與號誌管理</h1><p>道路名稱與角度用於流向圖；飽和流率、有效綠燈及週期只用於 V/C 容量檢核。</p></div><div className="head-buttons"><label>切換路口<select value={selected.station} onChange={function (e) { setStation(e.target.value); }}>{current.map(function (record) { return <option key={record.id} value={record.station}>{record.station} · {record.name}</option>; })}</select></label><button className="primary" disabled={selected.approaches.length >= 7} onClick={function () { updateSelected(function (record) { const i = record.approaches.length; record.approaches.push({ ...structuredClone(record.approaches[0]), id: record.station + "-A" + (i + 1), name: "新增支線 " + (i + 1), angle: -90 + i * 360 / (i + 1), bearing: "待設定", lanes: null, laneType: "custom", saturationFlow: null, effectiveGreen: null, cycleLength: null, capacity: null }); return record; }); }}>＋ 新增支線</button></div></section>
+          <section className="panel vc-explainer"><div><b>這三個數值用在哪裡？</b><p>只計算 V/C：容量 c = 飽和流率 S × 車道數 n × 有效綠燈 Ge ÷ 週期 C，最後 V/C = 尖峰需求流率 V ÷ c。沒有這些值時，尖峰量、車種組成、排名、趨勢與轉向圖仍可正常使用；只有 V/C 顯示「不可計算」。</p></div><div><b>如何取得？</b><p><strong>S：</strong>在綠燈且排隊穩定疏解時，記錄單車道 t 秒通過 N PCU，S = 3600N/t。<strong>Ge：</strong>從時相圖或秒錶取得顯示綠燈＋可利用黃燈－起步／清空損失。<strong>C：</strong>同一燈色開始至下一次同燈色開始的秒數。</p></div><div><b>沒有現地值怎麼辦？</b><p>可按「帶入建議」做初篩，但不可當正式容量結果。週期常見 60–120 秒只是提示；Ge 不建議用尖峰量的固定百分比反推。</p></div></section>
+          <section className="geometry-layout"><article className="panel"><div className="panel-head"><h2>{selected.station} · {selected.name}</h2><span className="status-dot">{selected.approaches.length} 叉</span></div><div className="geometry-list geometry-expanded">{selected.approaches.map(function (approach, index) { const laneType = approach.laneType || "custom"; const guide = LANE_GUIDANCE[laneType]; return <div key={approach.id}><b>{index + 1}</b><label>道路支線<input value={approach.name} onChange={function (e) { updateSelected(function (record) { record.approaches[index].name = e.target.value; return record; }); }} /></label><label>方位<input value={approach.bearing} onChange={function (e) { updateSelected(function (record) { record.approaches[index].bearing = e.target.value; return record; }); }} /></label><label>角度（°）<input type="number" value={approach.angle} onChange={function (e) { updateSelected(function (record) { record.approaches[index].angle = Number(e.target.value); return record; }); }} /></label><label>車道類型<select value={laneType} onChange={function (e) { updateSelected(function (record) { const type = e.target.value as LaneType; record.approaches[index].laneType = type; return record; }); }}>{(Object.keys(LANE_GUIDANCE) as LaneType[]).map(function (key) { return <option key={key} value={key}>{LANE_GUIDANCE[key].label}</option>; })}</select><small>建議 {guide.min}–{guide.max}；起始 {guide.recommended}</small></label><label>車道數（車道）<input type="number" min="1" value={approach.lanes ?? ""} onChange={function (e) { updateSelected(function (record) { record.approaches[index].lanes = e.target.value ? Number(e.target.value) : null; return record; }); }} /></label><label>飽和流率 S<input type="number" placeholder={String(guide.recommended)} value={approach.saturationFlow ?? approach.capacity ?? ""} onChange={function (e) { updateSelected(function (record) { record.approaches[index].saturationFlow = e.target.value ? Number(e.target.value) : null; record.approaches[index].capacity = null; return record; }); }} /><small>PCU／有效綠燈小時／車道 <button onClick={function () { updateSelected(function (record) { record.approaches[index].saturationFlow = guide.recommended; return record; }); }}>帶入建議</button></small></label><label>有效綠燈 Ge（秒）<input type="number" value={approach.effectiveGreen ?? ""} onChange={function (e) { updateSelected(function (record) { record.approaches[index].effectiveGreen = e.target.value ? Number(e.target.value) : null; return record; }); }} /><small>綠燈＋可利用黃燈－損失時間</small></label><label>週期 C（秒）<input type="number" value={approach.cycleLength ?? ""} onChange={function (e) { updateSelected(function (record) { record.approaches[index].cycleLength = e.target.value ? Number(e.target.value) : null; return record; }); }} /><small>同一燈色開始到下次開始</small></label><button className="icon-danger" disabled={selected.approaches.length <= 3} onClick={function () { updateSelected(function (record) { record.approaches.splice(index, 1); return record; }); }}>×</button></div>; })}</div>{selected.routes?.length ? <details className="route-mapping"><summary>檢查起點 → 終點流向（{selected.routes.length} 組）</summary><p>七岔路依原始檔的「往 A／B…」建立；可在此修正目的支線與左／直／右分類，流量不會被刪除。</p><div className="table-scroll"><table><thead><tr><th>起點</th><th>終點</th><th>轉向分類</th><th>AM</th><th>PM</th></tr></thead><tbody>{selected.routes.map(function (route, routeIndex) { const from = selected.approaches.find(function (item) { return item.id === route.fromApproachId; }); return <tr key={route.id}><td>{from?.name}</td><td><select value={route.toApproachId} onChange={function (e) { updateSelected(function (record) { if (record.routes) record.routes[routeIndex].toApproachId = e.target.value; return record; }); }}>{selected.approaches.filter(function (item) { return item.id !== route.fromApproachId; }).map(function (item) { return <option key={item.id} value={item.id}>{item.name}</option>; })}</select></td><td><select value={route.movement} onChange={function (e) { updateSelected(function (record) { if (record.routes) record.routes[routeIndex].movement = e.target.value as "left" | "through" | "right"; return record; }); }}><option value="left">左轉</option><option value="through">直行</option><option value="right">右轉</option></select></td><td>{route.volumes.AM.pcu.toLocaleString()} PCU/hr</td><td>{route.volumes.PM.pcu.toLocaleString()} PCU/hr</td></tr>; })}</tbody></table></div></details> : null}</article><article className="panel geometry-preview" dangerouslySetInnerHTML={{ __html: diagramMarkup(selected, peak, "simple", "volume", "all", "focus", 0) }} /></section>
         </>}</>}
 
         {view === "compare" && <>
@@ -554,12 +636,12 @@ export default function TrafficApp() {
 
         {view === "names" && <>
           <section className="page-head"><div><span className="eyebrow">NAME NORMALIZATION</span><h1>路口名稱管理</h1><p>排除全半形、括號、站號、版本字尾與重複標點，保留道路真名；人工映射優先。</p></div></section>
-          {!current.length ? renderNoData("尚無路口名稱") : <section className="panel"><div className="table-scroll"><table><thead><tr><th>站號</th><th>原始檔名</th><th>系統正規化</th><th>標準名稱（可編輯）</th></tr></thead><tbody>{current.map(function (record) { return <tr key={record.id}><td>{record.station}</td><td>{record.rawName}</td><td>{normalizeIntersectionName(record.rawName)}</td><td><input value={nameMap[record.rawName] || record.name} onChange={function (e) { setNameMap({ ...nameMap, [record.rawName]: e.target.value }); }} onBlur={function (e) { const value = e.target.value.trim(); setRecords(records.map(function (item) { return item.rawName === record.rawName ? { ...item, name: value || item.name } : item; })); }} /></td></tr>; })}</tbody></table></div></section>}
+          {!canonicalRecords.length ? renderNoData("尚無路口名稱") : <section className="panel"><div className="name-help"><b>只管理「標準路口」，不是每季重改一次</b><p>同一道路名稱在後續季度會自動併入。只有新名稱或無法唯一判斷時，匯入預覽才會請您選擇「建立、併入或取消」。</p></div><div className="table-scroll"><table><thead><tr><th>標準路口</th><th>曾使用站號</th><th>原始檔名／別名</th><th>標準名稱（一次修改、各季同步）</th></tr></thead><tbody>{canonicalRecords.map(function (record) { const key = record.intersectionId || canonicalIntersectionKey(record.name); const aliases = projectRecords.filter(function (item) { return (item.intersectionId || canonicalIntersectionKey(item.name)) === key; }); return <tr key={key}><td>{key}</td><td>{Array.from(new Set(aliases.map(function (item) { return item.station; }))).join("、")}</td><td>{Array.from(new Set(aliases.map(function (item) { return item.rawName; }))).map(function (name) { return <small key={name}>{name}</small>; })}</td><td><input value={record.name} onChange={function (e) { const value = e.target.value; setRecords(records.map(function (item) { return (item.intersectionId || canonicalIntersectionKey(item.name)) === key ? { ...item, name: value } : item; })); }} /></td></tr>; })}</tbody></table></div></section>}
         </>}
 
         {view === "reports" && <>
           <section className="page-head"><div><span className="eyebrow">REPORT CENTER</span><h1>報表與批次輸出</h1><p>Excel 保留可編輯數值、清楚欄名與單位；正式轉向圖輸出 PNG、SVG 或多頁 PDF。</p></div></section>
-          <section className="report-grid"><article className="panel report-card"><span className="file-type excel">XLSX</span><h2>可編輯季度 Excel</h2><p>欄名含單位、適當欄寬、自動篩選、歷季趨勢資料工作表。</p><button className="primary full" onClick={exportExcel}>下載 Excel</button></article><article className="panel report-card"><span className="file-type pdf">PDF</span><h2>正式版多頁 PDF</h2><p>採 3.jpg 的完整流向線版面，一頁一路口。</p><button className="primary full" onClick={function () { exportPdf(current); }}>產生 {current.length} 頁</button></article><article className="panel report-card"><span className="file-type png">PNG</span><h2>全部路口 PNG ZIP</h2><p>每路口一張高解析圖片，文字保持正向。</p><button className="primary full" onClick={exportPngZip}>下載 {current.length} 張</button></article><article className="panel report-card"><span className="file-type svg">SVG</span><h2>目前路口向量圖</h2><p>可無損縮放與排版。</p><button className="secondary full" onClick={exportSvg}>下載 SVG</button></article></section>
+          <section className="report-grid"><article className="panel report-card"><span className="file-type excel">XLS</span><h2>可編輯季度 Excel</h2><p>欄名含單位、適當欄寬、自動篩選、歷季趨勢資料工作表。</p><button className="primary full" onClick={function () { exportExcel("xlsx"); }}>下載新版 .xlsx</button><button className="secondary full" onClick={function () { exportExcel("xls"); }}>下載舊版 .xls</button></article><article className="panel report-card"><span className="file-type pdf">PDF</span><h2>正式版多頁 PDF</h2><p>採 3.jpg 的完整流向線版面，一頁一路口。</p><button className="primary full" onClick={function () { exportPdf(current); }}>產生 {current.length} 頁</button></article><article className="panel report-card"><span className="file-type png">PNG</span><h2>全部路口 PNG ZIP</h2><p>每路口一張高解析圖片，文字保持正向。</p><button className="primary full" onClick={exportPngZip}>下載 {current.length} 張</button></article><article className="panel report-card"><span className="file-type svg">SVG</span><h2>目前路口向量圖</h2><p>可無損縮放與排版。</p><button className="secondary full" onClick={exportSvg}>下載 SVG</button></article></section>
           <section className="panel report-note"><b>Excel 編輯性</b><p>數值、欄名、容量欄位與趨勢來源資料均為原生儲存格，可在 Excel 直接修改；轉向圖本體仍以 SVG／PNG／PDF 為正式成果。</p></section>
         </>}
 

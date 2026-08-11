@@ -44,6 +44,19 @@ export type Movement = {
   rawVehicleTotal?: number | null;
 };
 
+export type RouteVolume = {
+  pcu: number;
+  vehicle: Record<Exclude<VehicleKey, "all">, number>;
+};
+
+export type RouteFlow = {
+  id: string;
+  fromApproachId: string;
+  toApproachId: string;
+  movement: MovementKey;
+  volumes: Record<PeakKey, RouteVolume>;
+};
+
 export type Approach = {
   id: string;
   name: string;
@@ -61,6 +74,7 @@ export type Approach = {
 export type TrafficRecord = {
   id: string;
   projectId?: string;
+  intersectionId?: string;
   station: string;
   name: string;
   rawName: string;
@@ -69,6 +83,8 @@ export type TrafficRecord = {
   surveyType: string;
   peaks: Record<PeakKey, { start: string; end: string }>;
   approaches: Approach[];
+  /** Explicit origin-to-destination flows. Required for five-to-seven-arm intersections. */
+  routes?: RouteFlow[];
   sourceFiles: string[];
   importedAt: string;
   validation: { referenceFound: boolean; matchRate: number | null; notes: string[] };
@@ -90,8 +106,9 @@ export type QualityIssue = {
   };
 };
 
-export const VERSION = "v1.1.0";
+export const VERSION = "v1.2.0";
 export const VERSION_HISTORY = [
+  { version: "v1.2.0", date: "2026-08-11", note: "實檔匯入器改為表型辨識；支援七岔路起訖流向、並排區塊、舊版 Excel、名稱合併決策與正式 OD 流向圖。" },
   { version: "v1.1.0", date: "2026-08-11", note: "新增多計畫管理、可調整轉向當量、容量建議與號誌欄位、跨電腦備份；重製轉向箭頭、單位與報表。" },
   { version: "v1.0.0", date: "2026-08-11", note: "首版：批次匯入、尖峰分析、SVG 轉向圖、比較、品質檢查、報表與備份。" },
 ];
@@ -164,12 +181,21 @@ export function normalizeIntersectionName(input: string): string {
   let value = input.normalize("NFKC").replace(/\.(xlsx?|xlsm)$/i, "");
   value = value.replace(/^\s*\d{4,}(?:[-_.]?T?\d+[-_.]?\d+)?\s*/i, "");
   value = value.replace(/^\s*T\d+[-_.]?\d+\s*/i, "");
-  value = value.replace(/[【\[（(]+/g, "").replace(/[】\]）)]+/g, "");
+  value = value.replace(/[【[（(]+/g, "").replace(/[】\]）)]+/g, "");
   value = value.replace(/(?:(?:修正版|更新版|最終版|final|rev(?:ision)?|ver(?:sion)?|v)\s*[._-]?\d*)+$/i, "");
   value = value.replace(/[._]{2,}$/g, "").replace(/[._]+$/g, "");
   value = value.replace(/[-‐‑‒–—―－~～〜/\\_]+/g, "－").replace(/－{2,}/g, "－");
   value = value.replace(/^－|－$/g, "").replace(/\s+/g, "").trim();
   return value || "未命名路口";
+}
+
+export function canonicalIntersectionKey(input: string) {
+  return normalizeIntersectionName(input.normalize("NFKC").replace(/\([^)]*\)/g, ""))
+    .replace(/[三四五六七八九十\d]+叉路口/g, "")
+    .replace(/路口/g, "路")
+    .replace(/台(\d+)線/g, "台$1")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLocaleLowerCase("zh-TW");
 }
 
 export function stationFromFilename(name: string): string {
@@ -247,7 +273,7 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
 
 export type IntervalRow = { start: number; label: string; values: number[] };
 
-export function rollingPeak(rows: IntervalRow[], range: [number, number], intervalMinutes = 15) {
+export function rollingPeak(rows: IntervalRow[], range: [number, number], intervalMinutes = 15, weights?: number[]) {
   const needed = Math.max(1, Math.round(60 / intervalMinutes));
   const candidates = rows
     .map((row, index) => ({ row, index }))
@@ -257,14 +283,14 @@ export function rollingPeak(rows: IntervalRow[], range: [number, number], interv
     const slice = rows.slice(index, index + needed);
     if (slice.length !== needed || slice.some((r, i) => i && r.start - slice[i - 1].start !== intervalMinutes)) continue;
     const values = Array.from({ length: Math.max(...slice.map((r) => r.values.length), 0) }, (_, col) => slice.reduce((sum, r) => sum + (Number(r.values[col]) || 0), 0));
-    const total = values.reduce((a, b) => a + b, 0);
+    const total = values.reduce((sum, value, column) => sum + value * (weights?.[column] ?? 1), 0);
     if (!best || total > best.total) best = { start: row.start, end: row.start + 60, total, values };
   }
   return best;
 }
 
 function parseTime(value: unknown): number | null {
-  if (typeof value === "number" && value >= 0 && value < 1) return Math.round(value * 24 * 60);
+  if (typeof value === "number" && value > 0 && value < 1) return Math.round(value * 24 * 60);
   const match = String(value ?? "").match(/(\d{1,2})[:：](\d{2})/);
   return match ? Number(match[1]) * 60 + Number(match[2]) : null;
 }
@@ -278,7 +304,20 @@ export type ImportPreview = {
   intervals: number;
   am: ReturnType<typeof rollingPeak>;
   pm: ReturnType<typeof rollingPeak>;
-  columns: Array<{ valueIndex: number; sourceColumn: number; label: string; approach: string; movement: MovementKey; vehicle: PceVehicle }>;
+  date: string;
+  surveyType: string;
+  layout: "turning" | "od" | "unknown";
+  approaches: string[];
+  columns: Array<{
+    valueIndex: number;
+    sheet: string;
+    sourceColumn: number;
+    label: string;
+    approach: string;
+    destination: string | null;
+    movement: MovementKey | null;
+    vehicle: PceVehicle;
+  }>;
   mappingConfidence: "high" | "medium" | "low";
   warnings: string[];
 };
@@ -306,11 +345,47 @@ function vehicleFromHeader(label: string): PceVehicle | null {
   return null;
 }
 
-function approachFromHeader(label: string) {
-  const stripped = label
-    .replace(/左轉|左彎|直行|直進|右轉|右彎|機車|機踏車|特種車?|大客車?|大貨車?|大型車?|聯結車?|曳引車?|小客車?|小貨車?|小型車?|交通量|車種|合計|總計/gi, " ")
-    .replace(/[|｜>＞/\\]+/g, " ").replace(/\s+/g, " ").trim();
-  return stripped || "未命名方向";
+function workbookText(workbook: XLSX.WorkBook) {
+  const values: string[] = [];
+  workbook.SheetNames.forEach(function (sheetName) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet?.["!ref"]) return;
+    const range = XLSX.utils.decode_range(sheet["!ref"]!);
+    for (let row = range.s.r; row <= Math.min(range.e.r, 12); row++) {
+      for (let col = range.s.c; col <= range.e.c; col++) {
+        const value = sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
+        if (value != null && String(value).trim()) values.push(String(value).trim());
+      }
+    }
+  });
+  return values;
+}
+
+function rocDate(value: string) {
+  const match = value.normalize("NFKC").match(/(\d{2,3})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+  if (!match) return "";
+  return `${Number(match[1]) + 1911}-${String(Number(match[2])).padStart(2, "0")}-${String(Number(match[3])).padStart(2, "0")}`;
+}
+
+function sourceCode(sheet: XLSX.WorkSheet, headerEnd: number, startColumn: number, endColumn: number, sheetName: string) {
+  for (let row = 0; row <= headerEnd; row++) {
+    for (let col = startColumn; col <= endColumn; col++) {
+      const text = String(sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v ?? "").normalize("NFKC");
+      const match = text.match(/路口編號\s*[：:]?\s*(?:路口)?\s*([A-Z0-9]+)/i);
+      if (match) return match[1].toUpperCase();
+    }
+  }
+  return sheetName.normalize("NFKC").match(/路口\s*[（(]?\s*([A-Z0-9]+)\s*[)）]?/i)?.[1]?.toUpperCase() || "";
+}
+
+function defaultMovementForOd(from: string, to: string, approaches: string[]): MovementKey {
+  const fromIndex = approaches.indexOf(from);
+  const toIndex = approaches.indexOf(to);
+  if (fromIndex < 0 || toIndex < 0 || approaches.length < 3) return "through";
+  const step = ((toIndex - fromIndex) % approaches.length + approaches.length) % approaches.length;
+  const signedDegrees = ((step * 360 / approaches.length - 180 + 540) % 360) - 180;
+  if (Math.abs(signedDegrees) <= 50) return "through";
+  return signedDegrees < 0 ? "left" : "right";
 }
 
 export async function inspectWorkbook(file: File): Promise<ImportPreview> {
@@ -323,56 +398,118 @@ export async function inspectWorkbook(file: File): Promise<ImportPreview> {
     else if (/時相|號誌|phase|signal/i.test(sheet)) buckets.phase.push(sheet);
     else buckets.traffic.push(sheet);
   });
-  const intervalRows: IntervalRow[] = [];
-  let detectedColumns: ImportPreview["columns"] = [];
+  const texts = workbookText(workbook);
+  const workbookStation = texts.map(function (text) { return text.match(/站號\s*[：:]\s*[^\s]*?(T\s*\d+[-_.]?\s*\d+)/i)?.[1]; }).find(Boolean);
+  const workbookName = texts.map(function (text) { return text.match(/站名\s*[：:]\s*(.+)$/)?.[1]; }).find(Boolean)
+    || texts.map(function (text) { return text.match(/地\s*點\s*[：:]?\s*(.+)$/)?.[1]; }).find(Boolean);
+  const dateText = texts.find(function (text) { return /\d{2,3}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/.test(text.normalize("NFKC")); }) || "";
+  const intervalMap = new Map<number, IntervalRow>();
+  const detectedColumns: ImportPreview["columns"] = [];
+  const originOrder: string[] = [];
+  let sawOd = false;
+  let sawTurning = false;
   for (const sheetName of buckets.traffic) {
     const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: null });
-    const firstDataRow = rows.findIndex((row) => parseTime(row[0]) !== null);
-    const columns: ImportPreview["columns"] = [];
-    if (firstDataRow >= 0) {
-      const maxColumns = Math.max(...rows.slice(firstDataRow, firstDataRow + 8).map((row) => row.length), 0);
-      for (let col = 1; col < maxColumns; col++) {
+    if (!sheet?.["!ref"]) continue;
+    const used = XLSX.utils.decode_range(sheet["!ref"]!);
+    const timeColumns: Array<{ column: number; firstDataRow: number }> = [];
+    for (let col = used.s.c; col <= used.e.c; col++) {
+      let firstDataRow = -1;
+      let timeCount = 0;
+      let stringTimeCount = 0;
+      for (let row = used.s.r; row <= used.e.r; row++) {
+        const value = sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
+        if (parseTime(value) !== null) {
+          if (firstDataRow < 0) firstDataRow = row;
+          timeCount++;
+          if (typeof value === "string") stringTimeCount++;
+        }
+      }
+      const hasTimeHeader = firstDataRow >= 0 && Array.from({ length: Math.min(4, firstDataRow - used.s.r + 1) }, function (_, offset) {
+        return mergedCellValue(sheet, firstDataRow - offset - 1, col);
+      }).some(function (value) { return /時\s*間/.test(value); });
+      if (firstDataRow >= 0 && timeCount >= 4 && (hasTimeHeader || stringTimeCount >= 4)) timeColumns.push({ column: col, firstDataRow });
+    }
+    timeColumns.forEach(function (timeColumn, blockIndex) {
+      const blockEnd = (timeColumns[blockIndex + 1]?.column ?? (used.e.c + 1)) - 1;
+      const origin = sourceCode(sheet, timeColumn.firstDataRow - 1, timeColumn.column, blockEnd, sheetName) || `A${originOrder.length + 1}`;
+      if (!originOrder.includes(origin)) originOrder.push(origin);
+      const blockColumns: ImportPreview["columns"] = [];
+      for (let col = timeColumn.column + 1; col <= blockEnd; col++) {
         const parts: string[] = [];
-        for (let headerRow = Math.max(0, firstDataRow - 8); headerRow < firstDataRow; headerRow++) {
+        for (let headerRow = Math.max(used.s.r, timeColumn.firstDataRow - 8); headerRow < timeColumn.firstDataRow; headerRow++) {
           const value = mergedCellValue(sheet, headerRow, col);
           if (value && !parts.includes(value)) parts.push(value);
         }
         const label = parts.join("｜");
         const movement = movementFromHeader(label);
+        const destination = label.match(/往\s*([A-Z0-9]+)/i)?.[1]?.toUpperCase() || null;
         const vehicle = vehicleFromHeader(label);
-        if (movement && vehicle) columns.push({ valueIndex: columns.length, sourceColumn: col, label, approach: approachFromHeader(label), movement, vehicle });
+        if (!vehicle || (!movement && !destination)) continue;
+        if (movement) sawTurning = true;
+        if (destination) sawOd = true;
+        const column: ImportPreview["columns"][number] = {
+          valueIndex: detectedColumns.length,
+          sheet: sheetName,
+          sourceColumn: col,
+          label,
+          approach: origin,
+          destination,
+          movement,
+          vehicle,
+        };
+        detectedColumns.push(column);
+        blockColumns.push(column);
       }
-    }
-    if (columns.length > detectedColumns.length) detectedColumns = columns;
-    for (const row of rows) {
-      const start = parseTime(row[0]);
-      if (start === null) continue;
-      const values = columns.length
-        ? columns.map((column) => Number(row[column.sourceColumn]) || 0)
-        : row.slice(1).map((value) => Number(value) || 0);
-      if (values.length) intervalRows.push({ start, label: String(row[0]), values });
-    }
+      for (let row = timeColumn.firstDataRow; row <= used.e.r; row++) {
+        const cell = sheet[XLSX.utils.encode_cell({ r: row, c: timeColumn.column })]?.v;
+        const start = parseTime(cell);
+        if (start === null) continue;
+        const interval = intervalMap.get(start) || { start, label: String(cell), values: [] };
+        blockColumns.forEach(function (column) {
+          const value = sheet[XLSX.utils.encode_cell({ r: row, c: column.sourceColumn })]?.v;
+          interval.values[column.valueIndex] = Number(value) || 0;
+        });
+        intervalMap.set(start, interval);
+      }
+    });
   }
-  intervalRows.sort((a, b) => a.start - b.start);
+  detectedColumns.forEach(function (column) {
+    if (column.destination && !originOrder.includes(column.destination)) originOrder.push(column.destination);
+  });
+  detectedColumns.forEach(function (column) {
+    if (!column.movement && column.destination) column.movement = defaultMovementForOd(column.approach, column.destination, originOrder);
+  });
+  const intervalRows = [...intervalMap.values()].sort(function (a, b) { return a.start - b.start; });
+  intervalRows.forEach(function (row) {
+    row.values = Array.from({ length: detectedColumns.length }, function (_, index) { return Number(row.values[index]) || 0; });
+  });
+  const weights = detectedColumns.map(function (column) { return DEFAULT_PCE[column.vehicle][column.movement || "through"]; });
   const role = /^T\d+[-_.]?\d+\.(xls|xlsx|xlsm)$/i.test(file.name.normalize("NFKC")) ? "參考計算檔" : intervalRows.length ? "原始交通量" : "無法辨識";
   const warnings: string[] = [];
-  if (!buckets.log.length) warnings.push("未找到監測日誌工作表，路口幾何需人工確認。");
-  if (!buckets.phase.length) warnings.push("未找到時相圖工作表；V/C 可能缺少號誌參數。");
-  if (!intervalRows.length) warnings.push("未辨識到以時間開頭的交通量資料列。");
-  const distinctApproaches = new Set(detectedColumns.map((column) => column.approach)).size;
+  if (!buckets.log.length) warnings.push("未找到監測日誌；道路名稱與幾何仍可人工補正。");
+  if (!buckets.phase.length) warnings.push("未找到時相圖；只影響 V/C 的有效綠燈與週期，不影響尖峰流量。");
+  if (!intervalRows.length) warnings.push("未找到可辨識的時間序列資料。");
+  const distinctApproaches = new Set(detectedColumns.map(function (column) { return column.approach; })).size;
   const mappingConfidence = detectedColumns.length >= 12 && distinctApproaches >= 2 ? "high" : detectedColumns.length >= 4 ? "medium" : "low";
-  if (mappingConfidence === "low") warnings.push("未能可靠辨識方向×左直右×四車種欄位；只保留尖峰數列，不執行車種加總一致性判定。");
-  else warnings.push(`已辨識 ${detectedColumns.length} 個轉向車種欄位、${distinctApproaches} 個方向；請於寫入前核對欄位摘要。`);
+  const layout: ImportPreview["layout"] = sawOd ? "od" : sawTurning ? "turning" : "unknown";
+  if (mappingConfidence === "low") warnings.push("欄位語意不足，匯入前必須人工確認；系統不會把未知數值當成正式流量。");
+  else if (layout === "od") warnings.push(`已辨識 ${distinctApproaches} 個入口、${detectedColumns.length} 個起訖車種欄位；將保留 A→B 等實際流向，不強制改成左直右。`);
+  else warnings.push(`已辨識 ${distinctApproaches} 個入口區塊、${detectedColumns.length} 個左直右×車種欄位。`);
+  if (/\.xls$/i.test(file.name)) warnings.push("已使用舊版 Excel 97–2003（.xls）相容讀取模式。");
   return {
     file: file.name,
-    station: stationFromFilename(file.name),
-    name: normalizeIntersectionName(file.name),
+    station: workbookStation ? stationFromFilename(workbookStation) : stationFromFilename(file.name),
+    name: normalizeIntersectionName(workbookName || file.name),
     role,
     sheets: buckets,
     intervals: intervalRows.length,
-    am: rollingPeak(intervalRows, [5 * 60, 12 * 60]),
-    pm: rollingPeak(intervalRows, [12 * 60, 23 * 60]),
+    am: rollingPeak(intervalRows, [5 * 60, 12 * 60], 15, weights),
+    pm: rollingPeak(intervalRows, [12 * 60, 23 * 60], 15, weights),
+    date: rocDate(dateText),
+    surveyType: dateText.match(/[（(]\s*([^）)]+)\s*[）)]/)?.[1] || "待設定",
+    layout,
+    approaches: originOrder,
     columns: detectedColumns,
     mappingConfidence,
     warnings,
