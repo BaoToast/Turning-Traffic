@@ -2373,7 +2373,7 @@ export default function TrafficApp() {
           <span>
             <i /> 本機資料自動儲存
           </span>
-          <small>{VERSION} · 本機測試版（尚未發布）</small>
+          <small>{VERSION} · 正式版</small>
         </div>
       </aside>
       <main className="main">
