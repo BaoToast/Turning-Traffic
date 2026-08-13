@@ -1280,6 +1280,55 @@ button {
 .report-card button {
   margin-top: auto;
 }
+
+.report-range {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 12px 0;
+}
+.report-range label,
+.batch-project-list label {
+  color: var(--muted);
+  font-size: 12px;
+}
+.batch-quarter-list {
+  grid-template-columns: repeat(4, minmax(80px, 1fr));
+  max-height: 110px;
+}
+.batch-label {
+  display: block;
+  margin-top: 12px;
+  color: var(--ink);
+  font-size: 13px;
+}
+.report-range select {
+  width: 100%;
+  margin-top: 5px;
+}
+.batch-card {
+  grid-column: 1 / -1;
+}
+.batch-project-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 150px;
+  margin: 12px 0;
+  overflow: auto;
+}
+.batch-project-list label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.file-type.zip {
+  background: #e9e5ff;
+  color: #5744a8;
+}
 .report-note {
   margin-top: 16px;
   padding: 18px 21px;
@@ -1959,6 +2008,29 @@ input:focus {
   font-size: 10px;
   font-weight: 700;
   text-align: center;
+}
+.format-template-panel {
+  margin-bottom: 18px;
+}
+.format-template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.format-template-grid article {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fbfa;
+}
+.format-template-grid p {
+  margin: 7px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.format-template-grid small {
+  color: var(--teal);
 }
 @media (max-width: 1100px) {
   .import-period {

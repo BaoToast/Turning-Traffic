@@ -8,6 +8,7 @@ import {
   createDemoRecords,
   DEFAULT_PCE,
   inspectWorkbook,
+  inspectWorkbookVariants,
   normalizeIntersectionName,
   qualityIssues,
   referenceMovementForOd,
@@ -196,4 +197,36 @@ test("does not flag a legitimately high surveyed direction as an anomaly", () =>
     ),
     false,
   );
+});
+
+test("splits weekday and holiday hourly workbooks into independent previews", async () => {
+  const workbook = XLSX.utils.book_new();
+  for (const name of ["平日", "假日"]) {
+    const rows = [
+      ["站號：T15-01", "", "站名：測試路口"],
+      ["時間", "機踏車", "", ""],
+      ["", "左轉", "直進", "右轉"],
+      ...Array.from({ length: 24 }, function (_, hour) {
+        return [
+          String(hour).padStart(2, "0") + ":00～" + String(hour + 1).padStart(2, "0") + ":00",
+          hour === 7 ? 10 : 1,
+          hour === 7 ? 20 : 2,
+          hour === 7 ? 5 : 1,
+        ];
+      }),
+    ];
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), name);
+  }
+  const file = new File(
+    [XLSX.write(workbook, { type: "array", bookType: "xlsx" })],
+    "T15-01(平、假日).xlsx",
+  );
+  const previews = await inspectWorkbookVariants(file, DEFAULT_PCE);
+  assert.equal(previews.length, 2);
+  assert.deepEqual(
+    previews.map(function (preview) { return preview.surveyType; }).sort(),
+    ["假日", "平日"],
+  );
+  assert.ok(previews.every(function (preview) { return preview.templateId === "hourly-weekday-holiday-turning-v1"; }));
+  assert.ok(previews.every(function (preview) { return preview.am?.end - preview.am?.start === 60; }));
 });

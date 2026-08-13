@@ -186,8 +186,13 @@ export type QualityIssue = {
   };
 };
 
-export const VERSION = "v1.5.1";
+export const VERSION = "v1.6.0";
 export const VERSION_HISTORY = [
+  {
+    version: "v1.6.0",
+    date: "2026-08-13",
+    note: "新增平／假日整點格式範本、跨季 Excel、批次成果包與圖表／流量卡定位修正。",
+  },
   {
     version: "v1.5.1",
     date: "2026-08-11",
@@ -627,9 +632,43 @@ export type ImportPreview = {
   }>;
   mappingConfidence: "high" | "medium" | "low";
   warnings: string[];
+  templateId?: string;
+  templateName?: string;
   /** Coefficients used to select the previewed peak window. */
   pceUsed: PceMatrix;
 };
+
+export type ImportFormatTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  intervalMinutes: 15 | 60 | "auto";
+};
+
+export const IMPORT_FORMAT_TEMPLATES: ImportFormatTemplate[] = [
+  {
+    id: "hourly-weekday-holiday-turning-v1",
+    name: "平／假日全日整點轉向表",
+    description:
+      "同一活頁簿含平日、假日工作表；依日別分開匯入，讀取四車種×左直右整點流量。",
+    intervalMinutes: 60,
+  },
+  {
+    id: "semantic-turning-v1",
+    name: "一般語意轉向表",
+    description:
+      "依時間欄、來源支線、左直右或 OD 目的地及車種欄名辨識，不依固定欄號。",
+    intervalMinutes: "auto",
+  },
+];
+
+function importTemplate(templateId: string) {
+  return (
+    IMPORT_FORMAT_TEMPLATES.find(function (template) {
+      return template.id === templateId;
+    }) || IMPORT_FORMAT_TEMPLATES[1]
+  );
+}
 
 function mergedCellValue(sheet: XLSX.WorkSheet, row: number, col: number) {
   const direct = sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
@@ -762,6 +801,11 @@ export function referenceMovementForOd(
 export async function inspectWorkbook(
   file: File,
   pce: PceMatrix = DEFAULT_PCE,
+  options?: {
+    trafficSheets?: string[];
+    fileLabel?: string;
+    surveyType?: string;
+  },
 ): Promise<ImportPreview> {
   const array = await file.arrayBuffer();
   const workbook = XLSX.read(array, { type: "array", cellDates: true });
@@ -771,11 +815,21 @@ export async function inspectWorkbook(
     phase: [] as string[],
     ignored: [] as string[],
   };
+  const dayTypeTrafficSheets = workbook.SheetNames.filter(function (sheet) {
+    return /^(平日|假日)\s*$/.test(sheet.normalize("NFKC"));
+  });
+  const templateId =
+    dayTypeTrafficSheets.length >= 2
+      ? "hourly-weekday-holiday-turning-v1"
+      : "semantic-turning-v1";
+  const templateName = importTemplate(templateId).name;
   workbook.SheetNames.forEach((sheet) => {
     if (/照片|photo|image/i.test(sheet)) buckets.ignored.push(sheet);
     else if (/監測日誌|日誌|log/i.test(sheet)) buckets.log.push(sheet);
     else if (/時相|號誌|phase|signal/i.test(sheet)) buckets.phase.push(sheet);
-    else buckets.traffic.push(sheet);
+    else if (!options?.trafficSheets || options.trafficSheets.includes(sheet))
+      buckets.traffic.push(sheet);
+    else buckets.ignored.push(sheet);
   });
   const cells = workbookCells(workbook);
   const texts = cells.map(function (item) {
@@ -799,8 +853,15 @@ export async function inspectWorkbook(
       .find(Boolean);
   const dateCell =
     cells.find(function (item) {
+      return (
+        (!options?.trafficSheets || options.trafficSheets.includes(item.sheet)) &&
+        Boolean(rocDate(item.text))
+      );
+    }) ||
+    cells.find(function (item) {
       return Boolean(rocDate(item.text));
-    }) || null;
+    }) ||
+    null;
   const dateText = dateCell?.text || "";
   const intervalMap = new Map<number, IntervalRow>();
   const detectedColumns: ImportPreview["columns"] = [];
@@ -963,6 +1024,20 @@ export async function inspectWorkbook(
   const intervalRows = [...intervalMap.values()].sort(function (a, b) {
     return a.start - b.start;
   });
+  const intervalMinutes = Math.max(
+    15,
+    Math.min(
+      60,
+      intervalRows
+        .slice(1)
+        .map(function (row, index) {
+          return row.start - intervalRows[index].start;
+        })
+        .filter(function (value) {
+          return value > 0;
+        })[0] || 15,
+    ),
+  );
   const surveyValues = Array.from(
     {
       length: Math.max(
@@ -1032,6 +1107,7 @@ export async function inspectWorkbook(
     warnings.push(
       `已辨識 ${distinctApproaches} 個入口區塊、${detectedColumns.length} 個左直右×車種欄位。`,
     );
+  warnings.push(`套用格式範本：${templateName}。`);
   if (positionalVehicleBlocks && vehicleHeaderConflicts)
     warnings.push(
       `發現 ${vehicleHeaderConflicts} 個車種欄名與第 1–4 車種欄位順序不一致；已依欄位群組辨識為機車、小型車、大型／大客車、特種／聯結車，請在預覽確認。`,
@@ -1039,7 +1115,7 @@ export async function inspectWorkbook(
   if (/\.xls$/i.test(file.name))
     warnings.push("已使用舊版 Excel 97–2003（.xls）相容讀取模式。");
   return {
-    file: file.name,
+    file: options?.fileLabel || file.name,
     station: workbookStation
       ? stationFromFilename(workbookStation)
       : stationFromFilename(file.name),
@@ -1049,23 +1125,60 @@ export async function inspectWorkbook(
     intervals: intervalRows.length,
     survey: {
       intervals: intervalRows.length,
-      minutes: intervalRows.length * 15,
+      minutes: intervalRows.length * intervalMinutes,
       values: surveyValues,
     },
-    am: rollingPeak(intervalRows, [5 * 60, 12 * 60], 15, weights),
-    pm: rollingPeak(intervalRows, [12 * 60, 23 * 60], 15, weights),
+    am: rollingPeak(
+      intervalRows,
+      [5 * 60, 12 * 60],
+      intervalMinutes,
+      weights,
+    ),
+    pm: rollingPeak(
+      intervalRows,
+      [12 * 60, 23 * 60],
+      intervalMinutes,
+      weights,
+    ),
     date: rocDate(dateText),
     dateSource: dateCell
       ? { sheet: dateCell.sheet, cell: dateCell.cell, raw: dateCell.text }
       : null,
-    surveyType: dateText.match(/[（(]\s*([^）)]+)\s*[）)]/)?.[1] || "待設定",
+    surveyType:
+      options?.surveyType ||
+      dateText.match(/[（(]\s*([^）)]+)\s*[）)]/)?.[1] ||
+      "待設定",
     layout,
     approaches: originOrder,
     columns: detectedColumns,
     mappingConfidence,
     warnings,
+    templateId,
+    templateName,
     pceUsed: structuredClone(pce),
   };
+}
+
+export async function inspectWorkbookVariants(
+  file: File,
+  pce: PceMatrix = DEFAULT_PCE,
+): Promise<ImportPreview[]> {
+  const array = await file.arrayBuffer();
+  const workbook = XLSX.read(array, { type: "array", cellDates: true });
+  const daySheets = workbook.SheetNames.filter(function (sheet) {
+    return /^(平日|假日)\s*$/.test(sheet.normalize("NFKC"));
+  });
+  if (daySheets.length < 2) return [await inspectWorkbook(file, pce)];
+  return Promise.all(
+    daySheets.map(function (sheet) {
+      const surveyType = sheet.normalize("NFKC").trim();
+      return inspectWorkbook(file, pce, {
+        trafficSheets: [sheet],
+        fileLabel: file.name + "【" + surveyType + "】",
+        surveyType,
+      });
+    }),
+  );
 }
 
 export function formatMinutes(minutes: number) {

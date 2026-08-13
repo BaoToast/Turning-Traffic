@@ -11,7 +11,8 @@ import {
   DEFAULT_PCE,
   formatMinutes,
   ImportPreview,
-  inspectWorkbook,
+  IMPORT_FORMAT_TEMPLATES,
+  inspectWorkbookVariants,
   Movement,
   normalizeIntersectionName,
   PceMatrix,
@@ -165,12 +166,11 @@ function downloadBlob(blob: Blob, filename: string) {
   }, 1500);
 }
 
-async function downloadEditableTrendWorkbook(
+async function editableTrendWorkbookBlob(
   workbook: XLSX.WorkBook,
   sheetName: string,
   lastRow: number,
   series: Array<{ name: string; column: string; color: string }>,
-  filename: string,
 ) {
   const bytes = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
   const zip = await JSZip.loadAsync(bytes);
@@ -218,7 +218,7 @@ async function downloadEditableTrendWorkbook(
     .map(function (item, index) {
       return (
         `<c:ser><c:idx val="${index}"/><c:order val="${index}"/>` +
-        `<c:tx><c:v>${esc(item.name)}</c:v></c:tx>` +
+        `<c:tx><c:strRef><c:f>${quotedSheet}!$${item.column}$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${esc(item.name)}</c:v></c:pt></c:strCache></c:strRef></c:tx>` +
         `<c:spPr><a:ln w="38100" cap="rnd"><a:solidFill><a:srgbClr val="${item.color}"/></a:solidFill></a:ln></c:spPr>` +
         `<c:marker><c:symbol val="circle"/><c:size val="6"/><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="${item.color}"/></a:solidFill></a:ln></c:spPr></c:marker>` +
         `<c:cat><c:strRef><c:f>${quotedSheet}!$A$2:$A$${lastRow}</c:f></c:strRef></c:cat>` +
@@ -232,11 +232,11 @@ async function downloadEditableTrendWorkbook(
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:style val="10"/>' +
       '<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-TW" sz="1500" b="1"><a:solidFill><a:srgbClr val="17333B"/></a:solidFill></a:rPr><a:t>歷季尖峰交通量趨勢（單位：PCU/hr）</a:t></a:r></a:p></c:rich></c:tx><c:layout/>' +
-      '<c:overlay val="0"/></c:title><c:plotArea><c:layout><c:manualLayout><c:layoutTarget val="inner"/><c:xMode val="factor"/><c:yMode val="factor"/><c:wMode val="factor"/><c:hMode val="factor"/><c:x val="0.13"/><c:y val="0.12"/><c:w val="0.82"/><c:h val="0.70"/></c:manualLayout></c:layout><c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/><c:smooth val="0"/>' +
+      '<c:overlay val="0"/></c:title><c:plotArea><c:layout/><c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/><c:smooth val="0"/>' +
       seriesXml +
       '<c:axId val="48650112"/><c:axId val="48672768"/></c:lineChart>' +
-      '<c:catAx><c:axId val="48650112"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:tickLblPos val="nextTo"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr><c:crossAx val="48672768"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>' +
-      '<c:valAx><c:axId val="48672768"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:title><c:tx><c:rich><a:bodyPr vert="vert"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-TW" sz="1000"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:rPr><a:t>尖峰小時交通量</a:t></a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title><c:numFmt formatCode="#,##0.0" sourceLinked="0"/><c:majorGridlines><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="DDE6E3"/></a:solidFill></a:ln></c:spPr></c:majorGridlines><c:tickLblPos val="nextTo"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr><c:crossAx val="48650112"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>' +
+      '<c:catAx><c:axId val="48650112"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-TW" sz="1000"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:rPr><a:t>調查季度</a:t></a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title><c:tickLblPos val="nextTo"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr><c:crossAx val="48672768"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>' +
+      '<c:valAx><c:axId val="48672768"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:title><c:tx><c:rich><a:bodyPr rot="-5400000"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-TW" sz="1000"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:rPr><a:t>尖峰小時交通量（PCU/hr）</a:t></a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title><c:numFmt formatCode="#,##0.0" sourceLinked="0"/><c:majorGridlines><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="DDE6E3"/></a:solidFill></a:ln></c:spPr></c:majorGridlines><c:tickLblPos val="nextTo"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr><c:crossAx val="48650112"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>' +
       '</c:plotArea><c:legend><c:legendPos val="b"/><c:layout/><c:overlay val="0"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="DDE6E3"/></a:solidFill></a:ln></c:spPr></c:chartSpace>',
   );
   const contentTypesFile = zip.file("[Content_Types].xml");
@@ -249,12 +249,22 @@ async function downloadEditableTrendWorkbook(
       "</Types>",
   );
   zip.file("[Content_Types].xml", contentTypes);
-  downloadBlob(
-    await zip.generateAsync({
+  return zip.generateAsync({
       type: "blob",
       mimeType:
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    }),
+    });
+}
+
+async function downloadEditableTrendWorkbook(
+  workbook: XLSX.WorkBook,
+  sheetName: string,
+  lastRow: number,
+  series: Array<{ name: string; column: string; color: string }>,
+  filename: string,
+) {
+  downloadBlob(
+    await editableTrendWorkbookBlob(workbook, sheetName, lastRow, series),
     filename,
   );
 }
@@ -608,28 +618,6 @@ export function diagramMarkup(
   const names = ["left", "through", "right"] as const;
   const offsets = [-12, 0, 12];
   const colors = { left: "#d64ba7", through: "#2166d1", right: "#e24538" };
-  const sevenArmSlots = [
-    [477, 112],
-    [790, 150],
-    [942, 342],
-    [795, 680],
-    [158, 680],
-    [12, 390],
-    [145, 150],
-  ];
-  const sevenArmSlotById = new Map<string, number[]>();
-  if (style === "formal" && n === 7) {
-    record.approaches
-      .map(function (approach) {
-        return { id: approach.id, order: (approach.angle + 90 + 360) % 360 };
-      })
-      .sort(function (a, b) {
-        return a.order - b.order;
-      })
-      .forEach(function (approach, slotIndex) {
-        sevenArmSlotById.set(approach.id, sevenArmSlots[slotIndex]);
-      });
-  }
 
   record.approaches.forEach(function (approach, index) {
     const p = point(approach.angle, 205);
@@ -766,13 +754,8 @@ export function diagramMarkup(
 
     if (style === "simple") return;
     const cardWidth = style === "formal" ? 246 : n > 4 ? 210 : 230;
-    const formalSlot = sevenArmSlotById.get(approach.id);
-    const x = formalSlot
-      ? formalSlot[0]
-      : Math.max(8, Math.min(width - cardWidth - 8, cardP.x - cardWidth / 2));
-    const y = formalSlot
-      ? formalSlot[1]
-      : Math.max(112, Math.min(height - 124, cardP.y - 58));
+    const x = Math.max(8, Math.min(width - cardWidth - 8, cardP.x - cardWidth / 2));
+    const y = Math.max(112, Math.min(height - 124, cardP.y - 58));
     const cell = cardWidth / 3;
     const formatter = function (value: number) {
       const pct = approachTotal
@@ -1269,10 +1252,21 @@ function recordFromPreview(
       Number(item.survey?.values[column.valueIndex]) || 0;
   });
   return {
-    id: projectId + "-" + quarter + "-" + item.station,
+    id:
+      projectId +
+      "-" +
+      quarter +
+      "-" +
+      item.station +
+      (item.surveyType && item.surveyType !== "待設定"
+        ? "-" + item.surveyType
+        : ""),
     projectId: projectId,
     station: item.station,
-    name: item.name,
+    name:
+      item.surveyType && item.surveyType !== "待設定"
+        ? item.name + "（" + item.surveyType + "）"
+        : item.name,
     rawName: item.file,
     quarter: quarter,
     date: item.date,
@@ -1426,6 +1420,10 @@ export default function TrafficApp() {
   });
   const [compareProjects, setCompareProjects] = useState<string[]>([]);
   const [selectedIssueId, setSelectedIssueId] = useState("");
+  const [reportStartQuarter, setReportStartQuarter] = useState("");
+  const [reportEndQuarter, setReportEndQuarter] = useState("");
+  const [batchProjectIds, setBatchProjectIds] = useState<string[]>([]);
+  const [batchQuarterKeys, setBatchQuarterKeys] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(function () {
@@ -1560,6 +1558,45 @@ export default function TrafficApp() {
         setQuarter(quarters.at(-1) || "");
     },
     [quarters, quarter],
+  );
+  const allQuarterKeys = useMemo(
+    function () {
+      return Array.from(new Set(records.map(function (record) { return record.quarter; }))).sort();
+    },
+    [records],
+  );
+  useEffect(
+    function () {
+      setBatchQuarterKeys(function (value) {
+        const valid = value.filter(function (item) { return allQuarterKeys.includes(item); });
+        return valid.length ? valid : allQuarterKeys;
+      });
+    },
+    [allQuarterKeys],
+  );
+  useEffect(
+    function () {
+      setReportStartQuarter(function (value) {
+        return quarters.includes(value) ? value : quarters[0] || "";
+      });
+      setReportEndQuarter(function (value) {
+        return quarters.includes(value) ? value : quarters.at(-1) || "";
+      });
+    },
+    [quarters],
+  );
+  useEffect(
+    function () {
+      setBatchProjectIds(function (value) {
+        const valid = value.filter(function (id) {
+          return projects.some(function (project) {
+            return project.id === id;
+          });
+        });
+        return valid.length ? valid : activeProjectId ? [activeProjectId] : [];
+      });
+    },
+    [projects, activeProjectId],
   );
   const current = projectRecords.filter(function (record) {
     return record.quarter === quarter;
@@ -1715,7 +1752,7 @@ export default function TrafficApp() {
     const rows: ImportPreview[] = [];
     for (const file of Array.from(files)) {
       try {
-        rows.push(await inspectWorkbook(file, pce));
+        rows.push(...(await inspectWorkbookVariants(file, pce)));
       } catch (error) {
         rows.push({
           file: file.name,
@@ -1797,7 +1834,8 @@ export default function TrafficApp() {
         return (
           record.projectId === activeProjectId &&
           record.quarter === q &&
-          record.station === item.station
+          record.station === item.station &&
+          (record.surveyType || "待設定") === (item.surveyType || "待設定")
         );
       });
       const created = recordFromPreview(item, activeProjectId, q, pce);
@@ -1985,11 +2023,17 @@ export default function TrafficApp() {
     );
   }
 
-  async function exportExcel(format: "xlsx" | "xls" = "xlsx") {
-    if (!current.length) return notify("本季度沒有可輸出的資料。");
-    const trendTarget = selected || current[0];
+  async function createAnalysisWorkbook(
+    exportRecords: TrafficRecord[],
+    format: "xlsx" | "xls" = "xlsx",
+  ) {
+    if (!exportRecords.length) throw new Error("選定期間沒有可輸出的資料。");
+    const trendTarget =
+      exportRecords.find(function (record) {
+        return selected && recordIntersectionKey(record) === recordIntersectionKey(selected);
+      }) || exportRecords[0];
     const trendKey = recordIntersectionKey(trendTarget);
-    const trendRows = projectRecords
+    const trendRows = exportRecords
       .filter(function (record) {
         return recordIntersectionKey(record) === trendKey;
       })
@@ -2007,7 +2051,7 @@ export default function TrafficApp() {
           "PM 尖峰時段": record.peaks.PM.start + "–" + record.peaks.PM.end,
         };
       });
-    const vehicleComposition = current.flatMap(function (record) {
+    const vehicleComposition = exportRecords.flatMap(function (record) {
       return (["SURVEY", "AM", "PM"] as CompositionScope[]).flatMap(
         function (scope) {
           const counts = Object.fromEntries(
@@ -2022,8 +2066,11 @@ export default function TrafficApp() {
             return sum + counts[vehicleKey];
           }, 0);
           return ANALYSIS_VEHICLES.map(function (vehicleKey) {
+            const recordProject = projects.find(function (project) {
+              return project.id === record.projectId;
+            });
             return {
-              計畫: activeProject?.name,
+              計畫: recordProject?.name || activeProject?.name || "",
               季度: record.quarter,
               站號: record.station,
               路口名稱: record.name,
@@ -2043,15 +2090,9 @@ export default function TrafficApp() {
         },
       );
     });
+    const exportRecordIds = new Set(exportRecords.map(function (record) { return record.id; }));
     const comparisonRows = records
-      .filter(function (record) {
-        return (
-          record.quarter === quarter &&
-          (compareProjects.length
-            ? compareProjects.includes(record.projectId)
-            : record.projectId === activeProjectId)
-        );
-      })
+      .filter(function (record) { return exportRecordIds.has(record.id); })
       .sort(function (a, b) {
         return recordTotal(b, "AM") - recordTotal(a, "AM");
       })
@@ -2128,16 +2169,31 @@ export default function TrafficApp() {
       comparisonSheet,
       "跨計畫多路口比較",
     );
+    const exportQuarters = Array.from(new Set(exportRecords.map(function (record) { return record.quarter; }))).sort();
+    const includedProjectCodes = Array.from(
+      new Set(
+        exportRecords.map(function (record) {
+          return (
+            projects.find(function (project) {
+              return project.id === record.projectId;
+            })?.code || "Project"
+          );
+        }),
+      ),
+    );
     const baseName =
-      (activeProject?.code || "Project") +
-      "_" +
-      quarter +
+      (includedProjectCodes.length === 1 ? includedProjectCodes[0] : "多計畫") + "_" +
+      (exportQuarters.length === 1 ? exportQuarters[0] : exportQuarters[0] + "_至_" + exportQuarters.at(-1)) +
       "_分析圖表報表";
     if (format === "xls") {
-      XLSX.writeFile(workbook, baseName + ".xls", { bookType: "biff8" });
-      notify("舊版 Excel 已下載；原生可編輯圖表請使用 XLSX 版本。");
+      return {
+        blob: new Blob([XLSX.write(workbook, { bookType: "biff8", type: "array" })], {
+          type: "application/vnd.ms-excel",
+        }),
+        filename: baseName + ".xls",
+      };
     } else {
-      await downloadEditableTrendWorkbook(
+      const bytes = await editableTrendWorkbookBlob(
         workbook,
         "歷季趨勢比較",
         trendRows.length + 1,
@@ -2145,10 +2201,31 @@ export default function TrafficApp() {
           { name: "AM Peak", column: "B", color: "087F75" },
           { name: "PM Peak", column: "C", color: "D97706" },
         ],
-        baseName + ".xlsx",
       );
-      notify("Excel 報表已下載，趨勢圖可在 Excel 內編輯。");
+      return {
+        blob: bytes,
+        filename: baseName + ".xlsx",
+      };
     }
+  }
+
+  async function exportExcel(format: "xlsx" | "xls" = "xlsx") {
+    const requestedStartIndex = Math.max(0, quarters.indexOf(reportStartQuarter));
+    const requestedEndIndex = Math.max(0, quarters.indexOf(reportEndQuarter));
+    const startIndex = Math.min(requestedStartIndex, requestedEndIndex);
+    const endIndex = Math.max(requestedStartIndex, requestedEndIndex);
+    const selectedQuarters = quarters.slice(startIndex, endIndex + 1);
+    const exportRecords = projectRecords.filter(function (record) {
+      return selectedQuarters.includes(record.quarter);
+    });
+    if (!exportRecords.length) return notify("選定期間沒有可輸出的資料。");
+    const result = await createAnalysisWorkbook(exportRecords, format);
+    downloadBlob(result.blob, result.filename);
+    notify(
+      format === "xls"
+        ? "指定期間的舊版 Excel 已下載。"
+        : "指定期間 Excel 已下載，趨勢圖可直接編輯。",
+    );
   }
 
   function exportCompositionExcel() {
@@ -2267,6 +2344,75 @@ export default function TrafficApp() {
         peak +
         "_全部路口PNG.zip",
     );
+  }
+
+  async function pdfBlob(rows: TrafficRecord[]) {
+    const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    for (let index = 0; index < rows.length; index++) {
+      if (index) pdf.addPage("a4", "landscape");
+      const blob = await svgToPng(
+        diagramMarkup(rows[index], peak, "formal", "both", "all", "all", 0),
+        2,
+      );
+      const dataUrl = await new Promise<string>(function (resolve) {
+        const reader = new FileReader();
+        reader.onload = function () {
+          resolve(String(reader.result));
+        };
+        reader.readAsDataURL(blob);
+      });
+      pdf.addImage(dataUrl, "PNG", 10, 8, 277, 205);
+    }
+    return pdf.output("blob");
+  }
+
+  async function exportBatchPackage() {
+    const selectedQuarters = batchQuarterKeys;
+    const rows = records.filter(function (record) {
+      return (
+        batchProjectIds.includes(record.projectId || "") &&
+        selectedQuarters.includes(record.quarter)
+      );
+    });
+    if (!rows.length) return notify("選定的計畫與季度沒有成果資料。");
+    const zip = new JSZip();
+    for (const projectId of batchProjectIds) {
+      const project = projects.find(function (item) {
+        return item.id === projectId;
+      });
+      const projectRows = rows.filter(function (record) {
+        return record.projectId === projectId;
+      });
+      if (!projectRows.length) continue;
+      const workbookResult = await createAnalysisWorkbook(projectRows, "xlsx");
+      const folder = project?.code || projectId;
+      zip.file(folder + "/Excel/" + workbookResult.filename, workbookResult.blob);
+      zip.file(folder + "/PDF/轉向圖_" + peak + ".pdf", await pdfBlob(projectRows));
+      for (const record of projectRows) {
+        zip.file(
+          folder + "/PNG/" + record.quarter + "_" + record.station + "_" + peak + ".png",
+          await svgToPng(
+            diagramMarkup(record, peak, "formal", "both", "all", "all", 0),
+            2,
+          ),
+        );
+      }
+    }
+    zip.file(
+      "README.txt",
+      "Turning Traffic 批次成果包\r\n範圍：" +
+        selectedQuarters.join("、") +
+        "\r\n內容：各計畫分析 Excel、多頁 PDF、各路口 PNG。\r\n單位：PCU/hr。\r\n",
+    );
+    downloadBlob(
+      await zip.generateAsync({ type: "blob" }),
+      "Turning-Traffic_批次成果_" +
+        (selectedQuarters[0] || "無季度") +
+        "_至_" +
+        (selectedQuarters.at(-1) || "無季度") +
+        ".zip",
+    );
+    notify("批次成果包已產生。");
   }
 
   const backupPayload = function () {
@@ -2871,6 +3017,30 @@ export default function TrafficApp() {
                     : "尚未完成設定"}
                 </output>
               </section>
+              <section className="panel format-template-panel">
+                <div className="panel-head">
+                  <div>
+                    <span className="eyebrow">IMPORT TEMPLATES</span>
+                    <h2>調查檔格式範本</h2>
+                  </div>
+                </div>
+                <div className="format-template-grid">
+                  {IMPORT_FORMAT_TEMPLATES.map(function (template) {
+                    return (
+                      <article key={template.id}>
+                        <b>{template.name}</b>
+                        <p>{template.description}</p>
+                        <small>
+                          時距：
+                          {template.intervalMinutes === "auto"
+                            ? "自動辨識"
+                            : template.intervalMinutes + " 分鐘"}
+                        </small>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
               <section className="import-layout">
                 <article
                   className="panel upload-card"
@@ -3018,6 +3188,9 @@ export default function TrafficApp() {
                                           row.dateSource.cell
                                         : "")
                                     : "日期辨識未成功（已掃描標題區）"}
+                                </small>
+                                <small>
+                                  格式範本：{row.templateName || "一般語意轉向表"} · {row.surveyType}
                                 </small>
                               </td>
                               <td>
@@ -4755,6 +4928,20 @@ export default function TrafficApp() {
                     僅含車種組成、歷季趨勢與跨計畫／多路口比較；XLSX
                     內含可編輯折線圖。
                   </p>
+                  <div className="report-range">
+                    <label>
+                      起始季度
+                      <select value={reportStartQuarter} onChange={function (e) { setReportStartQuarter(e.target.value); }}>
+                        {quarters.map(function (item) { return <option key={item}>{item}</option>; })}
+                      </select>
+                    </label>
+                    <label>
+                      結束季度
+                      <select value={reportEndQuarter} onChange={function (e) { setReportEndQuarter(e.target.value); }}>
+                        {quarters.map(function (item) { return <option key={item}>{item}</option>; })}
+                      </select>
+                    </label>
+                  </div>
                   <button
                     className="primary full"
                     onClick={function () {
@@ -4770,6 +4957,55 @@ export default function TrafficApp() {
                     }}
                   >
                     下載舊版 .xls
+                  </button>
+                </article>
+                <article className="panel report-card batch-card">
+                  <span className="file-type zip">ZIP</span>
+                  <h2>多計畫批次成果包</h2>
+                  <p>依下方勾選的計畫與季度，將 Excel、PDF 與全部路口 PNG 一次打包。</p>
+                  <div className="batch-project-list">
+                    {projects.map(function (project) {
+                      return (
+                        <label key={project.id}>
+                          <input
+                            type="checkbox"
+                            checked={batchProjectIds.includes(project.id)}
+                            onChange={function (e) {
+                              setBatchProjectIds(function (ids) {
+                                return e.target.checked
+                                  ? Array.from(new Set([...ids, project.id]))
+                                  : ids.filter(function (id) { return id !== project.id; });
+                              });
+                            }}
+                          />
+                          {project.code} · {project.name}
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <b className="batch-label">包含季度</b>
+                  <div className="batch-project-list batch-quarter-list">
+                    {allQuarterKeys.map(function (item) {
+                      return (
+                        <label key={item}>
+                          <input
+                            type="checkbox"
+                            checked={batchQuarterKeys.includes(item)}
+                            onChange={function (e) {
+                              setBatchQuarterKeys(function (values) {
+                                return e.target.checked
+                                  ? Array.from(new Set([...values, item])).sort()
+                                  : values.filter(function (value) { return value !== item; });
+                              });
+                            }}
+                          />
+                          {item}
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <button className="primary full" onClick={exportBatchPackage}>
+                    下載批次成果 ZIP
                   </button>
                 </article>
                 <article className="panel report-card">
