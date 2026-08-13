@@ -29,6 +29,11 @@ test("supports inbound and outbound diagram summaries", () => {
   assert.match(appSource, /minimumCardRadius/);
   assert.match(appSource, /radialCardExtent/);
   assert.match(appSource, /movement-path\.zero/);
+  assert.match(appSource, /pendingCards/);
+  assert.match(appSource, /perimeterSlots/);
+  assert.match(appSource, /const assign = function/);
+  assert.match(appSource, /multi-arm-card/);
+  assert.match(appSource, /new Set\(assignedSlots\)\.size/);
   assert.match(appSource, /route\.toApproachId === approach\.id/);
   assert.match(appSource, /movementTargetIndex\(record\.approaches, sourceIndex, movement\) === index/);
 });

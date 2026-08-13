@@ -192,8 +192,13 @@ export type QualityIssue = {
   };
 };
 
-export const VERSION = "v1.7.1";
+export const VERSION = "v1.7.2";
 export const VERSION_HISTORY = [
+  {
+    version: "v1.7.2",
+    date: "2026-08-14",
+    notes: "五至七岔路口改用外圍自動避讓排版，流量卡不再互相遮蔽。",
+  },
   {
     version: "v1.7.1",
     date: "2026-08-14",

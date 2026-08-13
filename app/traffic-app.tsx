@@ -659,6 +659,12 @@ export function diagramMarkup(
   const roadParts: string[] = [];
   const pathParts: string[] = [];
   const cardParts: string[] = [];
+  const pendingCards: Array<{
+    markup: string;
+    preferred: { x: number; y: number };
+    width: number;
+    height: number;
+  }> = [];
   const names = ["left", "through", "right"] as const;
   const offsets = [-12, 0, 12];
   const colors = { left: "#d64ba7", through: "#2166d1", right: "#e24538" };
@@ -959,13 +965,24 @@ export function diagramMarkup(
         section === "inbound"
           ? cardSection("inbound", incomingValues, destinationTotal, incomingSources)
           : cardSection("outbound", values, approachTotal, destinationLabels);
-      cardParts.push(
-        '<g transform="translate(' + x + " " + y + ')" class="flow-card-group ' + section + '">' +
+      const markup =
+        '<g class="flow-card-group ' + section + '">' +
           '<rect width="' + cardWidth + '" height="' + cardHeight + '" rx="9" class="flow-card"/>' +
           '<text x="' + cardWidth / 2 + '" y="-9" class="bearing">' +
           (section === "outbound" ? "來源 " : "目的 ") + esc(sourceCode) + " · " + esc(approach.name) +
-          "</text>" + sectionMarkup + "</g>",
-      );
+          "</text>" + sectionMarkup + "</g>";
+      if (n > 4) {
+        pendingCards.push({
+          markup,
+          preferred: { x: x + cardWidth / 2, y: y + cardHeight / 2 },
+          width: cardWidth,
+          height: cardHeight,
+        });
+      } else {
+        cardParts.push(
+          '<g transform="translate(' + x + " " + y + ')">' + markup + "</g>",
+        );
+      }
     };
     if (flowSummaryMode === "both") {
       const tangent = { x: -Math.sin(approachRad), y: Math.cos(approachRad) };
@@ -982,6 +999,68 @@ export function diagramMarkup(
       pushCard(flowSummaryMode, cardP);
     }
   });
+
+  if (pendingCards.length) {
+    const cardWidth = Math.max.apply(
+      null,
+      pendingCards.map(function (card) { return card.width; }),
+    );
+    const cardHeight = Math.max.apply(
+      null,
+      pendingCards.map(function (card) { return card.height; }),
+    );
+    const horizontalCenters = Array.from({ length: 4 }, function (_, index) {
+      const left = 16;
+      const usable = width - left * 2 - cardWidth;
+      return left + cardWidth / 2 + (usable * index) / 3;
+    });
+    const topCenterY = 184;
+    const bottomCenterY = height - cardHeight / 2 - 10;
+    const sideCenterX = cardWidth / 2 + 10;
+    const sideCentersY = [340, 490, 640];
+    const perimeterSlots = horizontalCenters
+      .map(function (x) { return { x, y: topCenterY }; })
+      .concat(
+        sideCentersY.map(function (y) { return { x: width - sideCenterX, y }; }),
+        horizontalCenters.slice().reverse().map(function (x) { return { x, y: bottomCenterY }; }),
+        sideCentersY.slice().reverse().map(function (y) { return { x: sideCenterX, y }; }),
+      );
+    const memo = new Map<string, { cost: number; slots: number[] }>();
+    const assign = function (cardIndex: number, usedMask: number): { cost: number; slots: number[] } {
+      if (cardIndex >= pendingCards.length) return { cost: 0, slots: [] };
+      const key = cardIndex + "|" + usedMask;
+      const cached = memo.get(key);
+      if (cached) return cached;
+      let best = { cost: Number.POSITIVE_INFINITY, slots: [] as number[] };
+      perimeterSlots.forEach(function (slot, slotIndex) {
+        if (usedMask & (1 << slotIndex)) return;
+        const card = pendingCards[cardIndex];
+        const dx = card.preferred.x - slot.x;
+        const dy = card.preferred.y - slot.y;
+        const remainder = assign(cardIndex + 1, usedMask | (1 << slotIndex));
+        const cost = dx * dx + dy * dy + remainder.cost;
+        if (cost < best.cost)
+          best = { cost, slots: [slotIndex].concat(remainder.slots) };
+      });
+      memo.set(key, best);
+      return best;
+    };
+    const assignedSlots = assign(0, 0).slots;
+    if (
+      assignedSlots.length !== pendingCards.length ||
+      new Set(assignedSlots).size !== pendingCards.length
+    )
+      throw new Error("多岔路流量卡片無法配置到獨立位置。");
+    pendingCards.forEach(function (card, cardIndex) {
+      const slot = perimeterSlots[assignedSlots[cardIndex]];
+      const x = Math.max(8, Math.min(width - card.width - 8, slot.x - card.width / 2));
+      const y = Math.max(112, Math.min(height - card.height - 8, slot.y - card.height / 2));
+      cardParts.push(
+        '<g transform="translate(' + x.toFixed(1) + " " + y.toFixed(1) + ')" class="multi-arm-card">' +
+          card.markup + "</g>",
+      );
+    });
+  }
 
   const peakText =
     peak + " Peak " + record.peaks[peak].start + "–" + record.peaks[peak].end;
