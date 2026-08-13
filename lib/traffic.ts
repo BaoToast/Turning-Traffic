@@ -161,6 +161,12 @@ export type TrafficRecord = {
   movementRule?: "reference-calculation" | "geometry-suggested" | "manual";
   /** Per road branch: show inbound/outbound separately or as a two-way total. */
   directionDisplay?: Record<string, "split" | "two-way">;
+  /** Manual approval lock for a checked quarterly result. */
+  resultLock?: {
+    lockedAt: string;
+    version: string;
+    signature: string;
+  };
   sourceFiles: string[];
   importedAt: string;
   validation: {
@@ -186,8 +192,18 @@ export type QualityIssue = {
   };
 };
 
-export const VERSION = "v1.6.0";
+export const VERSION = "v1.7.1";
 export const VERSION_HISTORY = [
+  {
+    version: "v1.7.1",
+    date: "2026-08-14",
+    note: "新增各路口駛入／駛出全日與尖峰分析、平假日資料別切換；轉向圖支援駛入／駛出獨立卡片，單一模式顯示對應半段箭線，同時模式顯示完整 OD 流向。",
+  },
+  {
+    version: "v1.7.0",
+    date: "2026-08-13",
+    note: "新增 OD 流量核對工作台、季度成果鎖定與衝突提示，以及轉向圖駛入／駛出顯示切換。",
+  },
   {
     version: "v1.6.0",
     date: "2026-08-13",
