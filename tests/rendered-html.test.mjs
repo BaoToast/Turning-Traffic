@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -37,6 +38,7 @@ test("ships required analysis surfaces", async () => {
     "歷季趨勢比較",
     "資料品質檢查",
     "備份、還原與版本",
+    "新手操作手冊",
   ])
     assert.match(html, new RegExp(text));
   assert.doesNotMatch(html, /HCM|服務水準|LOS/);
@@ -45,6 +47,9 @@ test("ships required analysis surfaces", async () => {
 test("ships the final verified release", async () => {
   const response = await render();
   const html = await response.text();
-  assert.match(html, /v2\.0\.0/);
+  assert.match(html, /v2\.0\.1/);
   assert.match(html, /轉向進階分析/);
+  const source = await readFile(new URL("../app/traffic-app.tsx", import.meta.url), "utf8");
+  assert.match(source, /圖卡排版預覽/);
+  assert.match(source, /下載完整 PDF 手冊/);
 });

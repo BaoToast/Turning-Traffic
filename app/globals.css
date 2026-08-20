@@ -1188,7 +1188,7 @@ button {
 }
 .geometry-layout {
   display: grid;
-  grid-template-columns: 1.25fr 0.75fr;
+  grid-template-columns: minmax(720px, 1.45fr) minmax(360px, 0.55fr);
   gap: 16px;
 }
 .geometry-list {
@@ -1238,6 +1238,7 @@ button {
   display: grid;
   place-items: center;
   overflow: hidden;
+  min-height: 520px;
 }
 .report-grid,
 .backup-grid {
@@ -1895,7 +1896,7 @@ input:focus {
   margin-top: 28px !important;
 }
 .geometry-expanded > div {
-  grid-template-columns: 30px minmax(220px, 1fr) 110px 140px 30px !important;
+  grid-template-columns: 30px minmax(230px, 1fr) 110px 140px minmax(170px, 210px) 30px !important;
   align-items: start !important;
 }
 .geometry-expanded label small {
@@ -2421,7 +2422,26 @@ input:focus {
 .offset-inputs {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-top: 4px;
+}
+.offset-inputs > span {
+  display: grid;
+  grid-template-columns: auto minmax(58px, 1fr);
+  align-items: center;
   gap: 5px;
+}
+.offset-inputs i {
+  color: #60777d;
+  font-size: 8px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.offset-inputs input {
+  min-width: 58px;
+}
+.card-position-field {
+  min-width: 170px;
 }
 .geometry-tools {
   display: flex;
@@ -2445,6 +2465,173 @@ input:focus {
 }
 .geometry-preview [data-card-id] {
   cursor: grab;
+}
+.geometry-card-preview {
+  margin-top: 16px;
+  padding: 18px;
+}
+.geometry-card-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 12px;
+}
+.geometry-card-preview-head h2 {
+  margin: 4px 0;
+}
+.geometry-card-preview-head p {
+  margin: 0;
+  color: #718287;
+  font-size: 10px;
+}
+.geometry-preview-switches {
+  display: flex;
+  padding: 3px;
+  border-radius: 8px;
+  background: #eef3f1;
+}
+.geometry-preview-switches button {
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 11px;
+  background: transparent;
+  color: #61767b;
+  font-size: 9px;
+}
+.geometry-preview-switches button.active {
+  background: #fff;
+  color: var(--teal);
+  box-shadow: 0 1px 5px rgba(30, 61, 68, 0.12);
+}
+.geometry-card-preview-canvas {
+  min-height: 680px;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid #e0e8e5;
+  border-radius: 10px;
+  background: #fbfaf6;
+}
+.geometry-card-preview-canvas svg {
+  width: min(100%, 1200px);
+  height: auto;
+  min-width: 900px;
+}
+.geometry-card-preview-canvas [data-card-id] {
+  cursor: grab;
+}
+.geometry-card-preview-canvas [data-card-id]:active {
+  cursor: grabbing;
+}
+.help-download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 18px;
+  border-radius: 9px;
+  color: #fff;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.help-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.help-steps article {
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  gap: 14px;
+  padding: 20px;
+}
+.help-steps article > b {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--teal-soft);
+  color: var(--teal);
+  font-size: 18px;
+}
+.help-steps h2 {
+  margin: 1px 0 6px;
+  font-size: 16px;
+}
+.help-steps p {
+  min-height: 44px;
+  margin: 0 0 12px;
+  color: #687c81;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.help-steps button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--teal);
+  font-size: 10px;
+  font-weight: 700;
+}
+.help-glossary,
+.help-advanced {
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.help-glossary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.help-glossary-grid article {
+  padding: 13px;
+  border: 1px solid #e1e8e5;
+  border-radius: 8px;
+  background: #f9fbfa;
+}
+.help-glossary-grid b {
+  color: var(--teal);
+  font-size: 11px;
+}
+.help-glossary-grid p {
+  margin: 6px 0 0;
+  color: #657a80;
+  font-size: 9px;
+  line-height: 1.6;
+}
+.help-advanced table {
+  width: 100%;
+}
+@media (max-width: 1280px) {
+  .geometry-layout {
+    grid-template-columns: 1fr;
+  }
+  .geometry-preview {
+    min-height: 460px;
+  }
+}
+@media (max-width: 900px) {
+  .geometry-expanded > div {
+    grid-template-columns: 28px minmax(190px, 1fr) 100px 120px 30px !important;
+  }
+  .card-position-field {
+    grid-column: 2 / 5;
+  }
+  .help-glossary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 680px) {
+  .help-steps,
+  .help-glossary-grid {
+    grid-template-columns: 1fr;
+  }
+  .geometry-card-preview-head {
+    flex-direction: column;
+  }
 }
 .advanced-controls {
   display: flex;

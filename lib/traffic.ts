@@ -258,8 +258,13 @@ export type QualityIssue = {
   };
 };
 
-export const VERSION = "v2.0.0";
+export const VERSION = "v2.0.1";
 export const VERSION_HISTORY = [
+  {
+    version: "v2.0.1",
+    date: "2026-08-21",
+    note: "修正圖卡位移介面：保留清楚的道路簡圖，另增可拖曳的全幅圖卡排版預覽；新增網站新手操作手冊與 PDF 下載。",
+  },
   {
     version: "v2.0.0",
     date: "2026-08-21",

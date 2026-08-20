@@ -58,7 +58,8 @@ type View =
   | "names"
   | "geometry"
   | "reports"
-  | "backup";
+  | "backup"
+  | "help";
 type DiagramStyle = "formal" | "standard" | "simple";
 type DisplayMode = "volume" | "percent" | "both";
 type ArrowMode = "all" | "focus";
@@ -98,6 +99,7 @@ const NAV: { id: View; label: string; icon: string; group?: string }[] = [
   { id: "advanced", label: "轉向進階分析", icon: "▦" },
   { id: "reports", label: "報表與批次輸出", icon: "▤", group: "輸出與維護" },
   { id: "backup", label: "備份、還原與版本", icon: "⟳" },
+  { id: "help", label: "新手操作手冊", icon: "?" },
 ];
 
 const VEHICLE_LABELS: Record<string, string> = {
@@ -1981,6 +1983,7 @@ export default function TrafficApp() {
   const [arrowMode, setArrowMode] = useState<ArrowMode>("all");
   const [flowSummaryMode, setFlowSummaryMode] =
     useState<FlowSummaryMode>("both");
+  const [showGeometryCardPreview, setShowGeometryCardPreview] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);
   const [vehicle, setVehicle] = useState<VehicleKey>("all");
   const [nameMap, setNameMap] = useState<Record<string, string>>({});
@@ -2750,9 +2753,7 @@ export default function TrafficApp() {
     const scaleX = Number(svg.viewBox.baseVal.width || 1200) / Math.max(1, svg.getBoundingClientRect().width);
     const scaleY = Number(svg.viewBox.baseVal.height || 900) / Math.max(1, svg.getBoundingClientRect().height);
     const original = approach.cardOffset || { x: 0, y: 0 };
-    const finish = function (pointerEvent: PointerEvent) {
-      document.removeEventListener("pointerup", finish);
-      document.removeEventListener("pointercancel", finish);
+    const applyPosition = function (pointerEvent: PointerEvent) {
       const dx = (pointerEvent.clientX - startX) * scaleX;
       const dy = (pointerEvent.clientY - startY) * scaleY;
       updateSelectedGeometry(function (record) {
@@ -2761,6 +2762,16 @@ export default function TrafficApp() {
         return record;
       });
     };
+    const move = function (pointerEvent: PointerEvent) {
+      applyPosition(pointerEvent);
+    };
+    const finish = function (pointerEvent: PointerEvent) {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", finish);
+      applyPosition(pointerEvent);
+    };
+    document.addEventListener("pointermove", move);
     document.addEventListener("pointerup", finish, { once: true });
     document.addEventListener("pointercancel", finish, { once: true });
   }
@@ -5380,26 +5391,26 @@ export default function TrafficApp() {
                                   畫面上方 −90、右方 0、下方 90、左方 180
                                 </small>
                               </label>
-                              <label>
-                                圖卡位移 X／Y
+                              <div className="card-position-field">
+                                <span>數據卡位置</span>
                                 <span className="offset-inputs">
-                                  <input type="number" value={approach.cardOffset?.x || 0} onChange={function (e) {
+                                  <span><i>左右 X</i><input aria-label={approach.name + " 數據卡左右位移"} type="number" value={approach.cardOffset?.x || 0} onChange={function (e) {
                                     updateSelectedGeometry(function (record) {
                                       const current = record.approaches[index].cardOffset || { x: 0, y: 0 };
                                       record.approaches[index].cardOffset = { x: Number(e.target.value), y: current.y };
                                       return record;
                                     });
-                                  }} />
-                                  <input type="number" value={approach.cardOffset?.y || 0} onChange={function (e) {
+                                  }} /></span>
+                                  <span><i>上下 Y</i><input aria-label={approach.name + " 數據卡上下位移"} type="number" value={approach.cardOffset?.y || 0} onChange={function (e) {
                                     updateSelectedGeometry(function (record) {
                                       const current = record.approaches[index].cardOffset || { x: 0, y: 0 };
                                       record.approaches[index].cardOffset = { x: current.x, y: Number(e.target.value) };
                                       return record;
                                     });
-                                  }} />
+                                  }} /></span>
                                 </span>
-                                <small>單位：圖面像素；也可直接拖曳右側數據框。</small>
-                              </label>
+                                <small>正值向右／下，負值向左／上；可在下方排版預覽直接拖曳。</small>
+                              </div>
                               <button
                                 className="icon-danger"
                                 disabled={selected.approaches.length <= 3}
@@ -5417,13 +5428,16 @@ export default function TrafficApp() {
                         })}
                       </div>
                       <div className="geometry-tools">
+                        <button className={showGeometryCardPreview ? "primary" : ""} onClick={function () {
+                          setShowGeometryCardPreview(function (value) { return !value; });
+                        }}>{showGeometryCardPreview ? "關閉圖卡排版預覽" : "開啟圖卡排版預覽"}</button>
                         <button onClick={function () {
                           updateSelectedGeometry(function (record) {
                             record.approaches.forEach(function (approach) { approach.cardOffset = undefined; });
                             return record;
                           });
                         }}>重設所有圖卡位置</button>
-                        <span>右側預覽可直接拖曳圖卡；調整會依標準路口同步至其他季度。</span>
+                        <span>右側維持清楚的道路簡圖；圖卡位置請在下方排版預覽調整，並會同步至其他季度。</span>
                       </div>
                       {diagramCollisionWarnings(selected).length > 0 && (
                         <div className="collision-warning">
@@ -5557,7 +5571,6 @@ export default function TrafficApp() {
                     </article>
                     <article
                       className="panel geometry-preview"
-                      onPointerDown={startCardDrag}
                       dangerouslySetInnerHTML={{
                         __html: diagramMarkup(
                           selected,
@@ -5571,6 +5584,38 @@ export default function TrafficApp() {
                       }}
                     />
                   </section>
+                  {showGeometryCardPreview && (
+                    <section className="panel geometry-card-preview">
+                      <div className="geometry-card-preview-head">
+                        <div>
+                          <span className="eyebrow">CARD LAYOUT PREVIEW</span>
+                          <h2>交通量圖卡排版預覽</h2>
+                          <p>拖曳圖中的交通量數據框即可避開道路、路名或其他圖卡；不會改變任何交通量或流向。</p>
+                        </div>
+                        <div className="geometry-preview-switches">
+                          <button className={flowSummaryMode === "inbound" ? "active" : ""} onClick={function () { setFlowSummaryMode("inbound"); }}>只看駛入</button>
+                          <button className={flowSummaryMode === "outbound" ? "active" : ""} onClick={function () { setFlowSummaryMode("outbound"); }}>只看駛出</button>
+                          <button className={flowSummaryMode === "both" ? "active" : ""} onClick={function () { setFlowSummaryMode("both"); }}>駛入＋駛出</button>
+                        </div>
+                      </div>
+                      <div
+                        className="geometry-card-preview-canvas"
+                        onPointerDown={startCardDrag}
+                        dangerouslySetInnerHTML={{
+                          __html: diagramMarkup(
+                            selected,
+                            peak,
+                            "formal",
+                            "both",
+                            "all",
+                            "focus",
+                            focusIndex,
+                            flowSummaryMode,
+                          ),
+                        }}
+                      />
+                    </section>
+                  )}
                 </>
               )}
             </>
@@ -6461,6 +6506,50 @@ export default function TrafficApp() {
                 >
                   全部清除
                 </button>
+              </section>
+            </>
+          )}
+
+          {view === "help" && (
+            <>
+              <section className="page-head help-head">
+                <div>
+                  <span className="eyebrow">BEGINNER GUIDE</span>
+                  <h1>第一次使用 Turning Traffic</h1>
+                  <p>不需要先懂交通工程。依照下列順序操作，就能完成資料匯入、核對、轉向圖與成果輸出。</p>
+                </div>
+                <a className="primary help-download" href="./Turning-Traffic-v2.0.1-新手操作手冊.pdf" download>下載完整 PDF 手冊</a>
+              </section>
+              <section className="help-steps">
+                <article className="panel"><b>1</b><div><h2>建立計畫</h2><p>計畫就像一個資料夾，例如「某工業區交通監測」。不同案件請分開建立，之後仍可跨計畫比較。</p><button onClick={function () { setView("projects"); }}>前往多計畫管理</button></div></article>
+                <article className="panel"><b>2</b><div><h2>選擇年度與季度，再匯入</h2><p>先指定資料屬於哪一年、哪一季，再放入 Excel。系統會辨識工作表、平假日、車種與路口流向。</p><button onClick={function () { setView("import"); }}>前往季度批次匯入</button></div></article>
+                <article className="panel"><b>3</b><div><h2>先看品質檢查</h2><p>確認日期、缺值、總量與未對應流向。警示不一定代表資料錯誤，但必須知道原因後再確認成果。</p><button onClick={function () { setView("quality"); }}>前往資料品質檢查</button></div></article>
+                <article className="panel"><b>4</b><div><h2>核對路口與道路方向</h2><p>道路角度只決定圖怎麼畫，不會交換 A、B、C 的原始資料。多岔路請對照原始簡圖調整角度。</p><button onClick={function () { setView("geometry"); }}>前往道路與流向管理</button></div></article>
+                <article className="panel"><b>5</b><div><h2>查看並整理轉向圖</h2><p>可切換 AM／PM、駛入／駛出、車種及版型。圖卡重疊時，再到道路管理開啟「圖卡排版預覽」拖曳調整。</p><button onClick={function () { setView("diagram"); }}>前往路口轉向圖</button></div></article>
+                <article className="panel"><b>6</b><div><h2>匯出成果並備份</h2><p>完成核對後再輸出 Excel、PDF 或圖片；最後下載完整備份 ZIP，才能在另一台電腦繼續使用。</p><button onClick={function () { setView("reports"); }}>前往報表與批次輸出</button></div></article>
+              </section>
+              <section className="panel help-glossary">
+                <div className="panel-head"><div><span className="eyebrow">PLAIN LANGUAGE</span><h2>常用名詞白話說明</h2></div></div>
+                <div className="help-glossary-grid">
+                  <article><b>PCU/hr</b><p>每小時的小客車當量。不同車種乘上各自當量後，換算成可以相加比較的交通量。</p></article>
+                  <article><b>AM／PM Peak</b><p>上午／下午調查範圍內，連續一小時交通量最高的時段。</p></article>
+                  <article><b>駛入路口</b><p>車輛穿越中央路口後，進入某一條道路支線的流量。</p></article>
+                  <article><b>駛出路口</b><p>車輛從某一條道路支線出發，駛向中央路口的流量。</p></article>
+                  <article><b>OD 流向</b><p>O 是從哪條支線出發，D 是最後進入哪條支線，例如 A→C。</p></article>
+                  <article><b>圖卡位移</b><p>只移動圖上的數據框，避免遮住道路或文字；完全不會改變計算結果。</p></article>
+                  <article><b>未對應流向</b><p>系統讀到數量，但無法確定起點或終點。數量會保留並警示，不會自行猜測或刪除。</p></article>
+                  <article><b>成果鎖定</b><p>核對完成後防止名稱、角度或當量被誤改；有需要仍可人工解除。</p></article>
+                </div>
+              </section>
+              <section className="panel help-advanced">
+                <div className="panel-head"><div><span className="eyebrow">WHEN TO USE</span><h2>進階功能什麼時候才需要？</h2></div></div>
+                <table><thead><tr><th>功能</th><th>用途</th><th>一般新手是否必須</th></tr></thead><tbody>
+                  <tr><td>流量核對工作台</td><td>追查某個尖峰總量由哪些工作表、儲存格及 OD 流向加總而來。</td><td>數值有疑問時使用</td></tr>
+                  <tr><td>轉向進階分析</td><td>查看 OD 矩陣、駛入駛出平衡與其他可能的連續一小時尖峰。</td><td>完成基本成果後再看</td></tr>
+                  <tr><td>車種轉向當量</td><td>調整各車種左轉、直行、右轉換算 PCU 的係數。</td><td>沿用既定係數時不用改</td></tr>
+                  <tr><td>格式範本記憶</td><td>記住不同調查廠商的 Excel 版型，降低下次辨識錯誤。</td><td>系統自動處理</td></tr>
+                  <tr><td>版本還原</td><td>重新匯入或修改後，回到先前保存的資料版本。</td><td>改錯資料時使用</td></tr>
+                </tbody></table>
               </section>
             </>
           )}
