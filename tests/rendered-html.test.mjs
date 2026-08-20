@@ -42,8 +42,9 @@ test("ships required analysis surfaces", async () => {
   assert.doesNotMatch(html, /HCM|服務水準|LOS/);
 });
 
-test("ships the dynamic vehicle release", async () => {
+test("ships the final verified release", async () => {
   const response = await render();
   const html = await response.text();
-  assert.match(html, /v1\.8\.0/);
+  assert.match(html, /v2\.0\.0/);
+  assert.match(html, /轉向進階分析/);
 });

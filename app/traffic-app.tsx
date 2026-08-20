@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { jsPDF } from "jspdf";
@@ -31,6 +31,16 @@ import {
   VERSION,
   VERSION_HISTORY,
 } from "../lib/traffic";
+import {
+  branchBalance,
+  conservationCheck,
+  diagramCollisionWarnings,
+  odMatrix,
+  peakSensitivity,
+  quarterQualitySummary,
+  RecordRevision,
+  VehicleScheme,
+} from "../lib/final-features";
 
 type View =
   | "dashboard"
@@ -43,6 +53,7 @@ type View =
   | "compare"
   | "trend"
   | "audit"
+  | "advanced"
   | "quality"
   | "names"
   | "geometry"
@@ -68,6 +79,7 @@ type FormatMemory = {
   lastUsedAt: string;
 };
 type VehicleMappingTable = Record<string, string>;
+type ImportConflictMode = "overwrite" | "version" | "skip";
 
 const NAV: { id: View; label: string; icon: string; group?: string }[] = [
   { id: "dashboard", label: "總覽儀表板", icon: "⌂" },
@@ -83,6 +95,7 @@ const NAV: { id: View; label: string; icon: string; group?: string }[] = [
   { id: "compare", label: "跨計畫／多路口比較", icon: "▥" },
   { id: "trend", label: "歷季趨勢比較", icon: "⌁" },
   { id: "audit", label: "流量核對工作台", icon: "≋" },
+  { id: "advanced", label: "轉向進階分析", icon: "▦" },
   { id: "reports", label: "報表與批次輸出", icon: "▤", group: "輸出與維護" },
   { id: "backup", label: "備份、還原與版本", icon: "⟳" },
 ];
@@ -686,6 +699,7 @@ export function diagramMarkup(
   const pendingCards: Array<{
     markup: string;
     preferred: { x: number; y: number };
+    manualOffset: { x: number; y: number };
     width: number;
     height: number;
   }> = [];
@@ -863,10 +877,14 @@ export function diagramMarkup(
       Math.abs(Math.sin(approachRad)) * 14;
     const minimumCardRadius =
       205 + radialLabelExtent + radialCardExtent + 20;
-    const cardP = point(
+    const baseCardP = point(
       approach.angle,
       Math.max(n > 4 ? 355 : 315, minimumCardRadius),
     );
+    const cardP = {
+      x: baseCardP.x + Number(approach.cardOffset?.x || 0),
+      y: baseCardP.y + Number(approach.cardOffset?.y || 0),
+    };
     const cell = cardWidth / 3;
     const formatter = function (value: number, sectionTotal: number) {
       const pct = sectionTotal
@@ -990,7 +1008,7 @@ export function diagramMarkup(
           ? cardSection("inbound", incomingValues, destinationTotal, incomingSources)
           : cardSection("outbound", values, approachTotal, destinationLabels);
       const markup =
-        '<g class="flow-card-group ' + section + '">' +
+        '<g class="flow-card-group ' + section + '" data-card-id="' + esc(approach.id) + '">' +
           '<rect width="' + cardWidth + '" height="' + cardHeight + '" rx="9" class="flow-card"/>' +
           '<text x="' + cardWidth / 2 + '" y="-9" class="bearing">' +
           (section === "outbound" ? "來源 " : "目的 ") + esc(sourceCode) + " · " + esc(approach.name) +
@@ -999,6 +1017,7 @@ export function diagramMarkup(
         pendingCards.push({
           markup,
           preferred: { x: x + cardWidth / 2, y: y + cardHeight / 2 },
+          manualOffset: { x: Number(approach.cardOffset?.x || 0), y: Number(approach.cardOffset?.y || 0) },
           width: cardWidth,
           height: cardHeight,
         });
@@ -1077,8 +1096,8 @@ export function diagramMarkup(
       throw new Error("多岔路流量卡片無法配置到獨立位置。");
     pendingCards.forEach(function (card, cardIndex) {
       const slot = perimeterSlots[assignedSlots[cardIndex]];
-      const x = Math.max(8, Math.min(width - card.width - 8, slot.x - card.width / 2));
-      const y = Math.max(112, Math.min(height - card.height - 8, slot.y - card.height / 2));
+      const x = Math.max(8, Math.min(width - card.width - 8, slot.x - card.width / 2 + card.manualOffset.x));
+      const y = Math.max(112, Math.min(height - card.height - 8, slot.y - card.height / 2 + card.manualOffset.y));
       cardParts.push(
         '<g transform="translate(' + x.toFixed(1) + " " + y.toFixed(1) + ')" class="multi-arm-card">' +
           card.markup + "</g>",
@@ -1462,6 +1481,53 @@ function recordFromPreview(
     surveyVehicle[analysisVehicle] = Number(surveyVehicle[analysisVehicle] || 0) +
       (Number(item.survey?.values[column.valueIndex]) || 0);
   });
+  const traceCells = (["AM", "PM"] as PeakKey[]).flatMap(function (tracePeak) {
+    const window = tracePeak === "AM" ? item.am : item.pm;
+    if (!window) return [];
+    return (item.intervalRows || [])
+      .filter(function (row) { return row.start >= window.start && row.start < window.end; })
+      .flatMap(function (row) {
+        return item.columns.map(function (column) {
+          const analysisVehicle = vehicleMappings[column.vehicle] || column.vehicle;
+          const movement = column.movement || "through";
+          const rawCount = Number(row.values[column.valueIndex]) || 0;
+          const factor = pceFactor(appliedPce, analysisVehicle, movement);
+          const sourceRow = row.sourceRows?.[column.sheet];
+          return {
+            peak: tracePeak,
+            sheet: column.sheet,
+            cell: sourceRow
+              ? XLSX.utils.encode_cell({ r: sourceRow - 1, c: column.sourceColumn })
+              : XLSX.utils.encode_col(column.sourceColumn) + "?",
+            time: row.label,
+            approach: column.approach,
+            destination: column.destination,
+            movement: column.movement,
+            vehicle: analysisVehicle,
+            vehicleLabel: CORE_VEHICLE_LABELS[analysisVehicle] || column.vehicleLabel,
+            rawCount,
+            factor,
+            pcu: roundedPcu(rawCount * factor),
+          };
+        });
+      });
+  });
+  const traceIntervals = (item.intervalRows || []).map(function (row) {
+    let pcu = 0;
+    let vehicles = 0;
+    item.columns.forEach(function (column) {
+      const count = Number(row.values[column.valueIndex]) || 0;
+      const analysisVehicle = vehicleMappings[column.vehicle] || column.vehicle;
+      pcu += count * pceFactor(appliedPce, analysisVehicle, column.movement || "through");
+      vehicles += count;
+    });
+    return {
+      start: row.start,
+      end: row.start + Number(item.intervalMinutes || 15),
+      pcu: roundedPcu(pcu),
+      vehicles,
+    };
+  });
   return {
     id:
       projectId +
@@ -1484,6 +1550,15 @@ function recordFromPreview(
     surveyType: item.surveyType,
     pceUsed: structuredClone(appliedPce),
     pceVersion: "匯入快照 " + new Date().toISOString(),
+    revision: 1,
+    review: { status: "待核對", updatedAt: new Date().toISOString(), note: "" },
+    sourceTrace: {
+      templateId: item.templateId || "semantic-turning-v1",
+      templateName: item.templateName || "一般語意轉向表",
+      dateSource: item.dateSource,
+      cells: traceCells,
+      intervals: traceIntervals,
+    },
     vehicleLabels: Object.fromEntries(
       item.detectedVehicles.map(function (definition) {
         const target = vehicleMappings[definition.id] || definition.id;
@@ -1743,6 +1818,9 @@ function AuditWorkbench(props: {
   quarterRecords: TrafficRecord[];
   lockQuarter: () => void;
   unlockQuarter: () => void;
+  revisions: RecordRevision[];
+  setReview: (status: "待核對" | "已核對" | "已確認" | "需修正", note: string) => void;
+  restoreRevision: (revision: RecordRevision) => void;
 }) {
   const record = props.record;
   const lockedCount = props.quarterRecords.filter(function (item) {
@@ -1765,6 +1843,29 @@ function AuditWorkbench(props: {
   const peakTotal = recordTotal(record, props.peak);
   const difference = Math.round((peakTotal - routeTotal) * 10) / 10;
   const pceMatrix = record.pceUsed || DEFAULT_PCE;
+  const downloadAuditWorkbook = function () {
+    const workbook = XLSX.utils.book_new();
+    const routeRows = routes.map(function (route) {
+      const origin = approachById.get(route.fromApproachId);
+      const destination = approachById.get(route.toApproachId);
+      const row: Record<string, string | number> = {
+        尖峰: props.peak + " Peak",
+        起點: origin?.name || route.fromApproachId,
+        終點: destination?.name || route.toApproachId,
+        轉向: MOVE_LABELS[route.movement],
+        流量: route.volumes[props.peak].pcu,
+        流量單位: "PCU/hr",
+      };
+      recordVehicleIds(record).forEach(function (vehicleKey) { row[vehicleLabel(record, vehicleKey) + "（輛/hr）"] = Number(route.volumes[props.peak].vehicle[vehicleKey] || 0); });
+      return row;
+    });
+    const traceRows = (record.sourceTrace?.cells || []).filter(function (cell) { return cell.peak === props.peak; }).map(function (cell) {
+      return { 工作表: cell.sheet, 儲存格: cell.cell, 時段: cell.time, 來源: cell.approach, 目的: cell.destination || "－", 轉向: cell.movement ? MOVE_LABELS[cell.movement] : "－", 車種: cell.vehicleLabel, 原始車輛數: cell.rawCount, 車輛單位: "輛", 當量: cell.factor, 換算PCU: cell.pcu };
+    });
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(routeRows), "OD核對");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(traceRows), "原始儲存格追溯");
+    XLSX.writeFile(workbook, record.station + "_" + record.quarter + "_" + props.peak + "_流量核對.xlsx", { bookType: "xlsx" });
+  };
   return (
     <>
       <section className="page-head audit-head">
@@ -1779,6 +1880,7 @@ function AuditWorkbench(props: {
             options={[["AM", "AM Peak"], ["PM", "PM Peak"]]}
             onChange={props.setPeak}
           />
+          <button onClick={downloadAuditWorkbook}>下載核對 Excel</button>
           {lockedCount === props.quarterRecords.length && lockedCount > 0 ? (
             <button className="danger-outline" onClick={props.unlockQuarter}>解除 {props.quarter} 鎖定</button>
           ) : (
@@ -1792,6 +1894,13 @@ function AuditWorkbench(props: {
           <p>{lockedCount ? "鎖定後若修改名稱、角度、流向或覆蓋匯入，系統會先詢問並解除受影響成果。" : "完成逐筆核對後可手動鎖定；日後仍可手動解除。"}</p>
         </div>
         {conflicts.length > 0 && <strong>偵測到鎖定衝突：{Array.from(new Set(conflicts)).join("；")}</strong>}
+      </section>
+      <section className="panel review-panel">
+        <div><b>成果審核狀態</b><p>審核狀態不會改變計算；確認完成後可再鎖定季度。</p></div>
+        <select value={record.review?.status || "待核對"} onChange={function (event) {
+          props.setReview(event.target.value as "待核對" | "已核對" | "已確認" | "需修正", record.review?.note || "");
+        }}><option>待核對</option><option>已核對</option><option>已確認</option><option>需修正</option></select>
+        <input value={record.review?.note || ""} placeholder="審核備註" onChange={function (event) { props.setReview(record.review?.status || "待核對", event.target.value); }} />
       </section>
       <section className="audit-kpis">
         <Kpi label="系統尖峰總量" value={peakTotal.toLocaleString() + " PCU/hr"} note={record.peaks[props.peak].start + "–" + record.peaks[props.peak].end} />
@@ -1840,6 +1949,16 @@ function AuditWorkbench(props: {
           );
         })}
       </section>
+      <section className="panel audit-panel">
+        <div className="panel-head"><div><span className="eyebrow">SOURCE CELLS</span><h2>原始儲存格與換算來源</h2></div><span className="status-dot">{record.sourceTrace?.cells.filter(function (cell) { return cell.peak === props.peak; }).length || 0} 格</span></div>
+        {record.sourceTrace?.cells.length ? <div className="table-scroll"><table className="audit-table"><thead><tr><th>工作表／儲存格</th><th>時段</th><th>來源→目的</th><th>車種</th><th>原始輛數</th><th>當量</th><th>PCU</th></tr></thead><tbody>
+          {record.sourceTrace.cells.filter(function (cell) { return cell.peak === props.peak; }).map(function (cell, index) { return <tr key={cell.sheet + cell.cell + index}><td>{cell.sheet}!{cell.cell}</td><td>{cell.time}</td><td>{cell.approach} → {cell.destination || MOVE_LABELS[cell.movement || "through"]}</td><td>{cell.vehicleLabel}</td><td>{cell.rawCount.toLocaleString()} 輛</td><td>{cell.factor}</td><td>{cell.pcu.toLocaleString()} PCU</td></tr>; })}
+        </tbody></table></div> : <p>此資料由舊版備份移轉，未保存儲存格座標；重新匯入即可建立追溯資料。</p>}
+      </section>
+      <section className="panel audit-panel">
+        <div className="panel-head"><div><span className="eyebrow">REVISION HISTORY</span><h2>版本差異與還原</h2></div><span className="status-dot">目前第 {record.revision || 1} 版</span></div>
+        {props.revisions.length ? <div className="revision-list">{props.revisions.map(function (revision) { return <article key={revision.id}><div><b>{new Date(revision.savedAt).toLocaleString("zh-TW")}</b><small>{revision.reason} · 第 {revision.snapshot.revision || 1} 版</small></div><button onClick={function () { props.restoreRevision(revision); }}>還原此版本</button></article>; })}</div> : <p>尚無舊版本；重新匯入或人工修改前會自動建立還原點。</p>}
+      </section>
     </>
   );
 }
@@ -1870,6 +1989,9 @@ export default function TrafficApp() {
   const [vehicleMappings, setVehicleMappings] = useState<VehicleMappingTable>({});
   const [importRows, setImportRows] = useState<ImportPreview[]>([]);
   const [formatMemories, setFormatMemories] = useState<FormatMemory[]>([]);
+  const [vehicleSchemes, setVehicleSchemes] = useState<VehicleScheme[]>([]);
+  const [recordRevisions, setRecordRevisions] = useState<RecordRevision[]>([]);
+  const [importConflictModes, setImportConflictModes] = useState<Record<string, ImportConflictMode>>({});
   const [importResolutions, setImportResolutions] = useState<
     Record<string, ImportResolution>
   >({});
@@ -1967,6 +2089,8 @@ export default function TrafficApp() {
       if (data.vehicleCatalog) setVehicleCatalog({ ...CORE_VEHICLE_LABELS, ...data.vehicleCatalog });
       if (data.vehicleMappings) setVehicleMappings(data.vehicleMappings);
       if (Array.isArray(data.formatMemories)) setFormatMemories(data.formatMemories);
+      if (Array.isArray(data.vehicleSchemes)) setVehicleSchemes(data.vehicleSchemes);
+      if (Array.isArray(data.recordRevisions)) setRecordRevisions(data.recordRevisions);
     } catch {
       /* Invalid stale local data is ignored. */
     }
@@ -1987,10 +2111,12 @@ export default function TrafficApp() {
           vehicleCatalog: vehicleCatalog,
           vehicleMappings: vehicleMappings,
           formatMemories: formatMemories,
+          vehicleSchemes: vehicleSchemes,
+          recordRevisions: recordRevisions,
         }),
       );
     },
-    [projects, activeProjectId, records, nameMap, pce, vehicleCatalog, vehicleMappings, formatMemories],
+    [projects, activeProjectId, records, nameMap, pce, vehicleCatalog, vehicleMappings, formatMemories, vehicleSchemes, recordRevisions],
   );
 
   const notify = function (message: string) {
@@ -2169,6 +2295,17 @@ export default function TrafficApp() {
     ...new Set(currentCanonicalRecords.flatMap(function (record) { return recordVehicleIds(record); })),
   ];
 
+  function saveRevision(record: TrafficRecord, reason: string) {
+    const revision: RecordRevision = {
+      id: record.id + "-R-" + Date.now().toString(36),
+      recordId: record.id,
+      savedAt: new Date().toISOString(),
+      reason,
+      snapshot: structuredClone(record),
+    };
+    setRecordRevisions(function (items) { return [revision, ...items].slice(0, 300); });
+  }
+
   function authorizeLockedChange(targets: TrafficRecord[], action: string) {
     const locked = targets.filter(function (record) {
       return Boolean(record.resultLock);
@@ -2337,6 +2474,15 @@ export default function TrafficApp() {
         detectedDefinitions.set(definition.id, definition);
       });
     });
+    const conflicts: Record<string, ImportConflictMode> = {};
+    rows.forEach(function (row) {
+      const existing = records.find(function (record) {
+        return record.projectId === activeProjectId && record.quarter === importPeriod &&
+          record.station === row.station && (record.surveyType || "待設定") === (row.surveyType || "待設定");
+      });
+      if (existing) conflicts[row.file] = "version";
+    });
+    setImportConflictModes(conflicts);
     setVehicleCatalog(function (existing) {
       const next = { ...CORE_VEHICLE_LABELS, ...existing };
       detectedDefinitions.forEach(function (definition) {
@@ -2458,6 +2604,8 @@ export default function TrafficApp() {
         );
       });
       const configuredItem = configuredImportPreview(item, pce, vehicleMappings);
+      const conflictMode = importConflictModes[item.file] || "overwrite";
+      if (found >= 0 && conflictMode === "skip") return;
       const created = recordFromPreview(
         configuredItem,
         activeProjectId,
@@ -2478,6 +2626,10 @@ export default function TrafficApp() {
       created.name = mergeTarget?.name || nameMap[item.file] || created.name;
       const geometrySource = found >= 0 ? next[found] : mergeTarget;
       if (geometrySource) inheritRecordGeometry(created, geometrySource);
+      if (found >= 0) {
+        saveRevision(next[found], conflictMode === "version" ? "重新匯入並建立新版本" : "重新匯入覆蓋");
+        created.revision = Number(next[found].revision || 1) + 1;
+      }
       created.validation.referenceFound = importRows.some(function (row) {
         return row.role === "參考計算檔" && row.station === item.station;
       });
@@ -2488,6 +2640,7 @@ export default function TrafficApp() {
     setQuarter(q);
     setImportRows([]);
     setImportResolutions({});
+    setImportConflictModes({});
     notify(
       "已寫入 " +
         originals.length +
@@ -2498,6 +2651,7 @@ export default function TrafficApp() {
   function updateSelected(mutator: (record: TrafficRecord) => TrafficRecord) {
     if (!selected) return;
     if (!authorizeLockedChange([selected], "此項修改")) return;
+    saveRevision(selected, "人工修改前自動保存");
     setRecords(function (all) {
       return all.map(function (record) {
         if (record.id !== selected.id) return record;
@@ -2520,6 +2674,7 @@ export default function TrafficApp() {
       );
     });
     if (!authorizeLockedChange(affected, "道路幾何或流向修改")) return;
+    saveRevision(selected, "道路幾何或圖面排位修改前自動保存");
     const updated = mutator(structuredClone(selected));
     updated.resultLock = undefined;
     const geometryByCode = new Map(
@@ -2558,6 +2713,7 @@ export default function TrafficApp() {
           approach.name = geometry.name;
           approach.angle = geometry.angle;
           approach.bearing = bearingFromAngle(geometry.angle);
+          approach.cardOffset = geometry.cardOffset ? { ...geometry.cardOffset } : undefined;
         });
         (copy.routes || []).forEach(function (route) {
           const from = copy.approaches.find(function (approach) {
@@ -2579,6 +2735,34 @@ export default function TrafficApp() {
         return syncRouteTotals(copy);
       });
     });
+  }
+
+  function startCardDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (!selected) return;
+    const target = (event.target as Element).closest("[data-card-id]");
+    const approachId = target?.getAttribute("data-card-id");
+    if (!approachId) return;
+    const approach = selected.approaches.find(function (item) { return item.id === approachId; });
+    const svg = event.currentTarget.querySelector("svg");
+    if (!approach || !svg) return;
+    event.preventDefault();
+    const startX = event.clientX, startY = event.clientY;
+    const scaleX = Number(svg.viewBox.baseVal.width || 1200) / Math.max(1, svg.getBoundingClientRect().width);
+    const scaleY = Number(svg.viewBox.baseVal.height || 900) / Math.max(1, svg.getBoundingClientRect().height);
+    const original = approach.cardOffset || { x: 0, y: 0 };
+    const finish = function (pointerEvent: PointerEvent) {
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", finish);
+      const dx = (pointerEvent.clientX - startX) * scaleX;
+      const dy = (pointerEvent.clientY - startY) * scaleY;
+      updateSelectedGeometry(function (record) {
+        const item = record.approaches.find(function (candidate) { return candidate.id === approachId; });
+        if (item) item.cardOffset = { x: Math.round(original.x + dx), y: Math.round(original.y + dy) };
+        return record;
+      });
+    };
+    document.addEventListener("pointerup", finish, { once: true });
+    document.addEventListener("pointercancel", finish, { once: true });
   }
 
   function deleteQuarter(q: string) {
@@ -3010,6 +3194,54 @@ export default function TrafficApp() {
     notify("車種組成 Excel 已下載。");
   }
 
+  function exportAdvancedExcel(record: TrafficRecord) {
+    const matrix = odMatrix(record, peak);
+    const matrixRows = matrix.map(function (row) {
+      const output: Record<string, string | number> = { 來源支線: row.origin, 單位: "PCU/hr" };
+      record.approaches.forEach(function (approach, index) { output["駛入 " + approach.name] = row.values[index]; });
+      return output;
+    });
+    const balanceRows = branchBalance(record, peak).map(function (item) {
+      return { 支線: item.name, 駛入流量: item.inbound, 駛出流量: item.outbound, 差值: item.difference, 單位: "PCU/hr" };
+    });
+    const sensitivityRows = peakSensitivity(record).map(function (item) {
+      return { 排名: item.rank, 起始時間: formatMinutes(item.start), 結束時間: formatMinutes(item.end), 交通量: item.pcu, 單位: "PCU/hr", 實際車輛數: item.vehicles, 車輛單位: "輛/hr" };
+    });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(matrixRows), "OD轉向矩陣");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(balanceRows), "支線流量平衡");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sensitivityRows), "尖峰敏感度");
+    XLSX.writeFile(workbook, record.station + "_" + record.quarter + "_轉向進階核對.xlsx", { bookType: "xlsx" });
+    notify("轉向進階核對 Excel 已下載。");
+  }
+
+  function exportQualityExcel() {
+    const rows = quarterQualitySummary(current).map(function (item) {
+      return {
+        季度: item.record.quarter,
+        站號: item.record.station,
+        路口名稱: item.record.name,
+        審核狀態: item.record.review?.status || "待核對",
+        AM系統總量: item.am.movement,
+        AM_OD總量: item.am.routes,
+        AM差值: item.am.difference,
+        PM系統總量: item.pm.movement,
+        PM_OD總量: item.pm.routes,
+        PM差值: item.pm.difference,
+        未對應流向數: item.unmapped,
+        調查日期: item.record.date || "－",
+        檢核結果: item.valid ? "通過" : "需核對",
+        流量單位: "PCU/hr",
+      };
+    });
+    const issueRows = currentIssues.map(function (issue) { return { 季度: issue.quarter, 站號: issue.station, 類別: issue.category, 嚴重度: issue.severity, 說明: issue.message }; });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), "季度品質總表");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(issueRows), "問題明細");
+    XLSX.writeFile(workbook, (activeProject?.code || "Project") + "_" + quarter + "_資料品質報告.xlsx", { bookType: "xlsx" });
+    notify("季度資料品質 Excel 已下載。");
+  }
+
   async function exportPngZip() {
     if (!current.length) return notify("本季度沒有可輸出的路口資料。");
     const zip = new JSZip();
@@ -3114,6 +3346,8 @@ export default function TrafficApp() {
       vehicleCatalog: vehicleCatalog,
       vehicleMappings: vehicleMappings,
       formatMemories: formatMemories,
+      vehicleSchemes: vehicleSchemes,
+      recordRevisions: recordRevisions,
     };
   };
   async function exportBackupZip() {
@@ -3191,6 +3425,8 @@ export default function TrafficApp() {
       });
       setVehicleMappings(data.vehicleMappings || {});
       setFormatMemories(Array.isArray(data.formatMemories) ? data.formatMemories : []);
+      setVehicleSchemes(Array.isArray(data.vehicleSchemes) ? data.vehicleSchemes : []);
+      setRecordRevisions(Array.isArray(data.recordRevisions) ? data.recordRevisions : []);
       notify("還原完成，可在這台電腦繼續使用。");
     } catch (error) {
       notify(
@@ -3742,9 +3978,17 @@ export default function TrafficApp() {
                       {formatMemories.slice(0, 8).map(function (memory) {
                         return (
                           <article key={memory.id}>
-                            <b>{memory.templateName}</b>
+                            <input value={memory.templateName} aria-label="格式範本名稱" onChange={function (event) {
+                              setFormatMemories(formatMemories.map(function (item) {
+                                return item.id === memory.id ? { ...item, templateName: event.target.value } : item;
+                              }));
+                            }} />
                             <span>{memory.sheetPattern || "一般工作表"} · {memory.columnCount} 個辨識欄位</span>
                             <small>範例：{memory.sampleFile} · 已使用 {memory.uses} 次</small>
+                            <button className="danger-small" onClick={function () {
+                              if (confirm("刪除此格式記憶？不會刪除已匯入資料。"))
+                                setFormatMemories(formatMemories.filter(function (item) { return item.id !== memory.id; }));
+                            }}>刪除格式記憶</button>
                           </article>
                         );
                       })}
@@ -3890,6 +4134,7 @@ export default function TrafficApp() {
                         <tr>
                           <th>檔案</th>
                           <th>角色</th>
+                          <th>版本／差異處理</th>
                           <th>站號／名稱</th>
                           <th>名稱處理</th>
                           <th>AM Peak（PCU/hr）</th>
@@ -3913,6 +4158,10 @@ export default function TrafficApp() {
                               );
                             },
                           );
+                          const existingImport = records.find(function (record) {
+                            return record.projectId === activeProjectId && record.quarter === importPeriod &&
+                              record.station === row.station && (record.surveyType || "待設定") === (row.surveyType || "待設定");
+                          });
                           return (
                             <tr key={row.file}>
                               <td>{row.file}</td>
@@ -3931,6 +4180,22 @@ export default function TrafficApp() {
                                 >
                                   {row.role}
                                 </span>
+                              </td>
+                              <td>
+                                {existingImport ? (
+                                  <div className="import-conflict">
+                                    <b>已存在第 {existingImport.revision || 1} 版</b>
+                                    <small>AM：{recordTotal(existingImport, "AM").toLocaleString()} → {Math.round(liveRow.am?.total || 0).toLocaleString()} PCU/hr</small>
+                                    <small>PM：{recordTotal(existingImport, "PM").toLocaleString()} → {Math.round(liveRow.pm?.total || 0).toLocaleString()} PCU/hr</small>
+                                    <select value={importConflictModes[row.file] || "version"} onChange={function (event) {
+                                      setImportConflictModes({ ...importConflictModes, [row.file]: event.target.value as ImportConflictMode });
+                                    }}>
+                                      <option value="version">保留舊版並建立新版</option>
+                                      <option value="overwrite">覆蓋目前版（仍留還原點）</option>
+                                      <option value="skip">略過此檔</option>
+                                    </select>
+                                  </div>
+                                ) : <span className="tag blue">第 1 版</span>}
                               </td>
                               <td>
                                 {row.station}
@@ -4224,6 +4489,26 @@ export default function TrafficApp() {
                       本系統專注尖峰轉向流量彙整，不加入未由本次調查取得的容量相關假設。
                     </p>
                   </div>
+                </article>
+                <article className="panel parameter-card">
+                  <div className="panel-head">
+                    <div><span className="eyebrow">VEHICLE SCHEMES</span><h2>車種歸類方案</h2></div>
+                    <button className="secondary" onClick={function () {
+                      const name = prompt("請輸入方案名稱，例如：五車種獨立分析");
+                      if (!name?.trim()) return;
+                      setVehicleSchemes([{ id: "VS-" + Date.now().toString(36), name: name.trim(), mappings: structuredClone(vehicleMappings), createdAt: new Date().toISOString() }, ...vehicleSchemes]);
+                      notify("已保存車種歸類方案。");
+                    }}>保存目前方案</button>
+                  </div>
+                  {vehicleSchemes.length ? <div className="format-memory-list">
+                    {vehicleSchemes.map(function (scheme) {
+                      return <article key={scheme.id}>
+                        <b>{scheme.name}</b><small>{Object.keys(scheme.mappings).length} 個來源車種設定</small>
+                        <div className="head-buttons"><button onClick={function () { setVehicleMappings(structuredClone(scheme.mappings)); notify("已套用「" + scheme.name + "」。下次匯入時生效。"); }}>套用</button>
+                        <button className="danger-small" onClick={function () { setVehicleSchemes(vehicleSchemes.filter(function (item) { return item.id !== scheme.id; })); }}>刪除</button></div>
+                      </article>;
+                    })}
+                  </div> : <p>可將目前「獨立分析／併入標準車種」設定保存，下次匯入相同廠商資料時直接套用。</p>}
                 </article>
               </section>
             </>
@@ -5095,6 +5380,26 @@ export default function TrafficApp() {
                                   畫面上方 −90、右方 0、下方 90、左方 180
                                 </small>
                               </label>
+                              <label>
+                                圖卡位移 X／Y
+                                <span className="offset-inputs">
+                                  <input type="number" value={approach.cardOffset?.x || 0} onChange={function (e) {
+                                    updateSelectedGeometry(function (record) {
+                                      const current = record.approaches[index].cardOffset || { x: 0, y: 0 };
+                                      record.approaches[index].cardOffset = { x: Number(e.target.value), y: current.y };
+                                      return record;
+                                    });
+                                  }} />
+                                  <input type="number" value={approach.cardOffset?.y || 0} onChange={function (e) {
+                                    updateSelectedGeometry(function (record) {
+                                      const current = record.approaches[index].cardOffset || { x: 0, y: 0 };
+                                      record.approaches[index].cardOffset = { x: current.x, y: Number(e.target.value) };
+                                      return record;
+                                    });
+                                  }} />
+                                </span>
+                                <small>單位：圖面像素；也可直接拖曳右側數據框。</small>
+                              </label>
                               <button
                                 className="icon-danger"
                                 disabled={selected.approaches.length <= 3}
@@ -5111,6 +5416,21 @@ export default function TrafficApp() {
                           );
                         })}
                       </div>
+                      <div className="geometry-tools">
+                        <button onClick={function () {
+                          updateSelectedGeometry(function (record) {
+                            record.approaches.forEach(function (approach) { approach.cardOffset = undefined; });
+                            return record;
+                          });
+                        }}>重設所有圖卡位置</button>
+                        <span>右側預覽可直接拖曳圖卡；調整會依標準路口同步至其他季度。</span>
+                      </div>
+                      {diagramCollisionWarnings(selected).length > 0 && (
+                        <div className="collision-warning">
+                          <b>匯出前排版預警</b>
+                          {diagramCollisionWarnings(selected).map(function (warning) { return <p key={warning}>{warning}</p>; })}
+                        </div>
+                      )}
                       {selected.routes?.length ? (
                         <details className="route-mapping">
                           <summary>
@@ -5237,6 +5557,7 @@ export default function TrafficApp() {
                     </article>
                     <article
                       className="panel geometry-preview"
+                      onPointerDown={startCardDrag}
                       dangerouslySetInnerHTML={{
                         __html: diagramMarkup(
                           selected,
@@ -5608,7 +5929,61 @@ export default function TrafficApp() {
               quarterRecords={current}
               lockQuarter={lockCurrentQuarter}
               unlockQuarter={unlockCurrentQuarter}
+              revisions={recordRevisions.filter(function (revision) { return revision.recordId === selected?.id; })}
+              setReview={function (status, note) {
+                if (!selected) return;
+                setRecords(records.map(function (record) { return record.id === selected.id ? { ...record, review: { status, note, updatedAt: new Date().toISOString() } } : record; }));
+              }}
+              restoreRevision={function (revision) {
+                if (!selected || !confirm("確定還原此版本？目前版本也會先保存為還原點。")) return;
+                saveRevision(selected, "還原前自動保存");
+                setRecords(records.map(function (record) { return record.id === selected.id ? { ...structuredClone(revision.snapshot), resultLock: undefined } : record; }));
+                notify("已還原指定版本，請重新核對後再鎖定。");
+              }}
             />
+          )}
+
+          {view === "advanced" && (
+            <>
+              <section className="page-head">
+                <div>
+                  <span className="eyebrow">TURNING ANALYSIS</span>
+                  <h1>轉向進階分析</h1>
+                  <p>以已確認的原始 OD 流向計算矩陣、各支線駛入／駛出平衡與連續 60 分鐘尖峰候選；所有流量均標示 PCU/hr。</p>
+                </div>
+                {selected && <button className="primary" onClick={function () { exportAdvancedExcel(selected); }}>下載核對 Excel</button>}
+              </section>
+              {!selected ? renderNoData("尚無可分析路口") : (() => {
+                const matrix = odMatrix(selected, peak);
+                const balance = branchBalance(selected, peak);
+                const sensitivity = peakSensitivity(selected);
+                const conservation = conservationCheck(selected, peak);
+                return <>
+                  <section className="panel advanced-controls">
+                    <Segmented value={peak} options={[["AM", "AM Peak"], ["PM", "PM Peak"]]} onChange={setPeak} />
+                    <strong>{selected.station} · {selected.name}</strong>
+                    <span className={conservation.valid ? "check-ok" : "check-warn"}>守恆差值 {conservation.difference.toLocaleString()} PCU/hr · {conservation.valid ? "一致" : "需核對"}</span>
+                  </section>
+                  <section className="advanced-grid">
+                    <article className="panel advanced-wide">
+                      <div className="panel-head"><div><span className="eyebrow">OD MATRIX</span><h2>來源支線 → 目的支線</h2></div><span className="status-dot">PCU/hr</span></div>
+                      <div className="table-scroll"><table className="od-table"><thead><tr><th>來源＼駛入</th>{selected.approaches.map(function (a) { return <th key={a.id}>{a.name}</th>; })}<th>駛出合計</th></tr></thead><tbody>
+                        {matrix.map(function (row) { const total = row.values.reduce(function (sum, value) { return sum + value; }, 0); return <tr key={row.originId}><th>{row.origin}</th>{row.values.map(function (value, index) { return <td key={selected.approaches[index].id}>{value.toLocaleString()}</td>; })}<td><b>{total.toLocaleString()}</b></td></tr>; })}
+                      </tbody></table></div>
+                    </article>
+                    <article className="panel">
+                      <div className="panel-head"><div><span className="eyebrow">BRANCH BALANCE</span><h2>各支線流量平衡</h2></div><span className="status-dot">PCU/hr</span></div>
+                      <div className="table-scroll"><table><thead><tr><th>支線</th><th>駛入</th><th>駛出</th><th>差值</th></tr></thead><tbody>{balance.map(function (item) { return <tr key={item.id}><td>{item.name}</td><td>{item.inbound.toLocaleString()}</td><td>{item.outbound.toLocaleString()}</td><td>{item.difference.toLocaleString()}</td></tr>; })}</tbody></table></div>
+                      <p className="inline-note">差值是該支線駛入與駛出的方向不平衡，不代表資料錯誤；整個路口的 OD 總量才應守恆。</p>
+                    </article>
+                    <article className="panel">
+                      <div className="panel-head"><div><span className="eyebrow">PEAK SENSITIVITY</span><h2>連續 60 分鐘候選排行</h2></div><span className="status-dot">PCU/hr</span></div>
+                      {sensitivity.length ? <div className="table-scroll"><table><thead><tr><th>#</th><th>時段</th><th>交通量</th><th>實際車輛</th></tr></thead><tbody>{sensitivity.map(function (item) { return <tr key={item.start}><td>{item.rank}</td><td>{formatMinutes(item.start)}–{formatMinutes(item.end)}</td><td>{item.pcu.toLocaleString()} PCU/hr</td><td>{item.vehicles.toLocaleString()} 輛/hr</td></tr>; })}</tbody></table></div> : <p>此筆為舊版備份，未保存逐時段來源；重新匯入後即可比較相鄰與次高尖峰。</p>}
+                    </article>
+                  </section>
+                </>;
+              })()}
+            </>
           )}
 
           {view === "quality" && (
@@ -5621,6 +5996,7 @@ export default function TrafficApp() {
                     只檢查可判定的缺值、總數一致性、尖峰時段與車種統計；實際調查到的方向流量高低不列為異常。
                   </p>
                 </div>
+                <button className="primary" onClick={exportQualityExcel}>下載季度品質 Excel</button>
               </section>
               {!projectRecords.length ? (
                 renderNoData("尚無可檢查資料")
@@ -5850,6 +6226,16 @@ export default function TrafficApp() {
                   </p>
                 </div>
               </section>
+              {selected && (
+                <section className={"panel export-preflight " + (diagramCollisionWarnings(selected).length ? "has-warning" : "ready")}>
+                  <div>
+                    <span className="eyebrow">EXPORT PREFLIGHT</span>
+                    <h2>匯出前檢查 · {selected.station}</h2>
+                    <p>{diagramCollisionWarnings(selected).length ? diagramCollisionWarnings(selected).join("；") + "。請先到道路與流向管理拖曳圖卡位置。" : "圖卡位置未偵測到重疊；日期、尖峰時段與單位會一併輸出。"}</p>
+                  </div>
+                  <strong>{diagramCollisionWarnings(selected).length ? "需調整" : "可匯出"}</strong>
+                </section>
+              )}
               <section className="report-grid">
                 <article className="panel report-card">
                   <span className="file-type excel">XLS</span>

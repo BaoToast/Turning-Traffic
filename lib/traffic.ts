@@ -153,7 +153,26 @@ export type Approach = {
   effectiveGreen?: number | null;
   cycleLength?: number | null;
   capacity: number | null;
+  /** User-maintained diagram offset. It changes presentation only, never data binding. */
+  cardOffset?: { x: number; y: number };
   movements: Record<PeakKey, Movement>;
+};
+
+export type ReviewStatus = "待核對" | "已核對" | "已確認" | "需修正";
+
+export type SourceCellTrace = {
+  peak: PeakKey;
+  sheet: string;
+  cell: string;
+  time: string;
+  approach: string;
+  destination: string | null;
+  movement: MovementKey | null;
+  vehicle: string;
+  vehicleLabel: string;
+  rawCount: number;
+  factor: number;
+  pcu: number;
 };
 
 export type TrafficRecord = {
@@ -193,6 +212,27 @@ export type TrafficRecord = {
     version: string;
     signature: string;
   };
+  /** Review workflow is separate from the immutable result lock. */
+  review?: {
+    status: ReviewStatus;
+    updatedAt: string;
+    note: string;
+  };
+  /** Import revision number for duplicate/overwrite audit. */
+  revision?: number;
+  /** Cell-level lineage retained from the source workbook. */
+  sourceTrace?: {
+    templateId: string;
+    templateName: string;
+    dateSource: { sheet: string; cell: string; raw: string } | null;
+    cells: SourceCellTrace[];
+    intervals: Array<{
+      start: number;
+      end: number;
+      pcu: number;
+      vehicles: number;
+    }>;
+  };
   sourceFiles: string[];
   importedAt: string;
   validation: {
@@ -218,8 +258,13 @@ export type QualityIssue = {
   };
 };
 
-export const VERSION = "v1.8.0";
+export const VERSION = "v2.0.0";
 export const VERSION_HISTORY = [
+  {
+    version: "v2.0.0",
+    date: "2026-08-21",
+    note: "最終版：新增儲存格追溯、匯入差異與歷史還原、審核流程、車種方案、格式版本管理、圖面排位檢查及 OD 矩陣／流量平衡／尖峰敏感度分析。",
+  },
   {
     version: "v1.8.0",
     date: "2026-08-20",
@@ -661,7 +706,13 @@ export type ImportPreview = {
   };
   intervals: number;
   intervalMinutes?: number;
-  intervalRows?: Array<{ start: number; label: string; values: number[] }>;
+  intervalRows?: Array<{
+    start: number;
+    label: string;
+    values: number[];
+    /** One-based source row for each contributing worksheet. */
+    sourceRows?: Record<string, number>;
+  }>;
   survey?: {
     intervals: number;
     minutes: number;
@@ -1106,7 +1157,9 @@ export async function inspectWorkbook(
           start,
           label: String(cell),
           values: [],
+          sourceRows: {},
         };
+        interval.sourceRows![sheetName] = row + 1;
         blockColumns.forEach(function (column) {
           const value =
             sheet[XLSX.utils.encode_cell({ r: row, c: column.sourceColumn })]
