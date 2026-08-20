@@ -41,3 +41,9 @@ test("ships required analysis surfaces", async () => {
     assert.match(html, new RegExp(text));
   assert.doesNotMatch(html, /HCM|服務水準|LOS/);
 });
+
+test("ships the dynamic vehicle release", async () => {
+  const response = await render();
+  const html = await response.text();
+  assert.match(html, /v1\.8\.0/);
+});

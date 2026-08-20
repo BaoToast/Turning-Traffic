@@ -2,8 +2,8 @@ import * as XLSX from "xlsx";
 
 export type PeakKey = "AM" | "PM";
 export type MovementKey = "left" | "through" | "right";
-export type VehicleKey = "all" | "motorcycle" | "car" | "heavy" | "special";
-export type PceVehicle = "special" | "heavy" | "car" | "motorcycle";
+export type PceVehicle = string;
+export type VehicleKey = "all" | PceVehicle;
 export type LaneClass = "fast" | "slow" | "motorcycle" | "other";
 /** mixed/left/custom are retained only so older JSON backups remain readable. */
 export type LaneType = LaneClass | "mixed" | "left" | "custom";
@@ -18,6 +18,28 @@ export type Project = {
 };
 
 export type PceMatrix = Record<PceVehicle, Record<MovementKey, number>>;
+
+export type VehicleDefinition = {
+  id: PceVehicle;
+  label: string;
+  /** Core classes keep legacy four-vehicle imports byte-for-byte compatible. */
+  core: boolean;
+};
+
+export const CORE_VEHICLE_LABELS: Record<string, string> = {
+  motorcycle: "機車",
+  car: "小型車",
+  heavy: "大型車",
+  special: "特種車",
+};
+
+export function pceFactor(
+  pce: PceMatrix,
+  vehicle: PceVehicle,
+  movement: MovementKey,
+) {
+  return Number(pce[vehicle]?.[movement] ?? 1);
+}
 
 // The user-supplied training deck (slide 15) is the only supplied source with a
 // complete 4-vehicle × 3-movement matrix. The UI identifies it as an editable,
@@ -95,14 +117,14 @@ export type Movement = {
   left: number;
   through: number;
   right: number;
-  vehicle: Record<Exclude<VehicleKey, "all">, number>;
+  vehicle: Record<string, number>;
   /** Actual-vehicle total for the same scope/time as vehicle, never PCU. */
   rawVehicleTotal?: number | null;
 };
 
 export type RouteVolume = {
   pcu: number;
-  vehicle: Record<Exclude<VehicleKey, "all">, number>;
+  vehicle: Record<string, number>;
 };
 
 export type RouteFlow = {
@@ -113,7 +135,7 @@ export type RouteFlow = {
   volumes: Record<PeakKey, RouteVolume>;
   /** Actual vehicles for the complete imported survey period. */
   survey?: {
-    vehicle: Record<Exclude<VehicleKey, "all">, number>;
+    vehicle: Record<string, number>;
   };
 };
 
@@ -152,8 +174,12 @@ export type TrafficRecord = {
   survey?: {
     intervals: number;
     minutes: number;
-    vehicle: Record<Exclude<VehicleKey, "all">, number>;
+    vehicle: Record<string, number>;
   };
+  /** Labels of the analysis classes stored in vehicle count objects. */
+  vehicleLabels?: Record<string, string>;
+  /** Source header -> analysis class snapshot selected before import. */
+  vehicleMapping?: Record<string, string>;
   approaches: Approach[];
   /** Explicit origin-to-destination flows. Required for five-to-seven-arm intersections. */
   routes?: RouteFlow[];
@@ -192,8 +218,13 @@ export type QualityIssue = {
   };
 };
 
-export const VERSION = "v1.7.2";
+export const VERSION = "v1.8.0";
 export const VERSION_HISTORY = [
+  {
+    version: "v1.8.0",
+    date: "2026-08-20",
+    note: "新增動態車種辨識、獨立分析或併入四個標準類別、各車種左直右當量與跨電腦備份；非轉向路段表不會誤建路口資料。",
+  },
   {
     version: "v1.7.2",
     date: "2026-08-14",
@@ -621,7 +652,7 @@ export type ImportPreview = {
   file: string;
   station: string;
   name: string;
-  role: "原始交通量" | "參考計算檔" | "無法辨識";
+  role: "原始交通量" | "參考計算檔" | "非路口轉向" | "無法辨識";
   sheets: {
     traffic: string[];
     log: string[];
@@ -629,6 +660,8 @@ export type ImportPreview = {
     ignored: string[];
   };
   intervals: number;
+  intervalMinutes?: number;
+  intervalRows?: Array<{ start: number; label: string; values: number[] }>;
   survey?: {
     intervals: number;
     minutes: number;
@@ -650,7 +683,9 @@ export type ImportPreview = {
     destination: string | null;
     movement: MovementKey | null;
     vehicle: PceVehicle;
+    vehicleLabel: string;
   }>;
+  detectedVehicles: VehicleDefinition[];
   mappingConfidence: "high" | "medium" | "low";
   warnings: string[];
   templateId?: string;
@@ -681,6 +716,13 @@ export const IMPORT_FORMAT_TEMPLATES: ImportFormatTemplate[] = [
       "依時間欄、來源支線、左直右或 OD 目的地及車種欄名辨識，不依固定欄號。",
     intervalMinutes: "auto",
   },
+  {
+    id: "full-day-road-vehicle-v1",
+    name: "全日路段車種表（非轉向）",
+    description:
+      "可辨識全日路段車種與行車方向，但沒有左／直／右或 OD 欄位，不建立路口轉向成果。",
+    intervalMinutes: 60,
+  },
 ];
 
 function importTemplate(templateId: string) {
@@ -709,12 +751,56 @@ function movementFromHeader(label: string): MovementKey | null {
   return null;
 }
 
-function vehicleFromHeader(label: string): PceVehicle | null {
-  if (/機車|機踏車|motor/i.test(label)) return "motorcycle";
-  if (/特種|特車|聯結|貨櫃|曳引|special/i.test(label)) return "special";
-  if (/大客|大貨|大型|heavy|truck|bus/i.test(label)) return "heavy";
-  if (/小客|小貨|小型|轎車|car|light/i.test(label)) return "car";
-  return null;
+function customVehicleId(label: string) {
+  return (
+    "custom:" +
+    label
+      .normalize("NFKC")
+      .trim()
+      .replace(/[\s\u3000]+/g, "")
+      .replace(/[|｜/\\()[\]（）]/g, "-")
+      .replace(/-+/g, "-")
+  );
+}
+
+function vehicleFromHeader(label: string): VehicleDefinition | null {
+  const normalized = label.normalize("NFKC").replace(/[\s\u3000]+/g, "");
+  const matches = [
+    { pattern: /機踏車|機車|motorcycle|motorbike/i, id: "motorcycle", label: "機車", core: true },
+    { pattern: /小型車|小客車|小客|轎車|passengercar|lightvehicle/i, id: "car", label: "小型車", core: true },
+    { pattern: /大貨車|大卡車|貨車|truck/i, label: "大貨車" },
+    { pattern: /大客車|客運車|公車|bus/i, label: "大客車" },
+    { pattern: /聯結車|聯結|貨櫃車|曳引車|trailer/i, label: "聯結車" },
+    { pattern: /大型車|heavyvehicle/i, id: "heavy", label: "大型車", core: true },
+    { pattern: /特種車|特車|specialvehicle/i, id: "special", label: "特種車", core: true },
+  ].find(function (item) {
+    return item.pattern.test(normalized);
+  });
+  if (!matches) return null;
+  return {
+    id: matches.id || customVehicleId(matches.label),
+    label: matches.label,
+    core: Boolean(matches.core),
+  };
+}
+
+function detectedVehicleHeaders(workbook: XLSX.WorkBook) {
+  const result = new Map<string, VehicleDefinition>();
+  workbook.SheetNames.forEach(function (sheetName) {
+    if (/照片|photo|image|監測日誌|日誌|log/i.test(sheetName)) return;
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet?.["!ref"]) return;
+    const range = XLSX.utils.decode_range(sheet["!ref"]!);
+    for (let row = range.s.r; row <= Math.min(range.e.r, range.s.r + 20); row++) {
+      for (let col = range.s.c; col <= range.e.c; col++) {
+        const raw = sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
+        if (raw == null) continue;
+        const definition = vehicleFromHeader(String(raw));
+        if (definition) result.set(definition.id, definition);
+      }
+    }
+  });
+  return [...result.values()];
 }
 
 function workbookCells(workbook: XLSX.WorkBook) {
@@ -830,6 +916,7 @@ export async function inspectWorkbook(
 ): Promise<ImportPreview> {
   const array = await file.arrayBuffer();
   const workbook = XLSX.read(array, { type: "array", cellDates: true });
+  const detectedVehicles = detectedVehicleHeaders(workbook);
   const buckets = {
     traffic: [] as string[],
     log: [] as string[],
@@ -843,7 +930,6 @@ export async function inspectWorkbook(
     dayTypeTrafficSheets.length >= 2
       ? "hourly-weekday-holiday-turning-v1"
       : "semantic-turning-v1";
-  const templateName = importTemplate(templateId).name;
   workbook.SheetNames.forEach((sheet) => {
     if (/照片|photo|image/i.test(sheet)) buckets.ignored.push(sheet);
     else if (/監測日誌|日誌|log/i.test(sheet)) buckets.log.push(sheet);
@@ -943,7 +1029,7 @@ export async function inspectWorkbook(
         label: string;
         movement: MovementKey | null;
         destination: string | null;
-        headerVehicle: PceVehicle;
+        headerVehicle: VehicleDefinition;
       }> = [];
       for (let col = timeColumn.column + 1; col <= blockEnd; col++) {
         const parts: string[] = [];
@@ -969,8 +1055,13 @@ export async function inspectWorkbook(
           headerVehicle,
         });
       }
+      const distinctHeaderVehicles = new Set(
+        candidates.map(function (candidate) { return candidate.headerVehicle.id; }),
+      ).size;
       const usePositionalVehicles =
-        candidates.length >= 8 && candidates.length % 4 === 0;
+        candidates.length >= 8 &&
+        candidates.length % 4 === 0 &&
+        distinctHeaderVehicles === 4;
       const vehicleGroupSize = usePositionalVehicles
         ? candidates.length / 4
         : 0;
@@ -980,10 +1071,10 @@ export async function inspectWorkbook(
           ? (["motorcycle", "car", "heavy", "special"] as PceVehicle[])[
               Math.min(3, Math.floor(candidateIndex / vehicleGroupSize))
             ]
-          : candidate.headerVehicle;
+          : candidate.headerVehicle.id;
         if (
           usePositionalVehicles &&
-          positionalVehicle !== candidate.headerVehicle
+          positionalVehicle !== candidate.headerVehicle.id
         )
           vehicleHeaderConflicts++;
         const vehicle = positionalVehicle;
@@ -999,6 +1090,9 @@ export async function inspectWorkbook(
           destination,
           movement,
           vehicle,
+          vehicleLabel: usePositionalVehicles
+            ? CORE_VEHICLE_LABELS[vehicle]
+            : candidate.headerVehicle.label,
         };
         detectedColumns.push(column);
         blockColumns.push(column);
@@ -1083,9 +1177,9 @@ export async function inspectWorkbook(
     );
   });
   const weights = detectedColumns.map(function (column) {
-    return pce[column.vehicle][column.movement || "through"];
+    return pceFactor(pce, column.vehicle, column.movement || "through");
   });
-  const role = /^T\d+[-_.]?\d+\.(xls|xlsx|xlsm)$/i.test(
+  const baseRole: ImportPreview["role"] = /^T\d+[-_.]?\d+\.(xls|xlsx|xlsm)$/i.test(
     file.name.normalize("NFKC"),
   )
     ? "參考計算檔"
@@ -1116,7 +1210,36 @@ export async function inspectWorkbook(
     : sawTurning
       ? "turning"
       : "unknown";
-  if (mappingConfidence === "low")
+  const resolvedTemplateId =
+    layout === "unknown" && detectedVehicles.length
+      ? "full-day-road-vehicle-v1"
+      : templateId;
+  const resolvedTemplateName = importTemplate(resolvedTemplateId).name;
+  const role: ImportPreview["role"] =
+    layout === "unknown" && intervalRows.length && detectedVehicles.length
+      ? "非路口轉向"
+      : baseRole;
+  const resolvedDetectedVehicles = detectedColumns.length
+    ? [
+        ...new Map(
+          detectedColumns.map(function (column) {
+            return [
+              column.vehicle,
+              {
+                id: column.vehicle,
+                label: column.vehicleLabel,
+                core: Boolean(CORE_VEHICLE_LABELS[column.vehicle]),
+              } satisfies VehicleDefinition,
+            ] as const;
+          }),
+        ).values(),
+      ]
+    : detectedVehicles;
+  if (role === "非路口轉向")
+    warnings.push(
+      `已辨識 ${detectedVehicles.length} 個車種與 ${intervalRows.length} 個時間區間，但未找到左轉、直行、右轉或起訖（OD）欄位；此檔不會寫入路口轉向資料。`,
+    );
+  else if (mappingConfidence === "low")
     warnings.push(
       "欄位語意不足，匯入前必須人工確認；系統不會把未知數值當成正式流量。",
     );
@@ -1128,7 +1251,7 @@ export async function inspectWorkbook(
     warnings.push(
       `已辨識 ${distinctApproaches} 個入口區塊、${detectedColumns.length} 個左直右×車種欄位。`,
     );
-  warnings.push(`套用格式範本：${templateName}。`);
+  warnings.push(`套用格式範本：${resolvedTemplateName}。`);
   if (positionalVehicleBlocks && vehicleHeaderConflicts)
     warnings.push(
       `發現 ${vehicleHeaderConflicts} 個車種欄名與第 1–4 車種欄位順序不一致；已依欄位群組辨識為機車、小型車、大型／大客車、特種／聯結車，請在預覽確認。`,
@@ -1144,6 +1267,8 @@ export async function inspectWorkbook(
     role,
     sheets: buckets,
     intervals: intervalRows.length,
+    intervalMinutes,
+    intervalRows: structuredClone(intervalRows),
     survey: {
       intervals: intervalRows.length,
       minutes: intervalRows.length * intervalMinutes,
@@ -1172,10 +1297,11 @@ export async function inspectWorkbook(
     layout,
     approaches: originOrder,
     columns: detectedColumns,
+    detectedVehicles: resolvedDetectedVehicles,
     mappingConfidence,
     warnings,
-    templateId,
-    templateName,
+    templateId: resolvedTemplateId,
+    templateName: resolvedTemplateName,
     pceUsed: structuredClone(pce),
   };
 }

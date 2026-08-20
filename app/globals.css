@@ -718,6 +718,10 @@ button {
   background: #f8e9e9;
   color: #a5434e;
 }
+.tag.amber {
+  background: #fff2d6;
+  color: #8a4b08;
+}
 .warning-text {
   color: #b16a15 !important;
 }
@@ -1280,6 +1284,24 @@ button {
 .report-card button {
   margin-top: auto;
 }
+
+.vehicle-mapping-panel {
+  border: 1px solid #cfe0dc;
+  background: #f4faf7;
+  border-radius: 10px;
+  margin: 16px 20px;
+  padding: 14px;
+}
+.vehicle-mapping-panel > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 10px;
+}
+.vehicle-mapping-panel strong,
+.vehicle-mapping-panel small { display: block; }
+.vehicle-mapping-panel small { color: var(--muted); font-size: 9px; }
+.vehicle-mapping-panel input { width: 82px; }
 .flow-summary-control {
   display: grid;
   gap: 5px;

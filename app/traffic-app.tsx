@@ -8,6 +8,7 @@ import {
   Approach,
   bearingFromAngle,
   canonicalIntersectionKey,
+  CORE_VEHICLE_LABELS,
   DEFAULT_PCE,
   formatMinutes,
   ImportPreview,
@@ -16,11 +17,13 @@ import {
   Movement,
   normalizeIntersectionName,
   PceMatrix,
+  pceFactor,
   PeakKey,
   Project,
   qualityIssues,
   referenceMovementForOd,
   recordTotal,
+  rollingPeak,
   RouteFlow,
   totalMovement,
   TrafficRecord,
@@ -64,6 +67,7 @@ type FormatMemory = {
   uses: number;
   lastUsedAt: string;
 };
+type VehicleMappingTable = Record<string, string>;
 
 const NAV: { id: View; label: string; icon: string; group?: string }[] = [
   { id: "dashboard", label: "總覽儀表板", icon: "⌂" },
@@ -83,7 +87,7 @@ const NAV: { id: View; label: string; icon: string; group?: string }[] = [
   { id: "backup", label: "備份、還原與版本", icon: "⟳" },
 ];
 
-const VEHICLE_LABELS: Record<VehicleKey, string> = {
+const VEHICLE_LABELS: Record<string, string> = {
   all: "全部車種",
   motorcycle: "機車",
   car: "小型車",
@@ -99,10 +103,29 @@ const PCE_LABELS = {
 const MOVE_LABELS = { left: "左轉", through: "直行", right: "右轉" };
 const ANALYSIS_VEHICLES = ["motorcycle", "car", "heavy", "special"] as const;
 
+function recordVehicleIds(record: TrafficRecord) {
+  const ids = new Set<string>();
+  Object.keys(record.vehicleLabels || {}).forEach(function (id) { ids.add(id); });
+  Object.keys(record.survey?.vehicle || {}).forEach(function (id) { ids.add(id); });
+  record.approaches.forEach(function (approach) {
+    (["AM", "PM"] as PeakKey[]).forEach(function (peak) {
+      Object.keys(approach.movements[peak].vehicle || {}).forEach(function (id) { ids.add(id); });
+    });
+  });
+  const ordered = ANALYSIS_VEHICLES.filter(function (id) { return ids.has(id); }) as string[];
+  return ordered.concat([...ids].filter(function (id) { return !ordered.includes(id); }).sort(function (a, b) {
+    return vehicleLabel(record, a).localeCompare(vehicleLabel(record, b), "zh-Hant");
+  }));
+}
+
+function vehicleLabel(record: TrafficRecord | null | undefined, id: string) {
+  return record?.vehicleLabels?.[id] || VEHICLE_LABELS[id] || CORE_VEHICLE_LABELS[id] || id.replace(/^custom:/, "");
+}
+
 function recordVehicleTotal(
   record: TrafficRecord,
   scope: CompositionScope,
-  vehicle: (typeof ANALYSIS_VEHICLES)[number],
+  vehicle: string,
 ) {
   if (scope === "SURVEY") return Number(record.survey?.vehicle[vehicle] || 0);
   return record.approaches.reduce(function (sum, approach) {
@@ -112,24 +135,25 @@ function recordVehicleTotal(
 
 function surveyDirectionRows(record: TrafficRecord) {
   const emptyVehicle = function () {
-    return { motorcycle: 0, car: 0, heavy: 0, special: 0 };
+    return Object.fromEntries(recordVehicleIds(record).map(function (id) { return [id, 0]; })) as Record<string, number>;
   };
+  const analysisVehicles = recordVehicleIds(record);
   return record.approaches.flatMap(function (approach) {
     const inbound = emptyVehicle();
     const outbound = emptyVehicle();
     (record.routes || []).forEach(function (route) {
       if (!route.survey) return;
       if (route.fromApproachId === approach.id)
-        ANALYSIS_VEHICLES.forEach(function (vehicle) {
+        analysisVehicles.forEach(function (vehicle) {
           inbound[vehicle] += Number(route.survey?.vehicle[vehicle] || 0);
         });
       if (route.toApproachId === approach.id)
-        ANALYSIS_VEHICLES.forEach(function (vehicle) {
+        analysisVehicles.forEach(function (vehicle) {
           outbound[vehicle] += Number(route.survey?.vehicle[vehicle] || 0);
         });
     });
     const bidirectional = emptyVehicle();
-    ANALYSIS_VEHICLES.forEach(function (vehicle) {
+    analysisVehicles.forEach(function (vehicle) {
       bidirectional[vehicle] = inbound[vehicle] + outbound[vehicle];
     });
     return [
@@ -488,7 +512,7 @@ function syncRouteTotals(record: TrafficRecord) {
           return (
             sum +
             Number(route.volumes[key].vehicle[vehicle] || 0) *
-              pce[vehicle][route.movement]
+              pceFactor(pce, vehicle, route.movement)
           );
         }, 0),
       );
@@ -886,7 +910,7 @@ export function diagramMarkup(
         record.approaches.reduce(function (sum, source, sourceIndex) {
           return (
             sum +
-            (names as Array<"left" | "through" | "right">).reduce(function (
+            names.reduce(function (
               movementSum,
               sourceMovement,
             ) {
@@ -1082,7 +1106,7 @@ export function diagramMarkup(
         '<text x="30" y="86">季度 ' +
         esc(record.quarter) +
         "　車種 " +
-        esc(VEHICLE_LABELS[vehicle]) +
+        esc(vehicle === "all" ? "全部車種" : vehicleLabel(record, vehicle)) +
         "　全路口流量 " +
         total.toLocaleString() +
         " " +
@@ -1213,9 +1237,10 @@ function mappedMovement(
   peak: PeakKey,
   approachName: string,
   pce: PceMatrix,
+  vehicleMappings: VehicleMappingTable,
 ) {
   const values = peak === "AM" ? item.am?.values : item.pm?.values;
-  const vehicle = { motorcycle: 0, car: 0, heavy: 0, special: 0 };
+  const vehicle: Record<string, number> = {};
   const raw = { left: 0, through: 0, right: 0 };
   const pcu = { left: 0, through: 0, right: 0 };
   item.columns
@@ -1225,9 +1250,10 @@ function mappedMovement(
     .forEach(function (column) {
       const count = Number(values?.[column.valueIndex]) || 0;
       const movement = column.movement || "through";
-      vehicle[column.vehicle] += count;
+      const analysisVehicle = vehicleMappings[column.vehicle] || column.vehicle;
+      vehicle[analysisVehicle] = Number(vehicle[analysisVehicle] || 0) + count;
       raw[movement] += count;
-      pcu[movement] += count * pce[column.vehicle][movement];
+      pcu[movement] += count * pceFactor(pce, analysisVehicle, movement);
     });
   return {
     left: roundedPcu(pcu.left),
@@ -1292,6 +1318,7 @@ function recordFromPreview(
   projectId: string,
   quarter: string,
   pce: PceMatrix,
+  vehicleMappings: VehicleMappingTable,
 ): TrafficRecord {
   const appliedPce = item.pceUsed || pce;
   const length = Math.max(
@@ -1318,8 +1345,8 @@ function recordFromPreview(
       : 4;
   const mappedMovements = mappedNames.map(function (name) {
     return {
-      AM: mappedMovement(item, "AM", name, appliedPce),
-      PM: mappedMovement(item, "PM", name, appliedPce),
+      AM: mappedMovement(item, "AM", name, appliedPce, vehicleMappings),
+      PM: mappedMovement(item, "PM", name, appliedPce, vehicleMappings),
     };
   });
   const geometry = inferApproachGeometry(item, mappedNames, mappedMovements);
@@ -1389,7 +1416,7 @@ function recordFromPreview(
       const volumes = Object.fromEntries(
         (["AM", "PM"] as PeakKey[]).map(function (key) {
           const values = key === "AM" ? item.am?.values : item.pm?.values;
-          const vehicle = { motorcycle: 0, car: 0, heavy: 0, special: 0 };
+          const vehicle: Record<string, number> = {};
           let routePcu = 0;
           item.columns
             .filter(function (column) {
@@ -1399,26 +1426,23 @@ function recordFromPreview(
             .forEach(function (column) {
               const count = Number(values?.[column.valueIndex]) || 0;
               const movement = column.movement || route.movement;
-              vehicle[column.vehicle] += count;
-              routePcu += count * appliedPce[column.vehicle][movement];
+              const analysisVehicle = vehicleMappings[column.vehicle] || column.vehicle;
+              vehicle[analysisVehicle] = Number(vehicle[analysisVehicle] || 0) + count;
+              routePcu += count * pceFactor(appliedPce, analysisVehicle, movement);
             });
           return [key, { pcu: roundedPcu(routePcu), vehicle }];
         }),
       ) as RouteFlow["volumes"];
-      const surveyVehicle = {
-        motorcycle: 0,
-        car: 0,
-        heavy: 0,
-        special: 0,
-      };
+      const surveyVehicle: Record<string, number> = {};
       item.columns
         .filter(function (column) {
           const destination = destinationForColumn(column);
           return column.approach === route.from && destination === route.to;
         })
         .forEach(function (column) {
-          surveyVehicle[column.vehicle] +=
-            Number(item.survey?.values[column.valueIndex]) || 0;
+          const analysisVehicle = vehicleMappings[column.vehicle] || column.vehicle;
+          surveyVehicle[analysisVehicle] = Number(surveyVehicle[analysisVehicle] || 0) +
+            (Number(item.survey?.values[column.valueIndex]) || 0);
         });
       return {
         id: item.station + "-R" + (index + 1),
@@ -1432,15 +1456,11 @@ function recordFromPreview(
     .filter(function (route) {
       return route.fromApproachId && route.toApproachId;
     });
-  const surveyVehicle = {
-    motorcycle: 0,
-    car: 0,
-    heavy: 0,
-    special: 0,
-  };
+  const surveyVehicle: Record<string, number> = {};
   item.columns.forEach(function (column) {
-    surveyVehicle[column.vehicle] +=
-      Number(item.survey?.values[column.valueIndex]) || 0;
+    const analysisVehicle = vehicleMappings[column.vehicle] || column.vehicle;
+    surveyVehicle[analysisVehicle] = Number(surveyVehicle[analysisVehicle] || 0) +
+      (Number(item.survey?.values[column.valueIndex]) || 0);
   });
   return {
     id:
@@ -1464,6 +1484,17 @@ function recordFromPreview(
     surveyType: item.surveyType,
     pceUsed: structuredClone(appliedPce),
     pceVersion: "匯入快照 " + new Date().toISOString(),
+    vehicleLabels: Object.fromEntries(
+      item.detectedVehicles.map(function (definition) {
+        const target = vehicleMappings[definition.id] || definition.id;
+        return [target, CORE_VEHICLE_LABELS[target] || definition.label];
+      }),
+    ),
+    vehicleMapping: Object.fromEntries(
+      item.detectedVehicles.map(function (definition) {
+        return [definition.id, vehicleMappings[definition.id] || definition.id];
+      }),
+    ),
     peaks: {
       AM: item.am
         ? {
@@ -1577,6 +1608,24 @@ function Segmented<T extends string>(props: {
   );
 }
 
+function configuredImportPreview(
+  item: ImportPreview,
+  pce: PceMatrix,
+  vehicleMappings: VehicleMappingTable,
+) {
+  if (!item.intervalRows?.length || !item.intervalMinutes) return item;
+  const weights = item.columns.map(function (column) {
+    const target = vehicleMappings[column.vehicle] || column.vehicle;
+    return pceFactor(pce, target, column.movement || "through");
+  });
+  return {
+    ...item,
+    am: rollingPeak(item.intervalRows, [5 * 60, 12 * 60], item.intervalMinutes, weights),
+    pm: rollingPeak(item.intervalRows, [12 * 60, 23 * 60], item.intervalMinutes, weights),
+    pceUsed: structuredClone(pce),
+  };
+}
+
 function destinationVehicleTotal(
   record: TrafficRecord,
   peak: PeakKey,
@@ -1591,7 +1640,7 @@ function destinationVehicleTotal(
     .reduce(function (sum, route) {
       return (
         sum +
-        ANALYSIS_VEHICLES.reduce(function (vehicleSum, vehicle) {
+        recordVehicleIds(record).reduce(function (vehicleSum, vehicle) {
           return vehicleSum + Number(route.volumes[peak].vehicle[vehicle] || 0);
         }, 0)
       );
@@ -1615,10 +1664,10 @@ function surveyDestinationTotals(record: TrafficRecord, destinationIndex: number
       return route.toApproachId === destination.id && Boolean(route.survey);
     })
     .forEach(function (route) {
-      ANALYSIS_VEHICLES.forEach(function (vehicle) {
+      recordVehicleIds(record).forEach(function (vehicle) {
         const count = Number(route.survey?.vehicle[vehicle] || 0);
         vehicles += count;
-        pcu += count * pce[vehicle][route.movement];
+        pcu += count * pceFactor(pce, vehicle, route.movement);
       });
     });
   return { pcu: roundedPcu(pcu), vehicles };
@@ -1641,10 +1690,10 @@ function surveySourceTotals(record: TrafficRecord, sourceIndex: number) {
       return route.fromApproachId === source.id && Boolean(route.survey);
     })
     .forEach(function (route) {
-      ANALYSIS_VEHICLES.forEach(function (vehicle) {
+      recordVehicleIds(record).forEach(function (vehicle) {
         const count = Number(route.survey?.vehicle[vehicle] || 0);
         vehicles += count;
-        pcu += count * pce[vehicle][route.movement];
+        pcu += count * pceFactor(pce, vehicle, route.movement);
       });
     });
   return { pcu: roundedPcu(pcu), vehicles };
@@ -1657,7 +1706,7 @@ function sourceVehicleTotal(record: TrafficRecord, peak: PeakKey, sourceIndex: n
     return record.routes
       .filter(function (route) { return route.fromApproachId === source.id; })
       .reduce(function (sum, route) {
-        return sum + ANALYSIS_VEHICLES.reduce(function (vehicleSum, vehicle) {
+        return sum + recordVehicleIds(record).reduce(function (vehicleSum, vehicle) {
           return vehicleSum + Number(route.volumes[peak].vehicle[vehicle] || 0);
         }, 0);
       }, 0);
@@ -1766,22 +1815,19 @@ function AuditWorkbench(props: {
               </summary>
               <div className="table-scroll">
                 <table className="audit-table">
-                  <thead><tr><th>OD 流向</th><th>轉向</th><th>機車<br />輛/hr</th><th>小型車<br />輛/hr</th><th>大型／大客車<br />輛/hr</th><th>特種／聯結車<br />輛/hr</th><th>換算式</th><th>流量<br />PCU/hr</th></tr></thead>
+                  <thead><tr><th>OD 流向</th><th>轉向</th>{recordVehicleIds(record).map(function (vehicleKey) { return <th key={vehicleKey}>{vehicleLabel(record, vehicleKey)}<br />輛/hr</th>; })}<th>換算式</th><th>流量<br />PCU/hr</th></tr></thead>
                   <tbody>
                     {originRoutes.map(function (route) {
                       const destination = approachById.get(route.toApproachId);
                       const counts = route.volumes[props.peak].vehicle;
-                      const formula = ANALYSIS_VEHICLES.map(function (vehicleKey) {
-                        return counts[vehicleKey] + "×" + pceMatrix[vehicleKey][route.movement];
+                      const formula = recordVehicleIds(record).map(function (vehicleKey) {
+                        return Number(counts[vehicleKey] || 0) + "×" + pceFactor(pceMatrix, vehicleKey, route.movement);
                       }).join(" + ");
                       return (
                         <tr key={route.id}>
                           <td>{origin.sourceCode || origin.name} → {destination?.sourceCode || destination?.name || "未設定"}</td>
                           <td>{MOVE_LABELS[route.movement]}</td>
-                          <td>{counts.motorcycle.toLocaleString()}</td>
-                          <td>{counts.car.toLocaleString()}</td>
-                          <td>{counts.heavy.toLocaleString()}</td>
-                          <td>{counts.special.toLocaleString()}</td>
+                          {recordVehicleIds(record).map(function (vehicleKey) { return <td key={vehicleKey}>{Number(counts[vehicleKey] || 0).toLocaleString()}</td>; })}
                           <td className="audit-formula">{formula}</td>
                           <td><b>{route.volumes[props.peak].pcu.toLocaleString()}</b></td>
                         </tr>
@@ -1820,6 +1866,8 @@ export default function TrafficApp() {
   const [vehicle, setVehicle] = useState<VehicleKey>("all");
   const [nameMap, setNameMap] = useState<Record<string, string>>({});
   const [pce, setPce] = useState<PceMatrix>(DEFAULT_PCE);
+  const [vehicleCatalog, setVehicleCatalog] = useState<Record<string, string>>(CORE_VEHICLE_LABELS);
+  const [vehicleMappings, setVehicleMappings] = useState<VehicleMappingTable>({});
   const [importRows, setImportRows] = useState<ImportPreview[]>([]);
   const [formatMemories, setFormatMemories] = useState<FormatMemory[]>([]);
   const [importResolutions, setImportResolutions] = useState<
@@ -1916,6 +1964,8 @@ export default function TrafficApp() {
       }
       if (data.nameMap) setNameMap(data.nameMap);
       if (data.pce) setPce(data.pce);
+      if (data.vehicleCatalog) setVehicleCatalog({ ...CORE_VEHICLE_LABELS, ...data.vehicleCatalog });
+      if (data.vehicleMappings) setVehicleMappings(data.vehicleMappings);
       if (Array.isArray(data.formatMemories)) setFormatMemories(data.formatMemories);
     } catch {
       /* Invalid stale local data is ignored. */
@@ -1934,11 +1984,13 @@ export default function TrafficApp() {
           records: records,
           nameMap: nameMap,
           pce: pce,
+          vehicleCatalog: vehicleCatalog,
+          vehicleMappings: vehicleMappings,
           formatMemories: formatMemories,
         }),
       );
     },
-    [projects, activeProjectId, records, nameMap, pce, formatMemories],
+    [projects, activeProjectId, records, nameMap, pce, vehicleCatalog, vehicleMappings, formatMemories],
   );
 
   const notify = function (message: string) {
@@ -2105,6 +2157,17 @@ export default function TrafficApp() {
   );
   const importPeriod =
     importYear && importQuarterNo ? importYear + "Q" + importQuarterNo : "";
+  const importVehicleDefinitions = [
+    ...new Map(
+      importRows.flatMap(function (row) { return row.detectedVehicles; }).map(function (definition) {
+        return [definition.id, definition] as const;
+      }),
+    ).values(),
+  ];
+  const selectedVehicleIds = selected ? recordVehicleIds(selected) : [];
+  const currentVehicleIds = [
+    ...new Set(currentCanonicalRecords.flatMap(function (record) { return recordVehicleIds(record); })),
+  ];
 
   function authorizeLockedChange(targets: TrafficRecord[], action: string) {
     const locked = targets.filter(function (record) {
@@ -2258,14 +2321,43 @@ export default function TrafficApp() {
           layout: "unknown",
           approaches: [],
           columns: [],
+          detectedVehicles: [],
           mappingConfidence: "low",
           warnings: [
             "讀取失敗：" +
               (error instanceof Error ? error.message : "未知錯誤"),
           ],
+          pceUsed: structuredClone(pce),
         });
       }
     }
+    const detectedDefinitions = new Map<string, { id: string; label: string }>();
+    rows.forEach(function (row) {
+      row.detectedVehicles.forEach(function (definition) {
+        detectedDefinitions.set(definition.id, definition);
+      });
+    });
+    setVehicleCatalog(function (existing) {
+      const next = { ...CORE_VEHICLE_LABELS, ...existing };
+      detectedDefinitions.forEach(function (definition) {
+        next[definition.id] = definition.label;
+      });
+      return next;
+    });
+    setVehicleMappings(function (existing) {
+      const next = { ...existing };
+      detectedDefinitions.forEach(function (definition) {
+        if (!next[definition.id]) next[definition.id] = definition.id;
+      });
+      return next;
+    });
+    setPce(function (existing) {
+      const next = structuredClone(existing);
+      detectedDefinitions.forEach(function (definition) {
+        if (!next[definition.id]) next[definition.id] = { left: 1, through: 1, right: 1 };
+      });
+      return next;
+    });
     const known = new Map<string, TrafficRecord>();
     projectRecords.forEach(function (record) {
       known.set(recordIntersectionKey(record), record);
@@ -2336,6 +2428,8 @@ export default function TrafficApp() {
       return (
         row.role === "原始交通量" &&
         Boolean(row.am || row.pm) &&
+        row.layout !== "unknown" &&
+        row.columns.length > 0 &&
         importResolutions[row.file]?.action !== "skip"
       );
     });
@@ -2363,7 +2457,14 @@ export default function TrafficApp() {
           (record.surveyType || "待設定") === (item.surveyType || "待設定")
         );
       });
-      const created = recordFromPreview(item, activeProjectId, q, pce);
+      const configuredItem = configuredImportPreview(item, pce, vehicleMappings);
+      const created = recordFromPreview(
+        configuredItem,
+        activeProjectId,
+        q,
+        pce,
+        vehicleMappings,
+      );
       const resolution = importResolutions[item.file] || { action: "new" };
       const mergeTarget = resolution.targetId
         ? projectRecords.find(function (record) {
@@ -2596,18 +2697,19 @@ export default function TrafficApp() {
     const vehicleComposition = exportRecords.flatMap(function (record) {
       return (["SURVEY", "AM", "PM"] as CompositionScope[]).flatMap(
         function (scope) {
+          const analysisVehicles = recordVehicleIds(record);
           const counts = Object.fromEntries(
-            ANALYSIS_VEHICLES.map(function (vehicleKey) {
+            analysisVehicles.map(function (vehicleKey) {
               return [
                 vehicleKey,
                 recordVehicleTotal(record, scope, vehicleKey),
               ];
             }),
-          ) as Record<(typeof ANALYSIS_VEHICLES)[number], number>;
-          const total = ANALYSIS_VEHICLES.reduce(function (sum, vehicleKey) {
+          ) as Record<string, number>;
+          const total = analysisVehicles.reduce(function (sum, vehicleKey) {
             return sum + counts[vehicleKey];
           }, 0);
-          return ANALYSIS_VEHICLES.map(function (vehicleKey) {
+          return analysisVehicles.map(function (vehicleKey) {
             const recordProject = projects.find(function (project) {
               return project.id === record.projectId;
             });
@@ -2623,7 +2725,7 @@ export default function TrafficApp() {
                       (record.survey?.minutes || 0) / 60
                     ).toFixed(1)} 小時）`
                   : record.peaks[scope].start + "-" + record.peaks[scope].end,
-              車種: VEHICLE_LABELS[vehicleKey],
+              車種: vehicleLabel(record, vehicleKey),
               單位: scope === "SURVEY" ? "輛/調查時段" : "輛/hr",
               數量: counts[vehicleKey],
               組成比例: total ? counts[vehicleKey] / total : 0,
@@ -2816,18 +2918,19 @@ export default function TrafficApp() {
         ? "全調查時段"
         : compositionScope + " Peak";
     const summaryRows = current.map(function (record) {
+      const analysisVehicles = recordVehicleIds(record);
       const counts = Object.fromEntries(
-        ANALYSIS_VEHICLES.map(function (vehicleKey) {
+        analysisVehicles.map(function (vehicleKey) {
           return [
             vehicleKey,
             recordVehicleTotal(record, compositionScope, vehicleKey),
           ];
         }),
-      ) as Record<(typeof ANALYSIS_VEHICLES)[number], number>;
-      const total = ANALYSIS_VEHICLES.reduce(function (sum, vehicleKey) {
+      ) as Record<string, number>;
+      const total = analysisVehicles.reduce(function (sum, vehicleKey) {
         return sum + counts[vehicleKey];
       }, 0);
-      return {
+      const row: Record<string, string | number> = {
         計畫代碼: activeProject?.code || "",
         計畫名稱: activeProject?.name || "",
         季度: record.quarter,
@@ -2841,31 +2944,30 @@ export default function TrafficApp() {
               "–" +
               record.peaks[compositionScope].end,
         單位: unit,
-        機車: counts.motorcycle,
-        "機車比例（%）": total ? counts.motorcycle / total : 0,
-        小型車: counts.car,
-        "小型車比例（%）": total ? counts.car / total : 0,
-        "大型／大客車": counts.heavy,
-        "大型／大客車比例（%）": total ? counts.heavy / total : 0,
-        "特種／聯結車": counts.special,
-        "特種／聯結車比例（%）": total ? counts.special / total : 0,
         實際車輛合計: total,
       };
+      analysisVehicles.forEach(function (vehicleKey) {
+        const label = vehicleLabel(record, vehicleKey);
+        row[label] = counts[vehicleKey];
+        row[label + "比例（%）"] = total ? counts[vehicleKey] / total : 0;
+      });
+      return row;
     });
     const detailRows = current.flatMap(function (record) {
-      const counts = ANALYSIS_VEHICLES.map(function (vehicleKey) {
+      const analysisVehicles = recordVehicleIds(record);
+      const counts = analysisVehicles.map(function (vehicleKey) {
         return recordVehicleTotal(record, compositionScope, vehicleKey);
       });
       const total = counts.reduce(function (sum, count) {
         return sum + count;
       }, 0);
-      return ANALYSIS_VEHICLES.map(function (vehicleKey, index) {
+      return analysisVehicles.map(function (vehicleKey, index) {
         return {
           季度: record.quarter,
           站號: record.station,
           路口名稱: record.name,
           分析範圍: scopeLabel,
-          車種: VEHICLE_LABELS[vehicleKey],
+          車種: vehicleLabel(record, vehicleKey),
           單位: unit,
           數量: counts[index],
           組成比例: total ? counts[index] / total : 0,
@@ -2880,10 +2982,15 @@ export default function TrafficApp() {
       return { wch };
     });
     summarySheet["!autofilter"] = { ref: summarySheet["!ref"] || "A1:A1" };
-    for (let row = 2; row <= summaryRows.length + 1; row++)
-      ["J", "L", "N", "P"].forEach(function (column) {
-        if (summarySheet[column + row]) summarySheet[column + row].z = "0.0%";
-      });
+    const summaryRange = XLSX.utils.decode_range(summarySheet["!ref"] || "A1:A1");
+    for (let column = summaryRange.s.c; column <= summaryRange.e.c; column++) {
+      const address = XLSX.utils.encode_cell({ r: 0, c: column });
+      if (!String(summarySheet[address]?.v || "").includes("比例")) continue;
+      for (let row = 1; row <= summaryRange.e.r; row++) {
+        const cell = XLSX.utils.encode_cell({ r: row, c: column });
+        if (summarySheet[cell]) summarySheet[cell].z = "0.0%";
+      }
+    }
     XLSX.utils.book_append_sheet(workbook, summarySheet, "車種組成彙整");
     const detailSheet = XLSX.utils.json_to_sheet(detailRows);
     detailSheet["!cols"] = [10, 12, 30, 15, 18, 16, 14, 14].map(function (
@@ -3004,6 +3111,8 @@ export default function TrafficApp() {
       records: records,
       nameMap: nameMap,
       pce: pce,
+      vehicleCatalog: vehicleCatalog,
+      vehicleMappings: vehicleMappings,
       formatMemories: formatMemories,
     };
   };
@@ -3076,6 +3185,11 @@ export default function TrafficApp() {
       );
       setNameMap(data.nameMap || {});
       setPce(data.pce || DEFAULT_PCE);
+      setVehicleCatalog({
+        ...CORE_VEHICLE_LABELS,
+        ...(data.vehicleCatalog || {}),
+      });
+      setVehicleMappings(data.vehicleMappings || {});
       setFormatMemories(Array.isArray(data.formatMemories) ? data.formatMemories : []);
       notify("還原完成，可在這台電腦繼續使用。");
     } catch (error) {
@@ -3722,6 +3836,48 @@ export default function TrafficApp() {
                     確認寫入 {importPeriod || "未選季度"}
                   </button>
                 </div>
+                {importVehicleDefinitions.length > 0 && (
+                  <div className="vehicle-mapping-panel">
+                    <div>
+                      <strong>本批次辨識到 {importVehicleDefinitions.length} 個原始車種</strong>
+                      <small>預設各自獨立分析；也可在寫入前併入四個標準類別。合併後以目標類別當量換算。</small>
+                    </div>
+                    <div className="table-scroll">
+                      <table>
+                        <thead><tr><th>原始車種</th><th>分析方式／歸類</th><th>左轉當量</th><th>直行當量</th><th>右轉當量</th></tr></thead>
+                        <tbody>
+                          {importVehicleDefinitions.map(function (definition) {
+                            const target = vehicleMappings[definition.id] || definition.id;
+                            const factors = pce[target] || { left: 1, through: 1, right: 1 };
+                            return <tr key={definition.id}>
+                              <td><strong>{definition.label}</strong><small>{definition.core ? "標準車種" : "新增車種"}</small></td>
+                              <td>
+                                <select value={target} onChange={function (event) {
+                                  const nextTarget = event.target.value;
+                                  setVehicleMappings({ ...vehicleMappings, [definition.id]: nextTarget });
+                                  if (!pce[nextTarget]) setPce({ ...pce, [nextTarget]: { left: 1, through: 1, right: 1 } });
+                                }}>
+                                  <option value={definition.id}>獨立分析：{definition.label}</option>
+                                  {ANALYSIS_VEHICLES.filter(function (id) { return id !== definition.id; }).map(function (id) {
+                                    return <option key={id} value={id}>併入：{VEHICLE_LABELS[id]}</option>;
+                                  })}
+                                </select>
+                              </td>
+                              {(["left", "through", "right"] as const).map(function (movement) {
+                                return <td key={movement}><input type="number" min="0" step="0.1" value={factors[movement]} onChange={function (event) {
+                                  setPce({ ...pce, [target]: { ...factors, [movement]: Number(event.target.value) } });
+                                }} /></td>;
+                              })}
+                            </tr>;
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    {importRows.some(function (row) { return row.layout === "unknown" && row.detectedVehicles.length > 0; }) && (
+                      <p className="source-note">已讀到車種但未找到轉向／OD 欄位的檔案，只能確認車種結構，不會在本路口轉向系統中誤建轉向資料。</p>
+                    )}
+                  </div>
+                )}
                 {!importRows.length ? (
                   <Empty
                     title="尚未選取檔案"
@@ -3744,6 +3900,7 @@ export default function TrafficApp() {
                       </thead>
                       <tbody>
                         {importRows.map(function (row) {
+                          const liveRow = configuredImportPreview(row, pce, vehicleMappings);
                           const resolution = importResolutions[row.file] || {
                             action: "auto-new",
                           };
@@ -3767,7 +3924,9 @@ export default function TrafficApp() {
                                       ? "red"
                                       : row.role === "參考計算檔"
                                         ? "blue"
-                                        : "green")
+                                        : row.role === "非路口轉向"
+                                          ? "amber"
+                                          : "green")
                                   }
                                 >
                                   {row.role}
@@ -3837,22 +3996,22 @@ export default function TrafficApp() {
                                 )}
                               </td>
                               <td>
-                                {row.am
-                                  ? formatMinutes(row.am.start) +
+                                {liveRow.am
+                                  ? formatMinutes(liveRow.am.start) +
                                     "–" +
-                                    formatMinutes(row.am.end) +
+                                    formatMinutes(liveRow.am.end) +
                                     " · " +
-                                    Math.round(row.am.total).toLocaleString() +
+                                    Math.round(liveRow.am.total).toLocaleString() +
                                     " PCU/hr"
                                   : "—"}
                               </td>
                               <td>
-                                {row.pm
-                                  ? formatMinutes(row.pm.start) +
+                                {liveRow.pm
+                                  ? formatMinutes(liveRow.pm.start) +
                                     "–" +
-                                    formatMinutes(row.pm.end) +
+                                    formatMinutes(liveRow.pm.end) +
                                     " · " +
-                                    Math.round(row.pm.total).toLocaleString() +
+                                    Math.round(liveRow.pm.total).toLocaleString() +
                                     " PCU/hr"
                                   : "—"}
                               </td>
@@ -3967,8 +4126,8 @@ export default function TrafficApp() {
                 <button
                   className="secondary"
                   onClick={function () {
-                    setPce(structuredClone(DEFAULT_PCE));
-                    notify("已恢復講義預設值。");
+                    setPce({ ...pce, ...structuredClone(DEFAULT_PCE) });
+                    notify("已恢復四個標準車種的講義預設值；新增車種保留原設定。");
                   }}
                 >
                   恢復預設值
@@ -3979,7 +4138,7 @@ export default function TrafficApp() {
                   <div className="panel-head">
                     <div>
                       <span className="eyebrow">PCE / PCU</span>
-                      <h2>四車種左／直／右當量</h2>
+                      <h2>各分析車種左／直／右當量</h2>
                     </div>
                   </div>
                   <div className="table-scroll">
@@ -3993,13 +4152,17 @@ export default function TrafficApp() {
                         </tr>
                       </thead>
                       <tbody>
-                        {(
-                          Object.keys(PCE_LABELS) as (keyof typeof PCE_LABELS)[]
-                        ).map(function (vehicleKey) {
+                        {Object.keys(pce).sort(function (a, b) {
+                          const ai = ANALYSIS_VEHICLES.indexOf(a as (typeof ANALYSIS_VEHICLES)[number]);
+                          const bi = ANALYSIS_VEHICLES.indexOf(b as (typeof ANALYSIS_VEHICLES)[number]);
+                          if (ai >= 0 || bi >= 0) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+                          return (vehicleCatalog[a] || a).localeCompare(vehicleCatalog[b] || b, "zh-Hant");
+                        }).map(function (vehicleKey) {
                           return (
                             <tr key={vehicleKey}>
                               <td>
-                                <strong>{PCE_LABELS[vehicleKey]}</strong>
+                                <strong>{vehicleCatalog[vehicleKey] || PCE_LABELS[vehicleKey as keyof typeof PCE_LABELS] || vehicleKey.replace(/^custom:/, "")}</strong>
+                                {!ANALYSIS_VEHICLES.includes(vehicleKey as (typeof ANALYSIS_VEHICLES)[number]) && <small>新增車種</small>}
                               </td>
                               {(["left", "through", "right"] as const).map(
                                 function (move) {
@@ -4011,7 +4174,7 @@ export default function TrafficApp() {
                                         step="0.1"
                                         value={pce[vehicleKey][move]}
                                         aria-label={
-                                          PCE_LABELS[vehicleKey] +
+                                          (vehicleCatalog[vehicleKey] || vehicleKey) +
                                           MOVE_LABELS[move] +
                                           "當量"
                                         }
@@ -4039,9 +4202,8 @@ export default function TrafficApp() {
                     <b>預設值來源與版本保存</b>
                     <p>
                       使用者提供《交通流量教育訓練1060310》簡報第 15
-                      頁；原簡報未載明引用來源，故列為可調整的舊版專案預設。修改後會立即套用於後續匯入的尖峰時段搜尋與
-                      PCU/hr 換算；每筆路口同時保存匯入當下的 12
-                      個係數快照，Excel 報表與備份均可追溯。
+                      頁；原簡報未載明引用來源，故列為可調整的舊版專案預設。新增車種先以 1.0 建立，必須由使用者確認。修改後會套用於後續匯入的尖峰時段搜尋與
+                      PCU/hr 換算；每筆路口同時保存匯入當下的係數與分類快照，Excel 報表與備份均可追溯。
                     </p>
                   </div>
                 </article>
@@ -4169,13 +4331,13 @@ export default function TrafficApp() {
                     </div>
                   </section>
                   <section className="kpi-grid composition-kpis">
-                    {ANALYSIS_VEHICLES.map(function (vehicleKey) {
+                    {selectedVehicleIds.map(function (vehicleKey) {
                       const count = recordVehicleTotal(
                         selected,
                         compositionScope,
                         vehicleKey,
                       );
-                      const total = ANALYSIS_VEHICLES.reduce(function (
+                      const total = selectedVehicleIds.reduce(function (
                         sum,
                         key,
                       ) {
@@ -4187,7 +4349,7 @@ export default function TrafficApp() {
                       return (
                         <Kpi
                           key={vehicleKey}
-                          label={VEHICLE_LABELS[vehicleKey]}
+                          label={vehicleLabel(selected, vehicleKey)}
                           value={
                             count.toLocaleString() +
                             (compositionScope === "SURVEY"
@@ -4255,10 +4417,10 @@ export default function TrafficApp() {
                                 <th>道路支線</th>
                                 <th>行車方向</th>
                                 <th>與路口關係</th>
-                                {ANALYSIS_VEHICLES.map(function (vehicleKey) {
+                                {selectedVehicleIds.map(function (vehicleKey) {
                                   return (
                                     <th key={vehicleKey}>
-                                      {VEHICLE_LABELS[vehicleKey]}
+                                      {vehicleLabel(selected, vehicleKey)}
                                       （輛／調查時段）
                                     </th>
                                   );
@@ -4279,9 +4441,9 @@ export default function TrafficApp() {
                                     : row.relation !== "雙向合計";
                                 })
                                 .map(function (row, index) {
-                                const total = ANALYSIS_VEHICLES.reduce(
+                                const total = selectedVehicleIds.reduce(
                                   function (sum, vehicleKey) {
-                                    return sum + row.vehicle[vehicleKey];
+                                    return sum + Number(row.vehicle[vehicleKey] || 0);
                                   },
                                   0,
                                 );
@@ -4308,14 +4470,14 @@ export default function TrafficApp() {
                                     </td>
                                     <td>{row.direction}</td>
                                     <td>{row.relation}</td>
-                                    {ANALYSIS_VEHICLES.map(function (
+                                    {selectedVehicleIds.map(function (
                                       vehicleKey,
                                     ) {
                                       return (
                                         <td key={vehicleKey}>
-                                          {row.vehicle[
+                                          {Number(row.vehicle[
                                             vehicleKey
-                                          ].toLocaleString()}
+                                          ] || 0).toLocaleString()}
                                         </td>
                                       );
                                     })}
@@ -4352,10 +4514,10 @@ export default function TrafficApp() {
                         <thead>
                           <tr>
                             <th>站號／路口</th>
-                            {ANALYSIS_VEHICLES.map(function (vehicleKey) {
+                            {currentVehicleIds.map(function (vehicleKey) {
                               return (
                                 <th key={vehicleKey}>
-                                  {VEHICLE_LABELS[vehicleKey]}（
+                                  {vehicleLabel(selected, vehicleKey)}（
                                   {compositionScope === "SURVEY"
                                     ? "輛/調查時段"
                                     : "輛/hr"}
@@ -4374,7 +4536,7 @@ export default function TrafficApp() {
                         </thead>
                         <tbody>
                           {currentCanonicalRecords.map(function (record) {
-                            const counts = ANALYSIS_VEHICLES.map(
+                            const counts = currentVehicleIds.map(
                               function (vehicleKey) {
                                 return recordVehicleTotal(
                                   record,
@@ -4395,7 +4557,7 @@ export default function TrafficApp() {
                                 </td>
                                 {counts.map(function (count, index) {
                                   return (
-                                    <td key={ANALYSIS_VEHICLES[index]}>
+                                    <td key={currentVehicleIds[index]}>
                                       {count.toLocaleString()}｜
                                       {total
                                         ? ((count / total) * 100).toFixed(1)
@@ -4702,7 +4864,7 @@ export default function TrafficApp() {
                           setVehicle(e.target.value as VehicleKey);
                         }}
                       >
-                        {Object.entries(VEHICLE_LABELS).map(function (entry) {
+                        {[["all", "全部車種"], ...selectedVehicleIds.map(function (id) { return [id, vehicleLabel(selected, id)]; })].map(function (entry) {
                           return (
                             <option key={entry[0]} value={entry[0]}>
                               {entry[1]}
@@ -5227,7 +5389,7 @@ export default function TrafficApp() {
                         {records
                           .filter(function (record) {
                             return (
-                              compareProjects.includes(record.projectId) &&
+                              compareProjects.includes(record.projectId || "") &&
                               record.quarter === quarter
                             );
                           })
@@ -5281,7 +5443,7 @@ export default function TrafficApp() {
                       {records
                         .filter(function (record) {
                           return (
-                            compareProjects.includes(record.projectId) &&
+                            compareProjects.includes(record.projectId || "") &&
                             record.quarter === quarter
                           );
                         })

@@ -10,6 +10,7 @@ import {
   inspectWorkbook,
   inspectWorkbookVariants,
   normalizeIntersectionName,
+  pceFactor,
   qualityIssues,
   referenceMovementForOd,
   rollingPeak,
@@ -197,6 +198,52 @@ test("does not flag a legitimately high surveyed direction as an anomaly", () =>
     ),
     false,
   );
+});
+
+test("keeps five source vehicle types distinct in a turning workbook", async () => {
+  const vehicleNames = ["機車", "小型車", "大貨車", "大客車", "聯結車"];
+  const rows: Array<Array<string | number>> = [
+    ["站號：T5-10", "站名：動態車種測試路口"],
+    ["時間", ...vehicleNames.flatMap(function (name) { return [name, name, name]; })],
+    ["", ...vehicleNames.flatMap(function () { return ["左轉", "直行", "右轉"]; })],
+    ...Array.from({ length: 24 }, function (_, hour) {
+      return [
+        String(hour).padStart(2, "0") + ":00～" + String(hour + 1).padStart(2, "0") + ":00",
+        ...Array.from({ length: 15 }, function (_, index) { return hour + index + 1; }),
+      ];
+    }),
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "路口A");
+  const file = new File([XLSX.write(workbook, { type: "array", bookType: "xlsx" })], "11000T5-10-動態車種.xlsx");
+  const preview = await inspectWorkbook(file, DEFAULT_PCE);
+  assert.equal(preview.layout, "turning");
+  assert.equal(preview.columns.length, 15);
+  assert.deepEqual(preview.detectedVehicles.map(function (item) { return item.label; }), vehicleNames);
+  assert.ok(preview.columns.some(function (column) { return column.vehicle === "custom:大貨車"; }));
+  assert.ok(preview.columns.some(function (column) { return column.vehicle === "custom:大客車"; }));
+  assert.ok(preview.columns.some(function (column) { return column.vehicle === "custom:聯結車"; }));
+  assert.equal(pceFactor(DEFAULT_PCE, "custom:大貨車", "through"), 1);
+});
+
+test("recognizes a five-vehicle full-day road sheet without inventing turning flows", async () => {
+  const rows = [
+    ["路段交通量調查表"],
+    ["監測日期：115年03月09日(平日)"],
+    ["時間", "機車", "小型車", "大貨車", "大客車", "聯結車", "機車", "小型車", "大貨車", "大客車", "聯結車"],
+    ...Array.from({ length: 24 }, function (_, hour) {
+      return [String(hour).padStart(2, "0") + ":00～" + String(hour + 1).padStart(2, "0") + ":00", ...Array(10).fill(hour + 1)];
+    }),
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "平日");
+  const file = new File([XLSX.write(workbook, { type: "array", bookType: "xlsx" })], "14013T5-10-北林路.xlsx");
+  const preview = await inspectWorkbook(file, DEFAULT_PCE);
+  assert.equal(preview.layout, "unknown");
+  assert.equal(preview.role, "非路口轉向");
+  assert.equal(preview.columns.length, 0);
+  assert.equal(preview.templateId, "full-day-road-vehicle-v1");
+  assert.equal(preview.detectedVehicles.length, 5);
 });
 
 test("splits weekday and holiday hourly workbooks into independent previews", async () => {
