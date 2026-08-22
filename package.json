@@ -1,6 +1,6 @@
 {
   "name": "turning-traffic",
-  "version": "2.0.1",
+  "version": "2.1.1",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -13,7 +13,9 @@
     "test:engine": "node --experimental-strip-types --test tests/*.test.ts",
     "build:github": "vite build --config vite.github.config.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "seed": "node scripts/seed-state.mjs",
+    "e2e": "npm run build:github && node scripts/seed-state.mjs && node scripts/e2e-diagram.mjs && node scripts/e2e-reports.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

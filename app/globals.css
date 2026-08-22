@@ -2698,3 +2698,40 @@ input:focus {
     margin-right: 10px;
   }
 }
+
+/* 圖卡位置：改為純拖曳後，右側只顯示狀態與還原按鈕 */
+.card-position-state{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef4f5;color:#3a5a63;font-size:11px;font-weight:700}
+.card-position-field .link-button{align-self:flex-start;padding:0;border:0;background:none;color:#0e7c75;font-size:11px;font-weight:700;text-decoration:underline;cursor:pointer}
+.card-position-field .link-button:disabled{color:#9fb0b6;text-decoration:none;cursor:default}
+.diagram-canvas [data-card-id],.diagram-canvas [data-label-id]{cursor:grab}
+.diagram-canvas [data-card-id]:active,.diagram-canvas [data-label-id]:active{cursor:grabbing}
+
+/* 報表匯出項目自選 */
+.report-items-panel{padding:20px;margin-bottom:18px}
+.report-items-head{display:flex;gap:18px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
+.report-items-head h2{margin:4px 0 6px}
+.report-items-head p{margin:0;max-width:70ch;color:#5b6f77;font-size:13px;line-height:1.7}
+.report-items-actions{display:flex;gap:8px}
+.report-items-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin:16px 0}
+.report-items-grid label{display:flex;gap:10px;align-items:flex-start;padding:11px 13px;border:1px solid #d9e3e6;border-radius:10px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}
+.report-items-grid label:hover{border-color:#0e7c75}
+.report-items-grid label.selected{border-color:#0e7c75;background:#f0f8f7}
+.report-items-grid input{margin-top:3px;width:16px;height:16px;flex:none;accent-color:#0e7c75}
+.report-items-grid span{display:grid;gap:3px;min-width:0}
+.report-items-grid b{font-size:13px;color:#12333c}
+.report-items-grid small{font-size:11.5px;color:#63757c;line-height:1.55}
+.report-items-grid em{font-size:11px;color:#0e7c75;font-style:normal;font-weight:700}
+.report-template-box{padding:14px;border:1px dashed #bcd2d6;border-radius:10px;background:#f8fbfb}
+.report-template-box>b{display:block;margin-bottom:8px;font-size:13px;color:#12333c}
+.report-template-create{display:flex;gap:8px;flex-wrap:wrap}
+.report-template-create input{flex:1;min-width:220px;height:36px;padding:0 11px;border:1px solid #cfdcdf;border-radius:8px;font-size:13px}
+.report-template-list{display:grid;gap:8px;margin-top:12px}
+.report-template-row{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:9px 12px;border:1px solid #e0e8ea;border-radius:9px;background:#fff}
+.report-template-row>span:first-child{display:grid;gap:2px;min-width:0}
+.report-template-row b{font-size:13px;color:#12333c}
+.report-template-row small{font-size:11.5px;color:#66787f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.report-template-row>span:last-child{display:flex;gap:6px;flex:none}
+.report-template-empty{margin:12px 0 0;font-size:12px;color:#6b7d84;line-height:1.6}
+.report-empty-hint{margin:8px 0 0;font-size:12px;color:#a9660f;line-height:1.6}
+.help-downloads{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.help-downloads .help-download{white-space:nowrap}

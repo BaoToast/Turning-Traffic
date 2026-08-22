@@ -15,6 +15,11 @@ export type Project = {
   client: string;
   note: string;
   createdAt: string;
+  /**
+   * 這個計畫要匯出哪些分析項目（見 lib/final-features 的 REPORT_ITEMS）。
+   * 不同計畫要交的東西不一樣，所以記在計畫上；未設定時採用預設組合。
+   */
+  reportItems?: string[];
 };
 
 export type PceMatrix = Record<PceVehicle, Record<MovementKey, number>>;
@@ -139,6 +144,9 @@ export type RouteFlow = {
   };
 };
 
+/** 轉向圖「藍框流量顯示」的三種模式，也是圖卡版面的保存單位。 */
+export type FlowLayoutMode = "both" | "inbound" | "outbound";
+
 export type Approach = {
   id: string;
   /** A/B/C... read from the source workbook; independent of drawing angle. */
@@ -153,8 +161,37 @@ export type Approach = {
   effectiveGreen?: number | null;
   cycleLength?: number | null;
   capacity: number | null;
-  /** User-maintained diagram offset. It changes presentation only, never data binding. */
+  /** 舊版：整支支線（駛入＋駛出卡）共用的位移。保留以相容既有備份。 */
   cardOffset?: { x: number; y: number };
+  /**
+   * 每一張圖卡各自的位移。駛入卡與駛出卡可以分別拖到不同位置，
+   * 舊資料只有 cardOffset 時兩張卡會沿用同一組數值。
+   */
+  cardOffsets?: Partial<
+    Record<"inbound" | "outbound", { x: number; y: number }>
+  >;
+  /** 路口標籤（例如「路口A」）的位移，讓使用者可把標籤拖離道路或圖卡。 */
+  labelOffset?: { x: number; y: number };
+  /**
+   * 各「藍框流量顯示」模式各自的版面。
+   *
+   * 只看駛入、只看駛出、駛入＋駛出三種畫面上，卡片數量與位置需求完全不同
+   * （例如只看駛入時想把卡片擺左邊，駛入＋駛出時想擺右邊），因此每種模式
+   * 各自保存一組圖卡與標籤位置，彼此互不干擾。
+   * 某個模式尚未調整過時，會沿用上面的 cardOffsets／cardOffset／labelOffset
+   * 作為共同起點，確保既有備份與 v2.1.0 的資料不會跑位。
+   */
+  cardLayouts?: Partial<
+    Record<
+      FlowLayoutMode,
+      {
+        cards?: Partial<
+          Record<"inbound" | "outbound", { x: number; y: number }>
+        >;
+        label?: { x: number; y: number };
+      }
+    >
+  >;
   movements: Record<PeakKey, Movement>;
 };
 
@@ -258,8 +295,18 @@ export type QualityIssue = {
   };
 };
 
-export const VERSION = "v2.0.1";
+export const VERSION = "v2.1.1";
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.1",
+    date: "2026-08-22",
+    note: "全面檢查後的修正版：修正寬螢幕下拖曳圖卡位移量與滑鼠不成比例；修正拖到邊界後回拖會有一段沒有反應的死區；修正拖曳路口標籤會跳到畫面左上角；修正重新整理後「（平日）」「（假日）」被拆成兩個路口；修正各車種轉向量原本按 PCU 比例分攤，改為直接加總實際車輛數；修正批次 ZIP 沿用目前計畫的匯出項目；儲存空間寫滿時不再讓整頁變空白。",
+  },
+  {
+    version: "v2.1.0",
+    date: "2026-08-22",
+    note: "修正長時間拖曳圖卡導致分頁崩潰（拖曳中不再逐幀寫入儲存）；圖卡與路口標籤皆可逐一拖曳並移除 X／Y 數字輸入，且只看駛入／只看駛出／駛入＋駛出三種畫面各自保存版面；圖卡標題置中；只顯示駛入／駛出時箭頭改畫完整方向；報表匯出項目可依計畫勾選並存成範本；新手操作手冊全面改寫為零基礎導向，並提供 PDF 與 Word 版。",
+  },
   {
     version: "v2.0.1",
     date: "2026-08-21",
@@ -471,18 +518,9 @@ export function createDemoRecords(): TrafficRecord[] {
 export function normalizeIntersectionName(input: string): string {
   let value = input.normalize("NFKC").replace(/\.(xlsx?|xlsm)$/i, "");
   value = value.replace(/^\s*\d{4,}(?:[-_.]?T?\d+[-_.]?\d+)?\s*/i, "");
-  value = value.replace(
-    /^\s*T\d+[-_.]?\d+\s*(?:[-_.·｜|]\s*)?/i,
-    "",
-  );
-  value = value.replace(
-    /^\s*\d{1,3}[-_.]\d{1,3}\s*(?:[-_.·｜|]\s*)?/i,
-    "",
-  );
-  value = value.replace(
-    /[（(]\s*[三四五六七八九十\d]+叉路口\s*[）)]/gu,
-    "",
-  );
+  value = value.replace(/^\s*T\d+[-_.]?\d+\s*(?:[-_.·｜|]\s*)?/i, "");
+  value = value.replace(/^\s*\d{1,3}[-_.]\d{1,3}\s*(?:[-_.·｜|]\s*)?/i, "");
+  value = value.replace(/[（(]\s*[三四五六七八九十\d]+叉路口\s*[）)]/gu, "");
   value = value.replace(/[三四五六七八九十\d]+叉路口$/u, "");
   value = value.replace(/[【[（(]+/g, "").replace(/[】\]）)]+/g, "");
   value = value.replace(
@@ -535,11 +573,30 @@ export function totalMovement(
   peak: PeakKey,
   movementKey?: MovementKey,
   vehicle: VehicleKey = "all",
+  routes?: RouteFlow[],
 ) {
   const row = approach.movements[peak];
   if (vehicle !== "all") {
     const vehicleTotal = row.vehicle[vehicle] || 0;
     if (!movementKey) return vehicleTotal;
+    // 有逐條 OD 流向時，直接把該轉向的實際車輛數加總——這是精確值。
+    if (routes?.length) {
+      const matched = routes.filter(
+        (route) =>
+          route.fromApproachId === approach.id &&
+          route.movement === movementKey,
+      );
+      if (matched.length)
+        return Math.round(
+          matched.reduce(
+            (sum, route) =>
+              sum + Number(route.volumes[peak].vehicle[vehicle] || 0),
+            0,
+          ),
+        );
+    }
+    // 沒有 OD 流向的舊資料只能按比例推估。注意 left／through／right 在
+    // 有流向時是 PCU、沒有流向時是實際車輛數；這裡是後者，比例才成立。
     const overall = row.left + row.through + row.right || 1;
     return Math.round((vehicleTotal * row[movementKey]) / overall);
   }
@@ -822,13 +879,33 @@ function customVehicleId(label: string) {
 function vehicleFromHeader(label: string): VehicleDefinition | null {
   const normalized = label.normalize("NFKC").replace(/[\s\u3000]+/g, "");
   const matches = [
-    { pattern: /機踏車|機車|motorcycle|motorbike/i, id: "motorcycle", label: "機車", core: true },
-    { pattern: /小型車|小客車|小客|轎車|passengercar|lightvehicle/i, id: "car", label: "小型車", core: true },
+    {
+      pattern: /機踏車|機車|motorcycle|motorbike/i,
+      id: "motorcycle",
+      label: "機車",
+      core: true,
+    },
+    {
+      pattern: /小型車|小客車|小客|轎車|passengercar|lightvehicle/i,
+      id: "car",
+      label: "小型車",
+      core: true,
+    },
     { pattern: /大貨車|大卡車|貨車|truck/i, label: "大貨車" },
     { pattern: /大客車|客運車|公車|bus/i, label: "大客車" },
     { pattern: /聯結車|聯結|貨櫃車|曳引車|trailer/i, label: "聯結車" },
-    { pattern: /大型車|heavyvehicle/i, id: "heavy", label: "大型車", core: true },
-    { pattern: /特種車|特車|specialvehicle/i, id: "special", label: "特種車", core: true },
+    {
+      pattern: /大型車|heavyvehicle/i,
+      id: "heavy",
+      label: "大型車",
+      core: true,
+    },
+    {
+      pattern: /特種車|特車|specialvehicle/i,
+      id: "special",
+      label: "特種車",
+      core: true,
+    },
   ].find(function (item) {
     return item.pattern.test(normalized);
   });
@@ -847,7 +924,11 @@ function detectedVehicleHeaders(workbook: XLSX.WorkBook) {
     const sheet = workbook.Sheets[sheetName];
     if (!sheet?.["!ref"]) return;
     const range = XLSX.utils.decode_range(sheet["!ref"]!);
-    for (let row = range.s.r; row <= Math.min(range.e.r, range.s.r + 20); row++) {
+    for (
+      let row = range.s.r;
+      row <= Math.min(range.e.r, range.s.r + 20);
+      row++
+    ) {
       for (let col = range.s.c; col <= range.e.c; col++) {
         const raw = sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
         if (raw == null) continue;
@@ -1017,7 +1098,8 @@ export async function inspectWorkbook(
   const dateCell =
     cells.find(function (item) {
       return (
-        (!options?.trafficSheets || options.trafficSheets.includes(item.sheet)) &&
+        (!options?.trafficSheets ||
+          options.trafficSheets.includes(item.sheet)) &&
         Boolean(rocDate(item.text))
       );
     }) ||
@@ -1112,7 +1194,9 @@ export async function inspectWorkbook(
         });
       }
       const distinctHeaderVehicles = new Set(
-        candidates.map(function (candidate) { return candidate.headerVehicle.id; }),
+        candidates.map(function (candidate) {
+          return candidate.headerVehicle.id;
+        }),
       ).size;
       const usePositionalVehicles =
         candidates.length >= 8 &&
@@ -1187,11 +1271,7 @@ export async function inspectWorkbook(
           column.approach,
           column.destination,
         ) ||
-        defaultMovementForOd(
-          column.approach,
-          column.destination,
-          originOrder,
-        );
+        defaultMovementForOd(column.approach, column.destination, originOrder);
     }
   });
   const intervalRows = [...intervalMap.values()].sort(function (a, b) {
@@ -1237,13 +1317,12 @@ export async function inspectWorkbook(
   const weights = detectedColumns.map(function (column) {
     return pceFactor(pce, column.vehicle, column.movement || "through");
   });
-  const baseRole: ImportPreview["role"] = /^T\d+[-_.]?\d+\.(xls|xlsx|xlsm)$/i.test(
-    file.name.normalize("NFKC"),
-  )
-    ? "參考計算檔"
-    : intervalRows.length
-      ? "原始交通量"
-      : "無法辨識";
+  const baseRole: ImportPreview["role"] =
+    /^T\d+[-_.]?\d+\.(xls|xlsx|xlsm)$/i.test(file.name.normalize("NFKC"))
+      ? "參考計算檔"
+      : intervalRows.length
+        ? "原始交通量"
+        : "無法辨識";
   const warnings: string[] = [];
   if (!buckets.log.length)
     warnings.push("未找到監測日誌；道路名稱與幾何仍可人工補正。");
@@ -1332,18 +1411,8 @@ export async function inspectWorkbook(
       minutes: intervalRows.length * intervalMinutes,
       values: surveyValues,
     },
-    am: rollingPeak(
-      intervalRows,
-      [5 * 60, 12 * 60],
-      intervalMinutes,
-      weights,
-    ),
-    pm: rollingPeak(
-      intervalRows,
-      [12 * 60, 23 * 60],
-      intervalMinutes,
-      weights,
-    ),
+    am: rollingPeak(intervalRows, [5 * 60, 12 * 60], intervalMinutes, weights),
+    pm: rollingPeak(intervalRows, [12 * 60, 23 * 60], intervalMinutes, weights),
     date: rocDate(dateText),
     dateSource: dateCell
       ? { sheet: dateCell.sheet, cell: dateCell.cell, raw: dateCell.text }

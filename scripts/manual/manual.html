@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>Turning Traffic 新手操作手冊 v2.1.1</title>
+<style>
+  :root{
+    --navy:#17353E; --teal:#087F75; --orange:#C77A18; --ink:#17353E;
+    --muted:#61777D; --line:#DCE6E3; --wash:#EFF6F4;
+  }
+  @page{ size:A4; margin:20mm 16mm 18mm; }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; color:var(--ink);
+    font-family:"Noto Sans CJK TC","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+    font-size:10.5pt; line-height:1.75; -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,h4{ color:var(--navy); margin:0; }
+  p{ margin:0 0 9pt; }
+  strong{ color:var(--navy); }
+
+  .cover{ text-align:center; padding-top:12mm; page-break-after:always; }
+  .cover .kicker{ color:var(--teal); font-size:10pt; font-weight:800; letter-spacing:.22em; }
+  .cover h1{ font-size:27pt; margin:8mm 0 2mm; letter-spacing:.02em; }
+  .cover .sysname{ font-size:15pt; color:var(--navy); font-weight:700; margin:0 0 5mm; }
+  .cover h2{ font-size:16pt; color:var(--teal); margin:0 0 6mm; }
+  .cover .lede{ color:var(--muted); font-size:11pt; margin:0 0 8mm; }
+  .cover table,.cover table th,.cover table td{ text-align:left; }
+  .cover .stamp{ color:var(--muted); font-size:10pt; margin-top:7mm; }
+
+  h2.sec{
+    font-size:15pt; margin:11mm 0 4mm; padding-bottom:2.5mm;
+    border-bottom:2px solid var(--teal); page-break-after:avoid;
+  }
+  h2.sec .n{ color:var(--teal); margin-right:3mm; }
+  h3.sub{ font-size:11.5pt; margin:6mm 0 2.5mm; color:var(--teal); page-break-after:avoid; }
+
+  table{ width:100%; border-collapse:collapse; margin:0 0 5mm; font-size:9.5pt; page-break-inside:auto; }
+  thead{ display:table-header-group; }
+  tr{ page-break-inside:avoid; }
+  th{ background:var(--teal); color:#fff; font-weight:800; text-align:left; padding:2.6mm 3mm; border:1px solid var(--teal); }
+  td{ border:1px solid var(--line); padding:2.6mm 3mm; vertical-align:top; }
+  tbody tr:nth-child(even) td{ background:#F6FAF9; }
+  td.k{ font-weight:800; color:var(--navy); white-space:nowrap; }
+
+  .box{ padding:3.5mm 4mm; margin:0 0 5mm; border-radius:2mm; page-break-inside:avoid; }
+  .box .t{ display:block; font-weight:800; margin-bottom:1.5mm; }
+  .box p:last-child{ margin-bottom:0; }
+  .box.info{ background:#EAF4F1; border-left:3px solid var(--teal); }
+  .box.info .t{ color:var(--teal); }
+  .box.warn{ background:#FDF5E8; border-left:3px solid var(--orange); }
+  .box.warn .t{ color:#9A5E0E; }
+  .box.new{ background:#EAF4F1; border:1px solid var(--teal); border-left:3px solid var(--teal); }
+  .box.new .t{ color:var(--teal); }
+
+  .step{ margin:0 0 4mm; page-break-inside:avoid; }
+  .step .h{ color:var(--teal); font-weight:800; font-size:10.5pt; }
+  .step p{ margin:1mm 0 0 6mm; }
+
+  ul,ol{ margin:0 0 5mm; padding-left:6mm; }
+  li{ margin-bottom:1.6mm; }
+  .check li{ list-style:none; margin-left:-4mm; }
+  .check li::before{ content:"☐"; margin-right:2.5mm; color:var(--teal); font-weight:800; }
+
+  code{ background:var(--wash); border:1px solid var(--line); border-radius:1mm; padding:0 1.2mm; font-size:9.5pt; }
+  .btn{ display:inline-block; background:var(--wash); border:1px solid var(--line);
+        border-radius:1.4mm; padding:0 1.6mm; font-weight:700; color:var(--navy); font-size:9.5pt; }
+  .pb{ page-break-before:always; }
+</style>
+</head>
+<body>
+
+<!-- ══════════ 封面 ══════════ -->
+<section class="cover">
+  <div class="kicker">BEGINNER GUIDE</div>
+  <h1>Turning Traffic</h1>
+  <div class="sysname">路口尖峰轉向交通量分析系統</div>
+  <h2>新手操作手冊</h2>
+  <p class="lede">完全沒有交通背景，也能從零完成匯入、核對、畫轉向圖、勾選匯出與跨電腦備份</p>
+
+  <div class="box info" style="text-align:left;max-width:150mm;margin:0 auto 7mm;">
+    <span class="t">這本手冊適合誰？</span>
+    <p>第一次接觸路口轉向交通量調查、只會基本 Excel 操作，或剛接手每季資料整理的人。您<strong>不需要</strong>先懂交通工程，也不需要背公式——照順序操作即可。手冊裡出現的每一個專有名詞，都會先用白話解釋一次。</p>
+  </div>
+
+  <table style="max-width:150mm;margin:0 auto;">
+    <thead><tr><th style="width:44%">您想完成的事</th><th>手冊先看哪裡</th></tr></thead>
+    <tbody>
+      <tr><td class="k">完全沒概念，先看懂在做什麼</td><td>第 1～3 章：用途、名詞、畫面導覽</td></tr>
+      <tr><td class="k">第一次使用，想照著做一輪</td><td>第 4～6 章：快速流程、建計畫、匯入</td></tr>
+      <tr><td class="k">設定車種與當量係數</td><td>第 7 章</td></tr>
+      <tr><td class="k">處理警示、統一路口名稱</td><td>第 8～9 章</td></tr>
+      <tr><td class="k">調整轉向圖版面（拖曳圖卡）</td><td>第 10 章</td></tr>
+      <tr><td class="k">看懂轉向圖上的數字與箭頭</td><td>第 11 章</td></tr>
+      <tr><td class="k">自己決定報表要匯出哪些內容</td><td>第 13 章（本版新增）</td></tr>
+      <tr><td class="k">定稿、換電腦、卡住了</td><td>第 15～19 章</td></tr>
+    </tbody>
+  </table>
+
+  <p class="stamp">系統版本：v2.1.1　更新日期：2026-08-22</p>
+</section>
+
+<!-- ══════════ 1 ══════════ -->
+<h2 class="sec"><span class="n">1.</span>先用一句話了解這個系統</h2>
+
+<div class="box info">
+  <span class="t">系統的用途</span>
+  <p>把路口轉向交通量調查的原始 Excel，整理成可以長期保存、比較與自動繪圖的資料庫。它會自動找出上午與下午的<strong>尖峰小時</strong>，把各車種換算成 PCU，畫出正式的<strong>路口轉向圖</strong>，並輸出可編輯的 Excel、PDF 與圖檔。</p>
+</div>
+
+<h3 class="sub">什麼是「路口轉向交通量調查」？</h3>
+<p>就是派人站在一個路口，把「每 15 分鐘之內，從<strong>哪一條路</strong>開進路口的車，分別<strong>左轉、直行、還是右轉</strong>，各有幾輛機車、幾輛小型車、幾輛大車」一格一格記下來。記滿一整天之後整理成 Excel，那份 Excel 就是您要匯入本系統的檔案。</p>
+<p>因為每一筆都同時記錄了「從哪裡來」與「往哪裡去」，所以可以算出任兩條路之間的車流量——這就是後面會一直提到的 <strong>OD</strong>。</p>
+
+<h3 class="sub">系統不會做的事</h3>
+<ul>
+  <li>不會判斷路口的服務水準好壞，也不做號誌時制或容量計算。系統的話：<em>「本系統只彙整尖峰轉向流量。」</em></li>
+  <li>不會自己補上缺少的資料。少了就是少了，系統只會在品質檢查列出來提醒您。</li>
+  <li>不會自動決定當量係數。四大類有預設值，其他車種一律先給 1.0，由您確認。</li>
+  <li>不會因為您在圖上調整角度或拖曳圖卡，就改動任何交通量數字。</li>
+</ul>
+
+<div class="box warn">
+  <span class="t">最重要的一句話</span>
+  <p><strong>道路角度決定圖怎麼畫；原始支線代碼與 OD 流向決定數據怎麼加總。</strong>調整角度或圖卡位置，不會交換 A、B、C 的資料，也不會改變交通量。</p>
+</div>
+
+<!-- ══════════ 2 ══════════ -->
+<h2 class="sec"><span class="n">2.</span>零基礎也看得懂的 10 個名詞</h2>
+
+<table>
+  <thead><tr><th style="width:22%">名詞</th><th>白話解釋</th><th style="width:19%">常見單位</th></tr></thead>
+  <tbody>
+    <tr><td class="k">路口／調查點</td><td>一個被調查的路口。系統用<strong>站號</strong>（例如 <code>T15-03</code>）和<strong>路口名稱</strong>來識別。</td><td>—</td></tr>
+    <tr><td class="k">支線</td><td>連進這個路口的每一條路。系統依原始檔給的代碼叫它們 <strong>A、B、C…最多到 G</strong>（也就是最多七叉路口）。代碼是資料的身分證，改名稱或改角度都不會換掉它。</td><td>—</td></tr>
+    <tr><td class="k">左轉／直行／右轉</td><td>車子從某一條支線<strong>開進路口之後</strong>的前進方向。多岔路口有時不好判斷，系統會先建議，再請您確認。</td><td>—</td></tr>
+    <tr><td class="k">OD</td><td>Origin（起點）到 Destination（終點）的縮寫，也就是「從哪一條支線出發，最後開進哪一條支線」。</td><td>—</td></tr>
+    <tr><td class="k">駛出支線</td><td>車輛<strong>從這條支線出發</strong>，朝路口中央開。畫面上寫「駛出路口A」。</td><td>PCU/hr</td></tr>
+    <tr><td class="k">駛入支線</td><td>車輛穿過路口中央後，<strong>最後開進這條支線</strong>。畫面上寫「駛入路口A」。</td><td>PCU/hr</td></tr>
+    <tr><td class="k">尖峰小時</td><td>一天當中車最多的那連續 60 分鐘。系統用連續 4 個 15 分鐘區間去找，上午（AM）與下午（PM）分開找。</td><td>PCU/hr、輛/hr</td></tr>
+    <tr><td class="k">PCU<br />（當量交通量）</td><td>把不同大小的車換算成「相當於幾輛小客車」。一輛大車占的路面與造成的影響比機車大很多，直接相加會失真，所以先換算再比較。</td><td>PCU/hr</td></tr>
+    <tr><td class="k">當量係數</td><td>換算 PCU 用的倍數。機車直行 0.3，代表「約 3 輛機車直行 ≈ 1 輛小客車直行」。同一種車左轉、直行、右轉的係數不一樣，因為轉彎比較占時間。</td><td>倍數（無單位）</td></tr>
+    <tr><td class="k">守恆</td><td>所有已對應 OD 的<strong>駛出總量</strong>應該等於<strong>駛入總量</strong>——車開出去總得開到某一條路上。差很多就代表資料有問題。</td><td>PCU/hr</td></tr>
+  </tbody>
+</table>
+
+<div class="box warn">
+  <span class="t">最容易搞混的兩件事</span>
+  <p><strong>一、輛數 ≠ PCU。</strong>10 輛大型車，實際車輛數就是 10 輛；但左轉當量是 2.3，換算後就是 23 PCU。兩個數字都對，只是意義不同——輛數回答「有幾台車」，PCU 回答「造成多大的交通負荷」。系統一律分欄顯示，請不要互相混用。</p>
+  <p style="margin-top:2mm"><strong>二、「駛出路口A」不是「離開路口」。</strong>它是「以 A 為起點」的車流；「駛入路口A」則是「以 A 為終點」的車流。同一筆車流同時是某條路的駛出、另一條路的駛入。</p>
+</div>
+
+<!-- ══════════ 3 ══════════ -->
+<h2 class="sec"><span class="n">3.</span>認識畫面：它分成哪幾塊</h2>
+
+<p>畫面左邊是功能選單，共 17 項、分成三組；右上角是<strong>計畫</strong>與<strong>季度</strong>的下拉選單，它們決定畫面上所有數字的範圍。</p>
+
+<table>
+  <thead><tr><th style="width:20%">分組</th><th style="width:30%">功能</th><th>做什麼</th></tr></thead>
+  <tbody>
+    <tr><td class="k" rowspan="7">資料管理</td><td class="k">總覽儀表板</td><td>本季幾個路口、哪個路口最忙、比上季增減、幾項待確認。</td></tr>
+    <tr><td class="k">多計畫管理</td><td>建立與切換計畫。</td></tr>
+    <tr><td class="k">季度批次匯入</td><td>指定年度季度 → 放入 Excel → 確認辨識結果 → 寫入。</td></tr>
+    <tr><td class="k">資料品質檢查</td><td>列出缺值、尖峰時段異常、車種統計異常等待確認項目。</td></tr>
+    <tr><td class="k">路口名稱管理</td><td>把不同季度、不同檔名的同一個路口統一成一個標準名稱。</td></tr>
+    <tr><td class="k">車種轉向當量</td><td>設定各車種左轉／直行／右轉的當量係數。</td></tr>
+    <tr><td class="k">道路與流向管理</td><td>調整支線名稱、角度，確認 OD 的左直右分類，拖曳圖卡版面。</td></tr>
+    <tr><td class="k" rowspan="7">分析與圖表</td><td class="k">路口轉向圖</td><td>正式成果圖：流量卡＋跨路口箭線。</td></tr>
+    <tr><td class="k">車種組成分析</td><td>各車種的實際車輛數與比例（不套 PCU）。</td></tr>
+    <tr><td class="k">各路口駛入／駛出流量</td><td>每條支線的全日與 AM／PM 駛入、駛出量。</td></tr>
+    <tr><td class="k">跨計畫／多路口比較</td><td>最多 4 個計畫並列比較。</td></tr>
+    <tr><td class="k">歷季趨勢比較</td><td>同一路口跨季度的尖峰流量折線圖。</td></tr>
+    <tr><td class="k">流量核對工作台</td><td>逐筆展開「這個數字是怎麼算出來的」，含原始儲存格。</td></tr>
+    <tr><td class="k">轉向進階分析</td><td>OD 矩陣、支線流量平衡、連續 60 分鐘候選排行。</td></tr>
+    <tr><td class="k" rowspan="3">輸出與維護</td><td class="k">報表與批次輸出</td><td>勾選要匯出的分析項目，輸出 Excel、PDF、PNG、ZIP。</td></tr>
+    <tr><td class="k">備份、還原與版本</td><td>下載完整備份、在另一台電腦還原、看更新紀錄。</td></tr>
+    <tr><td class="k">新手操作手冊</td><td>網站內建的簡要說明，並可下載本手冊。</td></tr>
+  </tbody>
+</table>
+
+<div class="box info">
+  <span class="t">數字看起來不對？先看右上角</span>
+  <p>大部分「數字怪怪的」都是因為右上角選到了別的計畫或別的季度，或是分頁內的「路口」「尖峰」選錯了。發現不對時，第一件事是往上看目前選到什麼，而不是懷疑資料。</p>
+</div>
+
+<!-- ══════════ 4 ══════════ -->
+<h2 class="sec"><span class="n">4.</span>第一次使用：8 個步驟走一輪</h2>
+
+<div class="step"><div class="h">步驟 1｜建立計畫</div>
+  <p>到 <span class="btn">多計畫管理</span>，填計畫代碼（例如 <code>115-A01</code>）與計畫名稱，按 <span class="btn">＋ 建立計畫</span>。不同委託案請分開建立；同一案件的各季度、各路口都放在同一個計畫裡。</p></div>
+<div class="step"><div class="h">步驟 2｜指定年度與季度</div>
+  <p>到 <span class="btn">季度批次匯入</span>，先填「調查年度（民國年）」例如 <code>115</code>，再選季度。畫面會顯示 <code>115 年第 2 季（115Q2）</code>。<strong>沒選之前不能選檔案</strong>，按鈕會寫「請先選年度與季度」。</p></div>
+<div class="step"><div class="h">步驟 3｜放入原始 Excel</div>
+  <p>把檔案拖進虛線框，或按 <span class="btn">選擇檔案</span>，可一次多選。支援 .xls／.xlsx／.xlsm，照片工作表會自動忽略。</p></div>
+<div class="step"><div class="h">步驟 4｜看懂匯入辨識結果再寫入</div>
+  <p>系統只是<strong>預覽</strong>，還沒寫入。逐列確認檔案角色、站號名稱、調查日期、AM／PM 尖峰值；若偵測到新車種，順手在上方的車種對應表決定要獨立分析還是併入標準類別。都沒問題才按 <span class="btn">確認寫入 115Q2</span>。</p></div>
+<div class="step"><div class="h">步驟 5｜先看資料品質檢查</div>
+  <p>到 <span class="btn">資料品質檢查</span>，把每一項按「查看原因」看過。警示不一定是錯，但一定要知道原因再往下做。</p></div>
+<div class="step"><div class="h">步驟 6｜核對道路角度與流向</div>
+  <p>到 <span class="btn">道路與流向管理</span>，對照原始簡圖把每條支線的角度調對，並展開「檢查起點 → 終點流向」確認左／直／右分類。多岔路口一定要人工看過。</p></div>
+<div class="step"><div class="h">步驟 7｜產生轉向圖並整理版面</div>
+  <p>到 <span class="btn">路口轉向圖</span>，選好尖峰與版型。圖卡或路口標籤擋到東西時，<strong>直接用滑鼠拖到想要的位置</strong>即可。</p></div>
+<div class="step"><div class="h">步驟 8｜勾選報表項目、匯出、備份</div>
+  <p>到 <span class="btn">報表與批次輸出</span>，先勾選這個計畫要的分析項目（可存成範本），再下載 Excel／PDF／PNG。最後到 <span class="btn">備份、還原與版本</span> 下載完整備份。</p></div>
+
+<div class="box info">
+  <span class="t">最安全的操作順序</span>
+  <p>建計畫 → 指定年季 → 匯入預覽 → 品質檢查 → 名稱與角度 → 流向確認 → 轉向圖 → 勾選匯出 → <strong>備份</strong>。<br />不要一收到檔案就直接鎖定成果，也不要跳過備份。</p>
+</div>
+
+<!-- ══════════ 5 ══════════ -->
+<h2 class="sec"><span class="n">5.</span>建立與管理計畫</h2>
+
+<table>
+  <thead><tr><th style="width:24%">欄位</th><th>說明</th></tr></thead>
+  <tbody>
+    <tr><td class="k">計畫代碼</td><td>短代號，會出現在匯出檔名上，例如 <code>115-A01</code>。</td></tr>
+    <tr><td class="k">計畫名稱</td><td><strong>必填</strong>。沒填會提示「請先輸入計畫名稱。」</td></tr>
+    <tr><td class="k">委託單位</td><td>選填，顯示在計畫卡片上。</td></tr>
+    <tr><td class="k">備註</td><td>選填。</td></tr>
+  </tbody>
+</table>
+
+<ul>
+  <li>點卡片本體即可切換到該計畫；已有資料會跳到總覽儀表板，還沒有資料則直接帶您去匯入。</li>
+  <li>按卡片上的 <span class="btn">刪除</span> 會<strong>連同該計畫的全部季度與路口一起刪除</strong>，且無法復原；系統會先跳出確認並提醒先匯出備份。</li>
+  <li>每個計畫各自保有自己的季度、路口、名稱對應與報表勾選設定。</li>
+</ul>
+
+<!-- ══════════ 6 ══════════ -->
+<h2 class="sec pb"><span class="n">6.</span>匯入季度資料：看懂「匯入辨識結果」</h2>
+
+<h3 class="sub">調查檔格式範本</h3>
+<p>系統內建三種常見版型，會自動判斷用哪一種；成功預覽過的實際版型還會被記住（「已記住的實際調查版型」），下次同樣廠商的檔案就更好認。</p>
+<table>
+  <thead><tr><th style="width:32%">格式範本</th><th>適用檔案</th></tr></thead>
+  <tbody>
+    <tr><td class="k">平／假日全日整點轉向表</td><td>同一活頁簿含平日、假日工作表，四車種 × 左直右的整點流量。</td></tr>
+    <tr><td class="k">一般語意轉向表</td><td>依時間欄、來源支線、左直右或 OD 目的地與車種欄名辨識，不依固定欄號。</td></tr>
+    <tr><td class="k">全日路段車種表（非轉向）</td><td>只有路段車種與行車方向、沒有左直右的檔案。系統會讀，但<strong>不會誤建路口轉向成果</strong>。</td></tr>
+  </tbody>
+</table>
+
+<h3 class="sub">預覽表每一欄在確認什麼</h3>
+<table>
+  <thead><tr><th style="width:22%">欄位</th><th>您要確認什麼</th></tr></thead>
+  <tbody>
+    <tr><td class="k">角色</td><td>系統把這個檔案認成什麼：<strong>原始交通量</strong>（會寫入）、<strong>參考計算檔</strong>（只拿來驗證）、<strong>非路口轉向</strong>、<strong>無法辨識</strong>。只有「原始交通量」會被寫進資料庫。</td></tr>
+    <tr><td class="k">版本／差異處理</td><td>同計畫＋同季度＋同站號已經有資料時，這裡會顯示「已存在第 N 版」與 AM／PM 的前後差值，並讓您選擇處理方式（見下方）。</td></tr>
+    <tr><td class="k">站號／名稱</td><td>站號、路口名稱、調查日期，以及日期是從哪個工作表哪一格讀到的。日期沒讀到會寫「日期辨識未成功」。</td></tr>
+    <tr><td class="k">名稱處理</td><td>系統能唯一判斷時會自動「併入」既有路口或「建立新路口」；無法判斷時才會請您選擇，也可以選「取消建置此檔」。</td></tr>
+    <tr><td class="k">AM／PM Peak</td><td>系統找到的尖峰小時流量（PCU/hr）。與人工計算差很多時，先不要寫入。</td></tr>
+    <tr><td class="k">檢查</td><td>該檔案的提醒訊息，例如套用了哪個格式範本、是否用了舊版 .xls 相容模式。</td></tr>
+  </tbody>
+</table>
+
+<div class="box warn">
+  <span class="t">重複匯入同一季度時的三個選項</span>
+  <p><strong>保留舊版並建立新版</strong>（預設）與<strong>覆蓋目前版（仍留還原點）</strong>：兩者都會用新檔案的內容取代目前這一筆，差別在於留在「版本差異與還原」裡的紀錄理由不同——都可以在核對工作台把舊版還原回來。<strong>略過此檔</strong>則完全不動既有資料。<br />不確定時請先到「備份、還原與版本」下載一份備份再匯入。</p>
+</div>
+
+<h3 class="sub">尖峰小時是怎麼找出來的</h3>
+<table>
+  <thead><tr><th style="width:30%">規則</th><th>說明</th></tr></thead>
+  <tbody>
+    <tr><td class="k">連續 60 分鐘</td><td>15 分鐘資料取連續 4 個區間；中間有缺格就不會被當成有效的一小時。</td></tr>
+    <tr><td class="k">AM／PM 分開搜尋</td><td>上午找 05:00～12:00 之間開始的一小時，下午找 12:00～23:00。超出範圍會在品質檢查提出警示。</td></tr>
+    <tr><td class="k">以 PCU 排名</td><td>比較的是換算後的 PCU，不是原始輛數。所以<strong>改當量係數有可能改變選到哪一個小時</strong>。</td></tr>
+    <tr><td class="k">同值取較早</td><td>兩個小時流量一樣時，取比較早的那一個，結果可重現。</td></tr>
+  </tbody>
+</table>
+
+<!-- ══════════ 7 ══════════ -->
+<h2 class="sec"><span class="n">7.</span>車種與轉向當量係數</h2>
+
+<h3 class="sub">四大類的預設值（教育訓練簡報第 15 頁）</h3>
+<table>
+  <thead><tr><th style="width:28%">車種</th><th style="width:24%">左轉</th><th style="width:24%">直行</th><th>右轉</th></tr></thead>
+  <tbody>
+    <tr><td class="k">機車</td><td>0.5</td><td>0.3</td><td>0.4</td></tr>
+    <tr><td class="k">小型車</td><td>1.5</td><td>1</td><td>1.3</td></tr>
+    <tr><td class="k">大型車</td><td>2.3</td><td>1.5</td><td>2</td></tr>
+    <tr><td class="k">特種車</td><td>2.5</td><td>2</td><td>2.3</td></tr>
+  </tbody>
+</table>
+<p>轉彎比直行占用更多路口時間，所以同一種車左轉的係數最大、直行最小。這組數字來自您提供的《交通流量教育訓練1060310》簡報，原簡報未載明引用來源，因此系統把它列為<strong>可調整的專案預設</strong>，而不是不能動的法規值。按 <span class="btn">恢復預設值</span> 只會還原這四類，不會動到您自己設定的新增車種。</p>
+
+<div class="box new">
+  <span class="t">簡報沒有的車種，一律預設 1.0</span>
+  <p>簡報只提供上面四類的參考值。因此匯入時若偵測到<strong>大貨車、大客車、聯結車</strong>等其他車種，系統<strong>不會自行推估</strong>，一律先以 <strong>1.0</strong> 建立、標示為「新增車種」，並讓匯入流程照常完成。</p>
+  <p style="margin-top:2mm">預設 1.0 的意思是「暫時當成和小客車直行一樣」。這只是一個安全的起點，<strong>不是建議值</strong>；正式成果前請到 <span class="btn">車種轉向當量</span> 的表格逐一改成本計畫採用的數值——那張表<strong>每一列、每一格都可以編輯</strong>，包含四大類。</p>
+</div>
+
+<h3 class="sub">獨立分析，還是併入標準類別？</h3>
+<p>在匯入預覽的車種對應表，每一個原始車種都可以選：</p>
+<ul>
+  <li><strong>獨立分析</strong>（預設）：大貨車就是大貨車，在圖表與報表裡單獨一欄，用它自己的當量係數。</li>
+  <li><strong>併入：機車／小型車／大型／大客車／特種／聯結車</strong>：合併計算，改用目標類別的當量係數。</li>
+</ul>
+<p>整組決定可以在 <span class="btn">車種轉向當量</span> 按 <span class="btn">保存目前方案</span> 存成「車種歸類方案」，下次遇到同一家廠商的檔案直接 <span class="btn">套用</span>。</p>
+
+<div class="box warn">
+  <span class="t">不要為了讓數字好看而改係數</span>
+  <p>係數一改，尖峰小時的判定、所有 PCU、轉向圖與匯出報表都會跟著變。修改前請確認計畫採用的依據，並讓同一計畫的每一季、以及接手的同事都用同一組係數。每一筆路口都會保存匯入當下的係數快照，日後可以追溯。</p>
+</div>
+
+<!-- ══════════ 8 ══════════ -->
+<h2 class="sec"><span class="n">8.</span>資料品質檢查</h2>
+
+<p>系統只檢查<strong>可以客觀判定</strong>的問題；實際調查到的方向流量高低（某個方向特別多或特別少）不算異常。</p>
+<table>
+  <thead><tr><th style="width:24%">類別</th><th>什麼情況會被列出來</th></tr></thead>
+  <tbody>
+    <tr><td class="k">缺值</td><td>調查日期讀不到、支線總量不是數字、舊版資料沒有 OD 流向。</td></tr>
+    <tr><td class="k">總數不一致</td><td>保留的檢查類別。</td></tr>
+    <tr><td class="k">尖峰時段異常</td><td>AM 尖峰不在 05:00～12:00、或 PM 尖峰不在 12:00～23:00。可能是調查時間特殊，也可能是時間欄讀錯。</td></tr>
+    <tr><td class="k">車種統計異常</td><td>左直右的實際車輛合計與四車種分類合計差距超過 5 輛或 5%。<strong>只比較同單位（輛/hr）</strong>；一邊是 PCU、一邊是輛時系統不會比較。</td></tr>
+  </tbody>
+</table>
+<p>每一項都有 <span class="btn">查看原因</span>，右邊會列出兩邊的數值、差異、單位與判定前提。看完之後若確定是原始檔的欄位對應問題，可直接按「重新匯入並核對欄位」。</p>
+
+<!-- ══════════ 9 ══════════ -->
+<h2 class="sec"><span class="n">9.</span>路口名稱管理</h2>
+<p>同一個路口在不同季度可能寫成「台1－路科一路口」「台1-路科一路口(115Q2)」等等。系統會自動排除全半形、括號、站號與版本字尾把它們併在一起，但<strong>最後的標準名稱由您決定</strong>。</p>
+<p>這一頁只有一張表：左邊是系統認定的「標準路口」，右邊是可編輯的「標準名稱（一次修改、各季同步）」。改一次，<strong>所有季度</strong>的同一路口都會跟著改——這正是歷季趨勢比較能對得起來的關鍵。</p>
+
+<div class="box info">
+  <span class="t">為什麼有時候匯入會問我「新增還是併入」？</span>
+  <p>系統能唯一判斷時會自動處理，不會打擾您。只有在名稱相似到無法確定是不是同一個路口時，匯入預覽才會請您選「建立新路口 / 併入某某路口 / 取消建置此檔」。</p>
+</div>
+
+<!-- ══════════ 10 ══════════ -->
+<h2 class="sec pb"><span class="n">10.</span>道路與流向管理（含拖曳版面）</h2>
+
+<h3 class="sub">角度怎麼看</h3>
+<table>
+  <thead><tr><th style="width:26%">角度</th><th style="width:26%">畫面位置</th><th>自動方位</th></tr></thead>
+  <tbody>
+    <tr><td class="k">−90°（或 270°）</td><td>上方</td><td>北</td></tr>
+    <tr><td class="k">0°</td><td>右方</td><td>東</td></tr>
+    <tr><td class="k">90°</td><td>下方</td><td>南</td></tr>
+    <tr><td class="k">180°</td><td>左方</td><td>西</td></tr>
+  </tbody>
+</table>
+<p>每條支線可以改「道路支線」名稱與「角度」；方位是系統依角度自動算的，不用手動填。支線最少 3 條、最多 7 條。<strong>改名稱或改角度都不會改變原始資料綁定</strong>——每條支線旁邊的灰色小標籤就是它的原始代碼。</p>
+
+<div class="box new">
+  <span class="t">本版變更：圖卡與路口標籤改成純拖曳</span>
+  <p>舊版要在這裡輸入「左右 X」「上下 Y」兩個數字來移動數據卡，現在<strong>已經取消那兩個輸入欄</strong>，改成直接用滑鼠拖：</p>
+  <p style="margin-top:2mm">
+    ・在轉向圖或「圖卡排版預覽」上，<strong>按住任何一張數據卡拖到想要的位置</strong>即可。<br />
+    ・同一條支線的「駛入卡」與「駛出卡」是<strong>兩張獨立的卡</strong>，可以分別擺放，不會連動。<br />
+    ・「路口A」這類<strong>路口標籤也可以拖曳</strong>。<br />
+    ・<strong>放開滑鼠才會存檔</strong>；拖曳過程完全不寫入，所以拖多久都不會拖慢網頁。<br />
+    ・單一支線要復原按「還原這條支線」；整個路口要復原按 <span class="btn">重設所有圖卡位置</span>。<br />
+    ・調整後的位置會<strong>同步到同一路口的其他季度</strong>，不用每季重排。
+  </p>
+  <p style="margin-top:2mm"><strong>三種畫面各自保存版面。</strong>「只看駛入」「只看駛出」「駛入＋駛出」需要的排法本來就不一樣（駛入＋駛出時每條支線有兩張卡，只看一邊時只有一張），所以每一種畫面各記自己的一組位置：您可以在只看駛入時把某張卡擺左邊、在駛入＋駛出時把它擺右邊，兩者互不干擾。某個畫面還沒調整過時會沿用共同的起點位置。<span class="btn">重設所有圖卡位置（全部模式）</span> 會一次清掉三種畫面的設定。</p>
+</div>
+
+<div class="box warn">
+  <span class="t">如果您用的是舊版，拖久了整頁變空白</span>
+  <p>舊版在每一次滑鼠移動都會存一次檔，拖久了會把瀏覽器的儲存空間撐爆，畫面就變成「This page couldn't load」，之後只要再碰圖卡就會再壞一次。v2.1.0 已修正：同樣的拖曳動作，存檔次數從兩百多次降到 1 次。遇過這個狀況的話，更新到 v2.1.0 後即可正常使用。</p>
+</div>
+
+<h3 class="sub">確認起點 → 終點的左／直／右分類</h3>
+<p>展開「檢查起點 → 終點流向」，可以看到每一組 OD 的起點、終點、轉向分類與 AM／PM 流量。系統會先依幾何提出建議，但<strong>多岔路口一定要人工看過</strong>：一旦您手動改過任何一列，這個路口就會標記為「人工確認分類」，之後調整角度也不會被系統覆蓋掉。</p>
+<p>畫面上會標示目前採用哪一種分類方式：參考計算檔的既有分法、人工確認分類，或系統幾何建議。</p>
+
+<!-- ══════════ 11 ══════════ -->
+<h2 class="sec"><span class="n">11.</span>路口轉向圖怎麼看</h2>
+
+<h3 class="sub">工具列</h3>
+<table>
+  <thead><tr><th style="width:26%">控制</th><th>選項與用途</th></tr></thead>
+  <tbody>
+    <tr><td class="k">資料季度／路口</td><td>選要畫哪一季、哪一個路口。</td></tr>
+    <tr><td class="k">尖峰</td><td><strong>AM Peak</strong>／<strong>PM Peak</strong>。</td></tr>
+    <tr><td class="k">版型</td><td><strong>正式版</strong>（完整跨路口箭線，交件用）／<strong>標準版</strong>／<strong>簡潔版</strong>。</td></tr>
+    <tr><td class="k">箭線</td><td><strong>全部方向</strong>：畫出所有 OD 箭線。<strong>單一方向聚焦</strong>：只看某一條支線，旁邊會多出「聚焦支線」選單。</td></tr>
+    <tr><td class="k">藍框流量顯示</td><td><strong>駛入＋駛出</strong>／<strong>只顯示駛入</strong>／<strong>只顯示駛出</strong>。決定每條支線要顯示幾張數據卡，聚焦時也決定箭頭方向（見下方）。</td></tr>
+    <tr><td class="k">顯示</td><td><strong>交通量</strong>／<strong>百分比</strong>／<strong>PCU/hr＋百分比</strong>。</td></tr>
+    <tr><td class="k">車種</td><td><strong>全部車種</strong>時數值單位是 PCU/hr；選單一車種時單位變成<strong>輛/hr</strong>（該車種的實際車輛數）。</td></tr>
+  </tbody>
+</table>
+
+<h3 class="sub">一張數據卡怎麼讀</h3>
+<ul>
+  <li>卡片<strong>正上方</strong>寫「來源 A · 中山路」或「目的 A · 中山路」——「來源」是駛出卡，「目的」是駛入卡。</li>
+  <li>卡片<strong>第一行置中</strong>寫「駛出路口A」或「駛入路口A」。</li>
+  <li>中間三格是<strong>左轉／直行／右轉</strong>，每格顯示流量、去向（→D 表示開往 D 支線）與占這張卡的百分比。</li>
+  <li>最底下是「駛出路口A合計 ○○○ PCU/hr」。</li>
+</ul>
+
+<div class="box new">
+  <span class="t">本版變更：只顯示駛入／駛出時的箭頭方向</span>
+  <p>舊版在「只顯示駛入」「只顯示駛出」時，會把流向曲線<strong>從中間切一半</strong>，箭頭停在路口中央，看起來像車開到一半就消失。v2.1.0 改成一律畫<strong>完整</strong>的「起點支線 → 目的支線」曲線，並依您的選擇決定畫哪些：</p>
+  <p style="margin-top:2mm">
+    ・<strong>只顯示駛入 ＋ 聚焦路口A</strong> → 其他每一個路口各畫一條箭頭<strong>指向 A</strong>。<br />
+    ・<strong>只顯示駛出 ＋ 聚焦路口A</strong> → 從 A 各畫一條箭頭<strong>指向其他每一個路口</strong>。<br />
+    ・<strong>箭線選「全部方向」</strong>時，不論藍框怎麼選，都會畫出全部 OD 的完整箭線。
+  </p>
+</div>
+
+<p>圖右上角有指北箭頭，左下角在聚焦時會標示「聚焦：路口A」，底部有左轉／直行／右轉的顏色圖例。圖上方的兩行小字會標示調查日期、尖峰時段、單位、季度、車種與全路口流量——這些資訊會一起輸出到 PNG、SVG 與 PDF，交件時不必另外註記。</p>
+
+<!-- ══════════ 12 ══════════ -->
+<h2 class="sec"><span class="n">12.</span>其他分析頁面在看什麼</h2>
+<table>
+  <thead><tr><th style="width:28%">頁面</th><th>內容</th></tr></thead>
+  <tbody>
+    <tr><td class="k">車種組成分析</td><td>各車種的<strong>實際車輛數</strong>與比例，<strong>不套 PCU 當量</strong>。可切換「全調查時段／AM Peak／PM Peak」。</td></tr>
+    <tr><td class="k">各路口駛入／駛出流量</td><td>每條支線一列，同時列出全日與 AM／PM 的駛入、駛出量（PCU 與輛數）。原始檔沒有完整 24 小時資料時，全日欄位顯示「－」。</td></tr>
+    <tr><td class="k">跨計畫／多路口比較</td><td>最多勾選 4 個計畫並列比較，尖峰總量單位為 PCU/hr。</td></tr>
+    <tr><td class="k">歷季趨勢比較</td><td>同一路口跨季度的折線圖，需要至少兩季資料。可下載 PNG 與含可編輯折線圖的 Excel。</td></tr>
+    <tr><td class="k">流量核對工作台</td><td><strong>數字被質疑時來這裡。</strong>可逐筆展開「○輛 × ○當量 ＋ …」的算式，一路追到原始工作表的儲存格位置；也可以還原到先前的版本。</td></tr>
+    <tr><td class="k">轉向進階分析</td><td>OD 矩陣、各支線駛入／駛出平衡（守恆差值）、連續 60 分鐘尖峰候選排行。</td></tr>
+  </tbody>
+</table>
+
+<!-- ══════════ 13 ══════════ -->
+<h2 class="sec pb"><span class="n">13.</span>報表匯出：自己決定要匯出什麼（本版新增）</h2>
+
+<p>不同計畫要交的東西不一樣：有的只要各路口<strong>駛出</strong>的尖峰流量，有的只要<strong>駛入</strong>，有的要車種分析加駛出流量。<span class="btn">報表與批次輸出</span> 最上方新增了「這個計畫要匯出哪些分析結果」，<strong>勾到的項目才會出現在 Excel 裡，一個項目一張工作表</strong>。</p>
+
+<table>
+  <thead><tr><th style="width:30%">可勾選的項目</th><th>工作表內容</th></tr></thead>
+  <tbody>
+    <tr><td class="k">各路口駛出尖峰流量</td><td>每條支線的 AM／PM 尖峰駛出量（PCU/hr 與實際車輛數）與尖峰時段。</td></tr>
+    <tr><td class="k">各路口駛入尖峰流量</td><td>同上，但只有駛入方向。</td></tr>
+    <tr><td class="k">駛入＋駛出完整流量表</td><td>同一張表同時列出全日與 AM／PM 的駛入、駛出量，欄位最完整。</td></tr>
+    <tr><td class="k">路口車種組成分析</td><td>全調查時段與 AM／PM 各車種的數量與組成比例。</td></tr>
+    <tr><td class="k">歷季趨勢比較</td><td>同一路口各季度的尖峰總流量；勾了才會附上可編輯的折線圖。</td></tr>
+    <tr><td class="k">跨計畫／多路口比較</td><td>各計畫、各路口、各支線的尖峰轉向總量與駛入駛出量。</td></tr>
+    <tr><td class="k">OD 轉向矩陣</td><td>起點支線 × 目的支線的尖峰流量。</td></tr>
+    <tr><td class="k">支線流量平衡檢核</td><td>每條支線駛入與駛出的差值，用來檢查守恆。</td></tr>
+    <tr><td class="k">資料品質檢核</td><td>缺值、尖峰時段異常與車種統計異常的明細。</td></tr>
+    <tr><td class="k">車種轉向當量參數</td><td>本次採用的各車種左／直／右當量，並註明是簡報參考值還是系統預設 1.0。</td></tr>
+  </tbody>
+</table>
+
+<h3 class="sub">三個實際例子</h3>
+<table>
+  <thead><tr><th style="width:14%">需求</th><th style="width:40%">怎麼勾</th><th>會得到什麼</th></tr></thead>
+  <tbody>
+    <tr><td class="k">A 計畫</td><td>按「全部取消」，只勾「各路口駛出尖峰流量」。</td><td>一張「各路口駛出尖峰流量」，欄位只有駛出量，沒有駛入欄。</td></tr>
+    <tr><td class="k">B 計畫</td><td>只勾「各路口駛入尖峰流量」。</td><td>一張「各路口駛入尖峰流量」。</td></tr>
+    <tr><td class="k">C 計畫</td><td>勾「路口車種組成分析」＋「各路口駛出尖峰流量」。</td><td>兩張工作表。</td></tr>
+  </tbody>
+</table>
+
+<div class="box new">
+  <span class="t">勾選會被記住，也可以存成範本</span>
+  <p>勾選<strong>自動記在目前這個計畫上</strong>，切到別的頁面再回來、甚至關掉瀏覽器再開，都還在。</p>
+  <p style="margin-top:2mm">要在多個計畫之間重複使用時，在下方「報表範本」輸入名稱（例如「A計畫－只要駛出尖峰流量」）按 <span class="btn">儲存目前勾選</span>；之後切到別的計畫按 <span class="btn">套用</span>，整組勾選就會還原。範本會跟著完整備份一起搬到另一台電腦。</p>
+</div>
+
+<div class="box info">
+  <span class="t">兩個小提醒</span>
+  <p>・一個項目都沒勾時，下載按鈕會停用並提示，不會產生空檔案。<br />
+  ・沒有勾「歷季趨勢比較」時就不會附折線圖——因為圖需要那張資料表，硬塞會讓 Excel 開檔時跳出修復提示。</p>
+</div>
+
+<!-- ══════════ 14 ══════════ -->
+<h2 class="sec"><span class="n">14.</span>其他輸出格式怎麼選</h2>
+<table>
+  <thead><tr><th style="width:22%">格式</th><th>適合情況</th><th style="width:30%">注意事項</th></tr></thead>
+  <tbody>
+    <tr><td class="k">Excel（.xlsx）</td><td>需要可編輯數值；勾了歷季趨勢時另含原生折線圖。</td><td>建議用 Excel 2007 以上開啟。</td></tr>
+    <tr><td class="k">Excel（.xls）</td><td>對方只能用 Excel 97～2003。</td><td>以數值相容為主，不含圖表。</td></tr>
+    <tr><td class="k">PDF</td><td>正式交件，一頁一個路口的轉向圖。</td><td>採正式版版面。</td></tr>
+    <tr><td class="k">PNG／SVG</td><td>單張轉向圖要貼進報告或簡報。</td><td>SVG 可無損放大。</td></tr>
+    <tr><td class="k">批次成果 ZIP</td><td>一次交付多個計畫、多個季度。</td><td>內含 Excel、PDF 與全部路口 PNG，另附說明檔。</td></tr>
+  </tbody>
+</table>
+
+<div class="box info">
+  <span class="t">先分清楚「分析報表」與「完整備份」</span>
+  <p><strong>Excel／PDF／PNG</strong> 是給人閱讀與交件的成果；<strong>完整備份</strong>（ZIP 或 JSON）包含全部計畫、季度、名稱對應、當量參數、版本紀錄與報表範本，用來換電腦或救回資料。兩者用途完全不同，成果檔<strong>不能</strong>當備份用。</p>
+</div>
+
+<!-- ══════════ 15 ══════════ -->
+<h2 class="sec"><span class="n">15.</span>審核狀態與成果鎖定</h2>
+
+<p>兩者是獨立的兩件事，都在 <span class="btn">流量核對工作台</span>：</p>
+<table>
+  <thead><tr><th style="width:26%">機制</th><th>用途</th></tr></thead>
+  <tbody>
+    <tr><td class="k">成果審核狀態</td><td>純標記，不影響任何計算。四個值：<strong>待核對</strong>（匯入預設）→ <strong>已核對</strong> → <strong>已確認</strong>；發現問題則標 <strong>需修正</strong>。旁邊可寫審核備註。</td></tr>
+    <tr><td class="k">成果鎖定</td><td>整季一起鎖。鎖定時會記下鎖定時間、系統版本與一組資料指紋。之後若有人要改名稱、角度、流向或重新匯入，系統會<strong>先跳出確認</strong>並解除受影響的鎖定，不會偷偷改掉。</td></tr>
+  </tbody>
+</table>
+<p>全季都鎖定後，按鈕會變成「解除 115Q2 鎖定」。若鎖定後系統升版或資料內容被改過，畫面會提示「偵測到鎖定衝突」，請回頭確認差異來源再決定要不要重新鎖定。</p>
+
+<!-- ══════════ 16 ══════════ -->
+<h2 class="sec"><span class="n">16.</span>備份、換電腦與資料保存</h2>
+
+<div class="step"><div class="h">步驟 1｜在 A 電腦下載備份</div>
+  <p>到 <span class="btn">備份、還原與版本</span>，按 <span class="btn">下載 ZIP</span>（完整）或 <span class="btn">下載 JSON</span>（純資料，適合封存與版本比較）。</p></div>
+<div class="step"><div class="h">步驟 2｜把備份檔帶到 B 電腦</div>
+  <p>用公司網路磁碟、USB 或其他受控方式搬移。</p></div>
+<div class="step"><div class="h">步驟 3｜在 B 電腦開同一個網站還原</div>
+  <p>同樣在備份頁按 <span class="btn">選擇備份檔</span>，選 ZIP 或 JSON，全部計畫與設定就會接續回來。</p></div>
+
+<ul>
+  <li>關閉網站或重新整理，資料<strong>不會</strong>消失（存在這台電腦的瀏覽器裡）。</li>
+  <li>清除瀏覽器網站資料、用無痕模式、換瀏覽器或換電腦，資料<strong>可能</strong>消失。</li>
+  <li>建議在「完成匯入」「完成核對」「鎖定成果」三個時點各下載一次備份。</li>
+  <li>備份頁下方的「全部清除」會清掉這台電腦的所有計畫與設定，按之前務必先下載備份。</li>
+</ul>
+
+<!-- ══════════ 17 ══════════ -->
+<h2 class="sec pb"><span class="n">17.</span>常見問題與排除方式</h2>
+<table>
+  <thead><tr><th style="width:28%">狀況</th><th style="width:34%">先檢查什麼</th><th>處理方式</th></tr></thead>
+  <tbody>
+    <tr><td class="k">拖曳圖卡久了整頁變空白</td><td>左下角版本是不是還停在 v2.0.1。</td><td>更新到 v2.1.0。舊版每次滑鼠移動都會存檔，會把瀏覽器儲存空間撐爆。</td></tr>
+    <tr><td class="k">找不到「左右 X／上下 Y」欄位</td><td>—</td><td>v2.1.0 已取消，改成直接用滑鼠拖曳圖卡與路口標籤。</td></tr>
+    <tr><td class="k">只顯示駛入／駛出時箭頭怪怪的</td><td>版本是否為 v2.1.0。</td><td>舊版把曲線切一半，箭頭停在路口中央；新版一律畫完整方向。</td></tr>
+    <tr><td class="k">拖了一張卡，另一張跟著動</td><td>版本是否為 v2.1.0。</td><td>新版駛入卡與駛出卡各自記位置，不再連動。</td></tr>
+    <tr><td class="k">選不到檔案，按鈕寫「請先選年度與季度」</td><td>年度與季度是否都填了。</td><td>先在步驟 01 填民國年與季度，按鈕才會啟用。</td></tr>
+    <tr><td class="k">調查日期顯示缺值</td><td>品質檢查列出的工作表與儲存格。</td><td>確認是否為民國日期、合併儲存格或不同版型；必要時修正原始檔重新匯入。</td></tr>
+    <tr><td class="k">同一路口不同季度無法比較</td><td>兩季是否併到同一個標準路口。</td><td>到路口名稱管理統一標準名稱。</td></tr>
+    <tr><td class="k">A、B、C 畫在錯誤方向</td><td>支線角度。</td><td>調角度即可；<strong>不要</strong>用改名稱或交換代碼的方式修圖。</td></tr>
+    <tr><td class="k">尖峰時段被判為異常</td><td>調查時間是否本來就特殊。</td><td>AM 需落在 05:00–12:00、PM 需落在 12:00–23:00；確認時間欄沒讀錯即可接受。</td></tr>
+    <tr><td class="k">人工計算與系統不同</td><td>當量係數、車種歸類、尖峰時段。</td><td>到流量核對工作台逐筆展開算式與原始儲存格。</td></tr>
+    <tr><td class="k">新車種的當量全是 1</td><td>那是系統的預設起點，不是建議值。</td><td>到車種轉向當量逐一改成本計畫採用的數值。</td></tr>
+    <tr><td class="k">匯出的 Excel 少了想要的表</td><td>報表項目是否有勾。</td><td>在報表與批次輸出勾選後再匯出，或直接套用先前存的範本。</td></tr>
+    <tr><td class="k">多岔路圖卡重疊</td><td>—</td><td>直接在圖上把圖卡拖開；必要時也把路口標籤拖走。匯出前系統會提示「匯出前排版預警」。</td></tr>
+    <tr><td class="k">換電腦後資料不見</td><td>是否換了瀏覽器、無痕模式或清除了網站資料。</td><td>用最近一次的備份還原。</td></tr>
+  </tbody>
+</table>
+
+<!-- ══════════ 18 ══════════ -->
+<h2 class="sec"><span class="n">18.</span>每季作業檢查表</h2>
+<ul class="check">
+  <li>已確認計畫、調查年度與季度正確（例如 115Q2）。</li>
+  <li>匯入預覽逐列看過：檔案角色、站號名稱、調查日期、AM／PM 尖峰值都合理。</li>
+  <li>重複匯入時已決定保留新版、覆蓋或略過，且已先下載備份。</li>
+  <li>所有新增車種的當量係數都已改成本計畫採用的數值（<strong>不能停留在預設的 1.0</strong>）。</li>
+  <li>資料品質檢查每一項都已按「查看原因」確認過。</li>
+  <li>路口名稱已統一，同一路口的各季度可以互相比較。</li>
+  <li>支線角度對照原始簡圖確認無誤，左／直／右分類已人工看過。</li>
+  <li>轉向圖上的圖卡與路口標籤沒有互相遮擋，「匯出前排版預警」沒有警示。</li>
+  <li>守恆差值已檢查（轉向進階分析），差異大的已回查原始檔。</li>
+  <li>已在報表與批次輸出勾選本計畫需要的分析項目，並存成範本。</li>
+  <li>已輸出所需的 Excel／PDF／PNG，並抽查過數值與圖面。</li>
+  <li>已下載完整備份 ZIP。</li>
+  <li>以上全部確認無誤後，才把審核狀態改為「已確認」並鎖定該季成果。</li>
+</ul>
+
+<!-- ══════════ 19 ══════════ -->
+<h2 class="sec"><span class="n">19.</span>最後提醒</h2>
+
+<div class="box warn">
+  <span class="t">系統會協助整理與檢查，但不取代專業判斷</span>
+  <p>看到警示時不要只按掉；看到與以往不同的數字，也不要直接改成舊數值。請回頭查原始調查檔、現場紀錄與採用的係數，確認差異是真的交通變化，還是匯入或設定出了問題。</p>
+  <p style="margin-top:2mm">正式成果的原則：<strong>先看來源、再看計算、最後才看圖面。</strong>圖畫得漂亮不能證明數值正確；數值可追溯、流向守恆、版本可還原，才是可靠的成果。</p>
+</div>
+
+<p>建議把這本手冊、每季的備份檔，以及該季採用的當量係數說明放在同一個受控資料夾。這樣接手的人可以知道資料怎麼產生、用的是哪一版系統、採用什麼係數，以及出問題時怎麼還原。</p>
+
+<div class="box info">
+  <span class="t">v2.1.0 主要變更一覽</span>
+  <p>
+    1. 修正長時間拖曳圖卡導致整頁變空白的問題：拖曳過程不再逐幀存檔，放開滑鼠才寫入一次。<br />
+    2. 圖卡與路口標籤都可直接拖曳，駛入卡與駛出卡各自記位置，且三種顯示畫面各自保存版面；已取消 X／Y 數字輸入。<br />
+    3. 圖卡標題「駛入路口A」「駛出路口A」改為置中，不再溢出卡片。<br />
+    4. 只顯示駛入／駛出時，箭頭改畫完整方向：駛入＝各支線指向該路口，駛出＝該路口指向各支線。<br />
+    5. 報表匯出可依計畫勾選 10 個分析項目，並存成範本重複套用。<br />
+    6. 多岔路口的圖卡配位改用高效演算法，不再於繪圖過程中丟出例外造成空白畫面。
+  </p>
+</div>
+
+<div class="box info">
+  <span class="t">本版（v2.1.1）修正一覽</span>
+  <p>
+    1. <strong>修正寬螢幕下拖曳圖卡「跑得比滑鼠快」</strong>：圖面會依視窗大小等比例縮放並留白，舊版換算時沒有考慮這一點，在較寬的螢幕上滑鼠移 200 點、圖卡卻移了 230 點。現在改用圖面實際的繪圖比例換算，滑鼠移多少、圖卡就移多少。<br />
+    2. <strong>修正拖到邊界後回拖會「卡住一段」</strong>：舊版把超出邊界的位置原封不動記下來，畫面上卻已經停在邊界，於是往回拖前面一段完全沒有反應。現在記錄與顯示都以邊界為準，往回拖立刻就會動。<br />
+    3. 修正切換季度時，同名支線可能對應到錯誤的一條；新增支線也會重新取得自己的位置，不會沿用別條的版面。<br />
+    4. 修正刪除支線後焦點索引可能超出範圍、以及圖卡數量多於預設格位時的補位計算。<br />
+    5. <strong>修正拖曳「路口A～路口F」標籤會整個跳到畫面左上角</strong>，並且會覆蓋掉先前存好的標籤位置。<br />
+    6. <strong>修正重新整理後「（平日）」「（假日）」被拆成兩個路口</strong>：資料別選單、幾何同步與歷季比較都會受影響。<br />
+    7. <strong>修正各車種的轉向量原本是按 PCU 比例分攤的</strong>；有逐條流向資料時改為直接加總實際車輛數（機車左轉 100、直行 100，舊版顯示 125／75，新版為正確的 100／100）。<br />
+    8. 批次成果 ZIP 改為每個計畫各自使用自己勾選的匯出項目；批次 PDF 也跟著目前的駛入／駛出顯示模式繪製。<br />
+    9. 瀏覽器儲存空間寫滿時不再讓整頁變空白，改為自動精簡還原點並提示下載備份。<br />
+    10.「只顯示駛入」「只顯示駛出」「駛入＋駛出」三種畫面的版面互不干擾，已在 1680 與 2200 像素寬度下逐項驗證。
+  </p>
+</div>
+
+</body>
+</html>

@@ -47,9 +47,38 @@ test("ships required analysis surfaces", async () => {
 test("ships the final verified release", async () => {
   const response = await render();
   const html = await response.text();
-  assert.match(html, /v2\.0\.1/);
+  assert.match(html, /v2\.1\.1/);
   assert.match(html, /轉向進階分析/);
   const source = await readFile(new URL("../app/traffic-app.tsx", import.meta.url), "utf8");
   assert.match(source, /圖卡排版預覽/);
   assert.match(source, /下載完整 PDF 手冊/);
+  assert.match(source, /Turning-Traffic-v2\.1\.1-新手操作手冊\.pdf/);
+  assert.match(source, /Turning-Traffic-v2\.1\.1-新手操作手冊\.docx/);
+  // 報表匯出項目自選（報表分頁要切換後才渲染，因此檢查原始碼）
+  assert.match(source, /這個計畫要匯出哪些分析結果/);
+  assert.match(source, /儲存目前勾選/);
+  const reportItems = await readFile(new URL("../lib/final-features.ts", import.meta.url), "utf8");
+  assert.match(reportItems, /sheet: "各路口駛出尖峰流量"/);
+  assert.match(reportItems, /sheet: "各路口駛入尖峰流量"/);
+});
+
+test("ships the rewritten beginner manual in PDF and editable Word", async () => {
+  const { access } = await import("node:fs/promises");
+  for (const file of [
+    "Turning-Traffic-v2.1.1-新手操作手冊.pdf",
+    "Turning-Traffic-v2.1.1-新手操作手冊.docx",
+  ])
+    await access(new URL("../public/" + file, import.meta.url));
+  // 手冊由單一 HTML 原始檔同時產生 PDF 與 Word，避免兩份說明不一致
+  const manual = await readFile(new URL("../scripts/manual/manual.html", import.meta.url), "utf8");
+  for (const text of [
+    "零基礎也看得懂的 10 個名詞",
+    "駛出支線",
+    "駛入支線",
+    "只顯示駛入 ＋ 聚焦路口A",
+    "簡報沒有的車種，一律預設 1.0",
+    "自己決定要匯出什麼",
+    "每季作業檢查表",
+  ])
+    assert.ok(manual.includes(text), "手冊缺少段落：" + text);
 });
