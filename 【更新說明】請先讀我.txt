@@ -1,0 +1,39 @@
+Turning Traffic — GitHub Pages 更新包 v2.1.1
+============================================
+
+這個壓縮檔裡的檔案，就是「網站本體」。
+您的 repository（baotoast/Turning-Traffic）同時放了原始碼與網站檔，
+GitHub Pages 讀的是「根目錄」的 index.html 與 assets 資料夾。
+
+更新步驟
+--------
+1. 先刪除 repository 根目錄的這些舊檔（很重要）：
+   - assets/            ← 整個資料夾刪掉。檔名帶雜湊碼，不刪會留下永遠用不到的舊檔
+   - Turning-Traffic-v2.0.1-新手操作手冊.pdf   ← 舊版手冊
+   - index.html         ← 會被新的覆蓋，先刪或直接覆蓋皆可
+
+2. 把本壓縮檔裡的全部檔案，放到 repository 的「根目錄」：
+   index.html
+   assets/
+   Turning-Traffic-v2.1.1-新手操作手冊.pdf
+   Turning-Traffic-v2.1.1-新手操作手冊.docx
+   favicon.svg / og.png / file.svg / globe.svg / window.svg
+
+3. 另外解壓 TurningTraffic_Source_v2.1.1.zip，
+   用裡面的 app/、lib/、public/、scripts/、tests/、package.json、
+   CHANGELOG.md 等覆蓋 repository 內的同名檔案（這是原始碼，
+   不影響網站顯示，但可讓 repository 與網站版本一致）。
+   ※ 該壓縮檔裡的 github-pages-dist/ 內容 = 本更新包，重複的可忽略。
+
+4. commit → push。GitHub Pages 約 1～3 分鐘後生效。
+   若畫面沒變，請按 Ctrl+F5 強制重新整理。
+
+檢查是否更新成功
+----------------
+開啟 https://baotoast.github.io/Turning-Traffic/
+左側欄最下方應顯示「v2.1.1 · 正式版」。
+
+注意
+----
+使用者的資料存在瀏覽器裡（localStorage），更新網站不會清掉資料；
+但更新前仍建議先在「備份、還原與版本」下載一份備份。
