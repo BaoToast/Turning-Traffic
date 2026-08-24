@@ -22,19 +22,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      # 測試不掛在部署流程上等於沒有測試，壞掉的計算會直接被推上正式網站。
-      # rendered-html 那一支要讀 dist/server，所以必須先跑 build 再測。
-      - run: pnpm build
-      - run: pnpm test
-      - run: pnpm build:github
+          cache: npm
+      - run: npm ci
+      # npm test 會先完成 Sites 建置，再執行全部單元與建置結果檢查。
+      - run: npm test
+      - run: npm run build:github
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
