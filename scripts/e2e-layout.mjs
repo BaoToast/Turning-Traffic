@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "./serve.mjs";
-import { chromiumLaunchOptions } from "./chromium.mjs";
+import { launchOptions } from "./chrome-path.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const seed = readFileSync(join(here, "seed-wide.json"), "utf8");
@@ -49,7 +49,7 @@ const WIDTHS = [640, 760, 820, 900, 1024, 1100, 1180, 1280, 1350, 1440, 1680, 19
 const MIN_PAGE_GUTTER = 12; // 主內容左右至少要留的空白（px）
 
 const server = await serve(8123);
-const browser = await chromium.launch(chromiumLaunchOptions());
+const browser = await chromium.launch(launchOptions());
 const ctx = await browser.newContext({
   viewport: { width: 1440, height: 1000 },
   locale: "zh-TW",

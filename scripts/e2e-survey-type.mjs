@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as XLSX from "xlsx";
 import { serve } from "./serve.mjs";
-import { chromiumLaunchOptions } from "./chromium.mjs";
+import { launchOptions } from "./chrome-path.mjs";
 
 const problems = [];
 const ok = (label, condition, detail = "") => {
@@ -102,7 +102,7 @@ const fixesB = write("120507T502彰18鹿東路與彰27東昇路0415_平日.xlsx"
 });
 
 const server = await serve(8155);
-const browser = await chromium.launch(chromiumLaunchOptions());
+const browser = await chromium.launch(launchOptions());
 const page = await (
   await browser.newContext({ viewport: { width: 1680, height: 1050 }, locale: "zh-TW" })
 ).newPage();

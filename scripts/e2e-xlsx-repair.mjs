@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkWorkbook } from "./ooxml-check.mjs";
-import { chromiumLaunchOptions } from "./chromium.mjs";
+import { launchOptions } from "./chrome-path.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const seed = readFileSync(join(here, "seed-state.json"), "utf8");
@@ -22,7 +22,7 @@ const ok = (label, condition, detail = "") => {
 
 const { serve } = await import("./serve.mjs");
 const server = await serve(8104);
-const browser = await chromium.launch(chromiumLaunchOptions());
+const browser = await chromium.launch(launchOptions());
 const downloads = mkdtempSync(join(tmpdir(), "tt-xlsx-"));
 const ctx = await browser.newContext({
   viewport: { width: 1600, height: 1100 },

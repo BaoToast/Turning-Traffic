@@ -467,7 +467,7 @@ function describePeak(
   return lines;
 }
 
-function describeComposition(record: ConclusionRecord) {
+function describeComposition(record: ConclusionRecord, digits: number) {
   const total = record.composition.reduce((sum, item) => sum + item.count, 0);
   if (!total) return ["　車種組成：這一筆沒有可用的車種數量。"];
   const parts = record.composition
@@ -719,7 +719,7 @@ export function buildConclusion(
           out.push(`　〔${record.quarter}${quarterTag(record)}〕`);
         for (const peak of peaks)
           out.push(...describePeak(record, peak, condition));
-        if (wants("composition")) out.push(...describeComposition(record));
+        if (wants("composition")) out.push(...describeComposition(record, digits));
       }
       if (wants("growth")) {
         /*
@@ -742,7 +742,7 @@ export function buildConclusion(
         out.push(`　〔${record.station}　${record.name}〕`);
         for (const peak of peaks)
           out.push(...describePeak(record, peak, condition));
-        if (wants("composition")) out.push(...describeComposition(record));
+        if (wants("composition")) out.push(...describeComposition(record, digits));
       }
       if (wants("extremes")) {
         const lines = describeExtremes(group, peaks, digits);
@@ -758,7 +758,7 @@ export function buildConclusion(
     for (const record of chosen.slice(0, 1)) {
       out.push(`　代表紀錄：${recordTitle(record)}`);
       for (const peak of peaks) out.push(...describePeak(record, peak, condition));
-      if (wants("composition")) out.push(...describeComposition(record));
+      if (wants("composition")) out.push(...describeComposition(record, digits));
     }
     if (chosen.length > 1)
       out.push(

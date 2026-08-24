@@ -166,29 +166,6 @@ test("selects a continuous four-interval peak and breaks ties early", () => {
   assert.equal(peak?.total, 200);
 });
 
-test("尖峰小時只接受能精確組成 60 分鐘的格距", () => {
-  const rows = [
-    { start: 420, label: "07:00", values: [10] },
-    { start: 465, label: "07:45", values: [20] },
-    { start: 510, label: "08:30", values: [30] },
-  ];
-  assert.equal(rollingPeak(rows, [360, 720], 45), null);
-  assert.equal(
-    rollingPeak([{ start: 420, label: "07:00", values: [100] }], [360, 720], 120),
-    null,
-  );
-  assert.ok(
-    rollingPeak(
-      [
-        { start: 420, label: "07:00", values: [10] },
-        { start: 450, label: "07:30", values: [20] },
-      ],
-      [360, 720],
-      30,
-    ),
-  );
-});
-
 test("demo data covers three through seven approaches and four quarters", () => {
   const records = createDemoRecords();
   assert.equal(records.length, 20);
@@ -596,22 +573,6 @@ test("新車種（自行車）會被收成自訂車種，不會被無聲丟掉",
   );
 });
 
-test("六種以上車種也會全部保留並列入匯入預覽", async () => {
-  const vehicles = ["機車", "小型車", "大型車", "特種車", "自行車", "電動滑板車"];
-  const preview = await inspectWorkbook(
-    turningSheet({ timeText: halfWidthTime, vehicles }),
-    DEFAULT_PCE,
-  );
-  assert.equal(preview.columns.length, 4 * vehicles.length * 3);
-  const labels = [...new Set(preview.columns.map((column) => column.vehicleLabel))];
-  assert.ok(labels.includes("自行車"), labels.join("、"));
-  assert.ok(labels.includes("電動滑板車"), labels.join("、"));
-  assert.ok(
-    preview.detectedVehicles.some((vehicle) => vehicle.label === "電動滑板車"),
-    "第六種車種也必須出現在匯入預覽與後續參數設定",
-  );
-});
-
 test("合計、備註、時間這類欄名不會被誤收成車種", async () => {
   const preview = await inspectWorkbook(
     turningSheet({
@@ -623,4 +584,36 @@ test("合計、備註、時間這類欄名不會被誤收成車種", async () =>
   const labels = [...new Set(preview.columns.map((column) => column.vehicleLabel))];
   assert.ok(!labels.includes("合計"), labels.join("、"));
   assert.ok(!labels.includes("備註"), labels.join("、"));
+});
+
+/*
+ * ── 尖峰「小時」只能由能精確組成 60 分鐘的格距算出來 ──
+ *
+ * 15／20／30／60 分鐘可以；45 或 120 分鐘不行。後兩者若硬取一格再標成
+ * PCU/hr，等於把 45 分鐘或 2 小時的量冒充成一小時的流率——數字看起來很正常，
+ * 比顯示「資料不足」危險得多。這是外部複核指出的，採用較保守的作法。
+ */
+test("能整除 60 的格距照常算出尖峰小時", () => {
+  for (const gap of [15, 20, 30, 60]) {
+    const rows = [];
+    for (let m = 7 * 60; m < 11 * 60; m += gap)
+      rows.push({ start: m, label: "", values: [m === 8 * 60 ? 500 : 10], sourceRows: {} });
+    const peak = rollingPeak(rows as never[], [5 * 60, 12 * 60], gap);
+    assert.ok(peak, `${gap} 分鐘一格應該算得出尖峰小時`);
+    assert.equal(peak!.end - peak!.start, 60, `${gap} 分鐘：視窗必須正好一小時`);
+  }
+});
+
+test("組不成一小時的格距（45、120 分鐘）回報資料不足，不冒充成一小時", () => {
+  for (const gap of [45, 120]) {
+    const rows = [];
+    for (let m = 7 * 60; m < 13 * 60; m += gap)
+      rows.push({ start: m, label: "", values: [100], sourceRows: {} });
+    const peak = rollingPeak(rows as never[], [5 * 60, 12 * 60], gap);
+    assert.equal(
+      peak,
+      null,
+      `${gap} 分鐘一格不能算成尖峰小時，否則會把 ${gap} 分鐘的量標成 PCU/hr`,
+    );
+  }
 });

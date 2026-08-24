@@ -120,7 +120,6 @@ type FormatMemory = {
   lastUsedAt: string;
 };
 type VehicleMappingTable = Record<string, string>;
-const EMPTY_VEHICLE_MAPPINGS: VehicleMappingTable = {};
 type ImportConflictMode = "overwrite" | "version" | "skip";
 
 const NAV: { id: View; label: string; icon: string; group?: string }[] = [
@@ -3153,8 +3152,7 @@ export default function TrafficApp() {
   const pce = pceByProject[activeProjectId] || DEFAULT_PCE;
   const vehicleCatalog =
     catalogByProject[activeProjectId] || CORE_VEHICLE_LABELS;
-  const vehicleMappings =
-    mappingsByProject[activeProjectId] || EMPTY_VEHICLE_MAPPINGS;
+  const vehicleMappings = mappingsByProject[activeProjectId] || {};
   /** 把「整體設定」的 setter 包成「只改目前計畫那一份」。 */
   function scopedSetter<T>(
     setMap: (updater: (previous: Record<string, T>) => Record<string, T>) => void,
@@ -3465,9 +3463,6 @@ export default function TrafficApp() {
       activeProjectId,
       records,
       nameMap,
-      pceByProject,
-      catalogByProject,
-      mappingsByProject,
       pce,
       vehicleCatalog,
       vehicleMappings,
@@ -4884,6 +4879,12 @@ export default function TrafficApp() {
     });
   }
 
+  /* eslint-disable react-hooks/preserve-manual-memoization --
+   * React Compiler 會提醒「手動 memo 無法保留」，因為 selected 是從 records 推導出來的
+   * 物件、它判斷可能被就地修改。本專案的建置流程並沒有啟用 React Compiler
+   * （vite.config.ts 沒有掛 babel-plugin-react-compiler），所以這裡的 useMemo 是實際
+   * 生效的最佳化；若日後導入 Compiler，可以把這三個 useMemo 直接拿掉改由它自動處理。
+   */
   /*
    * 三份轉向圖 SVG 都很大（7 叉路口有 14 張卡、上百條路徑），舊版直接寫在 JSX 裡，
    * 任何一次 render（包含輸入框打字、切換分頁）都會重新組三次字串並讓瀏覽器
@@ -4955,6 +4956,8 @@ export default function TrafficApp() {
       flowSummaryMode,
     ],
   );
+
+  /* eslint-enable react-hooks/preserve-manual-memoization */
 
   /*
    * 拖曳圖卡與路口標籤。
@@ -10822,14 +10825,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.20-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.21-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.20-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.21-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >

@@ -2,10 +2,7 @@ import { chromium } from "playwright";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import http from "node:http";
 import { join, extname } from "node:path";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { chromiumLaunchOptions } from "./chromium.mjs";
-const here = dirname(fileURLToPath(import.meta.url));
+import { launchOptions } from "./chrome-path.mjs";
 const ROOT = process.argv[2];
 const LABEL = process.argv[3];
 const MIME = {".html":"text/html",".js":"text/javascript",".css":"text/css",".json":"application/json",".svg":"image/svg+xml",".png":"image/png"};
@@ -13,8 +10,8 @@ const server = http.createServer((req,res)=>{ let p=decodeURIComponent(req.url.s
   const f=join(ROOT,p); if(!existsSync(f)||statSync(f).isDirectory()){res.writeHead(404);res.end();return;}
   res.writeHead(200,{"content-type":MIME[extname(f)]??"application/octet-stream"}); res.end(readFileSync(f)); });
 await new Promise(r=>server.listen(8112,r));
-const seed = readFileSync(join(here, "seed-state.json"),"utf8");
-const b = await chromium.launch(chromiumLaunchOptions());
+const seed = readFileSync("/home/claude/work/turning/scripts/seed-state.json","utf8");
+const b = await chromium.launch(launchOptions());
 const page = await (await b.newContext({viewport:{width:1680,height:1050},locale:"zh-TW"})).newPage();
 let crashed=false, errs=0;
 page.on("crash",()=>{crashed=true});
@@ -24,7 +21,7 @@ await page.goto("http://localhost:8112/"); await page.waitForTimeout(1500);
 // 7叉路口 + 開啟排版預覽
 await page.locator('aside button:has-text("路口轉向圖"), nav button:has-text("路口轉向圖")').first().click();
 await page.waitForTimeout(1000);
-try { await page.locator("select").filter({hasText:"岡山交流道"}).first().selectOption({label:"台1－岡山交流道路口"}); } catch { console.log("  (無法切7叉)"); }
+try { await page.locator("select").filter({hasText:"岡山交流道"}).first().selectOption({label:"台1－岡山交流道路口"}); } catch(e){ console.log("  (無法切7叉)"); }
 await page.waitForTimeout(1200);
 const PREVIEW = process.argv[4] === "preview";
 if (PREVIEW) {
@@ -58,8 +55,8 @@ try {
 } catch(e){ console.log(`[${LABEL}] 拖曳中斷於第 ${steps} 步：`, e.message.slice(0,80)); }
 const elapsed = Date.now()-t0;
 let alive=0, store={bytes:0,revisions:0};
-try { alive = await page.evaluate(()=>document.querySelectorAll("[data-card-id]").length, {timeout:5000}); } catch { alive=-1; }
-try { store = await page.evaluate(()=>{const raw=localStorage.getItem("turning-traffic-state-v2")||"";const j=JSON.parse(raw||"{}");return {bytes:raw.length,revisions:(j.recordRevisions||[]).length};}, {timeout:5000}); } catch { /* 壓力測試允許讀不到瀏覽器儲存資訊 */ }
+try { alive = await page.evaluate(()=>document.querySelectorAll("[data-card-id]").length, {timeout:5000}); } catch(e){ alive=-1; }
+try { store = await page.evaluate(()=>{const raw=localStorage.getItem("turning-traffic-state-v2")||"";const j=JSON.parse(raw||"{}");return {bytes:raw.length,revisions:(j.recordRevisions||[]).length};}, {timeout:5000}); } catch(e){}
 console.log(`[${LABEL}] ${steps} 步 / ${elapsed}ms / 每步 ${(elapsed/Math.max(1,steps)).toFixed(0)}ms / 存活圖卡 ${alive} / crashed=${crashed} / pageerrors=${errs}`);
 const writes = await page.evaluate(()=>window.__writes).catch(()=>-1);
 console.log(`[${LABEL}] localStorage ${Math.round(store.bytes/1024)} KB / 版本歷程 ${store.revisions} 筆 / 拖曳期間存檔次數 ${writes}`);

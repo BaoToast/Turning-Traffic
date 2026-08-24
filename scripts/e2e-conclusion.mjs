@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "./serve.mjs";
-import { chromiumLaunchOptions } from "./chromium.mjs";
+import { launchOptions } from "./chrome-path.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const seed = readFileSync(join(here, "seed-wide.json"), "utf8");
@@ -25,7 +25,7 @@ const ok = (label, condition, detail = "") => {
 };
 
 const server = await serve(8133);
-const browser = await chromium.launch(chromiumLaunchOptions());
+const browser = await chromium.launch(launchOptions());
 const ctx = await browser.newContext({
   viewport: { width: 1680, height: 1050 },
   locale: "zh-TW",
