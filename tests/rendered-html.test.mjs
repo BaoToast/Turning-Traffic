@@ -47,13 +47,18 @@ test("ships required analysis surfaces", async () => {
 test("ships the final verified release", async () => {
   const response = await render();
   const html = await response.text();
-  assert.match(html, /v2\.1\.1/);
+  assert.match(html, /v2\.1\.20/);
   assert.match(html, /轉向進階分析/);
   const source = await readFile(new URL("../app/traffic-app.tsx", import.meta.url), "utf8");
   assert.match(source, /圖卡排版預覽/);
   assert.match(source, /下載完整 PDF 手冊/);
-  assert.match(source, /Turning-Traffic-v2\.1\.1-新手操作手冊\.pdf/);
-  assert.match(source, /Turning-Traffic-v2\.1\.1-新手操作手冊\.docx/);
+  assert.match(source, /Turning-Traffic-v2\.1\.20-新手操作手冊\.pdf/);
+  assert.match(source, /Turning-Traffic-v2\.1\.20-新手操作手冊\.docx/);
+  // 匯入預覽要能整批取消：預覽的用意就是「先看有沒有問題，有問題先去修檔案」，
+  // 只能一列一列刪除的話，看到錯誤卻放棄不了，預覽就失去意義。
+  assert.match(source, /取消預覽/);
+  assert.match(source, /setImportRows\(\[\]\);\s*\n\s*setImportResolutions\(\{\}\);\s*\n\s*setImportConflictModes\(\{\}\);/);
+  assert.match(source, /if \(fileRef\.current\) fileRef\.current\.value = "";/);
   // 報表匯出項目自選（報表分頁要切換後才渲染，因此檢查原始碼）
   assert.match(source, /這個計畫要匯出哪些分析結果/);
   assert.match(source, /儲存目前勾選/);
@@ -65,8 +70,8 @@ test("ships the final verified release", async () => {
 test("ships the rewritten beginner manual in PDF and editable Word", async () => {
   const { access } = await import("node:fs/promises");
   for (const file of [
-    "Turning-Traffic-v2.1.1-新手操作手冊.pdf",
-    "Turning-Traffic-v2.1.1-新手操作手冊.docx",
+    "Turning-Traffic-v2.1.20-新手操作手冊.pdf",
+    "Turning-Traffic-v2.1.20-新手操作手冊.docx",
   ])
     await access(new URL("../public/" + file, import.meta.url));
   // 手冊由單一 HTML 原始檔同時產生 PDF 與 Word，避免兩份說明不一致

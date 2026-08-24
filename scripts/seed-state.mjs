@@ -93,7 +93,10 @@ function buildRecord({ id, station, name, arms, quarter, projectId, seed }) {
     surveyType: "路口轉向",
     pceVersion: "training-1060310",
     peaks: { AM: { start: "07:15", end: "08:15" }, PM: { start: "17:30", end: "18:30" } },
-    survey: { intervals: 96, minutes: 15, vehicle: vehicleSplit(38000, rnd) },
+    // minutes 是「總調查分鐘數」（intervals × 每格分鐘），不是每格幾分鐘。
+    // 寫成 15 會讓車種組成分析印出「96 個 0 分鐘區間（0.3 小時）」，
+    // 而且全日欄位永遠是「－」。
+    survey: { intervals: 96, minutes: 96 * 15, vehicle: vehicleSplit(38000, rnd) },
     vehicleLabels: VEHICLES,
     vehicleMapping: Object.fromEntries(Object.keys(VEHICLES).map((key) => [key, key])),
     approaches,

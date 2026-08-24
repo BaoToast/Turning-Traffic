@@ -26,10 +26,11 @@ import {
   TextRun,
   WidthType,
 } from "docx";
+import { chromiumLaunchOptions } from "../chromium.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = join(here, "manual.html");
-const out = join(here, "..", "..", "public", "Turning-Traffic-v2.1.1-新手操作手冊.docx");
+const out = join(here, "..", "..", "public", "Turning-Traffic-v2.1.20-新手操作手冊.docx");
 
 const NAVY = "17353E";
 const TEAL = "087F75";
@@ -41,10 +42,7 @@ const ORANGE_T = "A9660F";
 const FONT = "Noto Sans CJK TC";
 
 /* ── 1. 讀取 HTML 並轉成區塊 JSON ───────────────────────────── */
-const browser = await chromium.launch({
-  executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
-  args: ["--no-sandbox"],
-});
+const browser = await chromium.launch(chromiumLaunchOptions());
 const page = await browser.newPage();
 await page.goto(pathToFileURL(src).href, { waitUntil: "load" });
 
@@ -435,7 +433,7 @@ for (const block of blocks) {
 
 const doc = new Document({
   creator: "Turning Traffic",
-  title: "Turning Traffic 新手操作手冊 v2.1.1",
+  title: "Turning Traffic 新手操作手冊 v2.1.20",
   description: "寫給完全沒有交通背景的新手：從建立計畫、匯入調查檔、核對品質，到轉向圖、報表勾選匯出與備份。",
   styles: {
     default: {
@@ -489,7 +487,7 @@ const doc = new Document({
               spacing: { before: 0 },
               children: [
                 new TextRun({
-                  text: "v2.1.1 ｜ 2026-08-22 ｜ 正式成果前請先下載備份　　第 ",
+                  text: "v2.1.20 ｜ 2026-08-24 ｜ 正式成果前請先下載備份　　第 ",
                   font: FONT,
                   size: 15,
                   color: MUTED,

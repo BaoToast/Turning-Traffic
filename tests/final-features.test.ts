@@ -35,6 +35,22 @@ test("peak sensitivity ranks continuous 60-minute windows", function () {
   assert.equal(rows[0].end, 75);
 });
 
+test("peak sensitivity skips windows with a missing interval in the middle", function () {
+  const sample = record();
+  // 0~105 每 15 分鐘一格，但挖掉 30~45（該時段沒有調查）。
+  sample.sourceTrace!.intervals = [0, 15, 30, 45, 60, 75, 90]
+    .filter(function (start) { return start !== 30; })
+    .map(function (start, index) {
+      return { start, end: start + 15, pcu: index + 1, vehicles: index + 1 };
+    });
+  const rows = peakSensitivity(sample);
+  // 0 與 15 起算的一小時中間都跨過那個缺口，只有 45 分鐘實際資料，不能列入。
+  assert.equal(rows.some(function (row) { return row.start === 0; }), false);
+  assert.equal(rows.some(function (row) { return row.start === 15; }), false);
+  // 45 起算的 45~105 四格完整相接，仍應列入。
+  assert.equal(rows.some(function (row) { return row.start === 45; }), true);
+});
+
 test("diagram preflight reports only close cards", function () {
   const sample = record();
   assert.equal(diagramCollisionWarnings(sample).length, 0);

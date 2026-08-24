@@ -241,6 +241,12 @@ export type TrafficRecord = {
   routes?: RouteFlow[];
   /** How OD routes were classified as left/through/right. */
   movementRule?: "reference-calculation" | "geometry-suggested" | "manual";
+  /**
+   * 使用者在「路口名稱管理」自己打過的名稱。設了這個旗標之後，重新整理時
+   * 就不再對名稱跑一次正規化——否則使用者刻意加的括號、破折號、叉路口字樣
+   * 會在下次開啟時被清掉，看起來像系統自己把名字改了。
+   */
+  nameEdited?: boolean;
   /** Per road branch: show inbound/outbound separately or as a two-way total. */
   directionDisplay?: Record<string, "split" | "two-way">;
   /** Manual approval lock for a checked quarterly result. */
@@ -295,8 +301,181 @@ export type QualityIssue = {
   };
 };
 
-export const VERSION = "v2.1.1";
+/**
+ * 匯入時判斷「這一筆和既有紀錄是不是同一份調查」。
+ *
+ * 規則：同計畫＋同季度＋同站號，而且資料別（平日／假日）也一樣。
+ *
+ * 唯一的例外是「待設定」——它不是一種資料別，而是**當時還不知道**
+ * （原始檔的日期沒寫「（平日）」，工作表名稱也看不出來）。如果拿它當一般
+ * 資料別比對，重新匯入同一個檔案（這次讀出了平日）就會被當成另一份調查，
+ * 同一個路口同一季會同時留下「待設定」與「平日」兩筆，使用者以為重匯就會
+ * 修好，畫面上卻還是看得到待設定。所以待設定的紀錄要能被有資料別的新匯入
+ * 接手。
+ *
+ * 反過來不成立：已經是平日的紀錄不會被一筆待設定的新匯入接手，
+ * 那等於拿「不知道」去覆蓋「已經知道」。
+ */
+export function isSameSurvey(
+  record: { projectId?: string; quarter?: string; station?: string; surveyType?: string },
+  item: { station?: string; surveyType?: string },
+  context: { projectId?: string; quarter?: string },
+) {
+  if (record.projectId !== context.projectId) return false;
+  if (record.quarter !== context.quarter) return false;
+  if (record.station !== item.station) return false;
+  const recordType = record.surveyType || "待設定";
+  const itemType = item.surveyType || "待設定";
+  if (recordType === itemType) return true;
+  return recordType === "待設定" && itemType !== "待設定";
+}
+
+/**
+ * 判斷這一筆調查的「資料別」（平日／假日）。
+ *
+ * 依序看三個地方，先讀到的先用：
+ *
+ *  1. 呼叫端指定的（一個檔案同時有「平日」「假日」兩張工作表時，
+ *     每一張各產生一筆，資料別由工作表名稱直接指定）。
+ *
+ *  2. 日期字樣裡的括號：「日期：115年05月04日(平日)」→ 平日。
+ *     括號內不限平日／假日，寫什麼就存什麼（有些案子會寫「路口轉向」之類）。
+ *
+ *  3. **交通量工作表的名稱**：整份只有一張叫「平日」（或「假日」）的
+ *     工作表時，那就是這份調查的資料別。
+ *
+ *     這一段是後來補的。原本只有第 2 點，而工作表名稱只在「同時有平日與
+ *     假日兩張」時才會用到；於是「只做了一天、日期欄沒寫括號、但工作表就
+ *     叫平日」的檔案會被判成「待設定」——資訊明明就在檔案裡，只是沒去讀。
+ *     實際案例：120507T501／T502／T503，日期欄是「日期：115年04月15日」
+ *     （沒有括號），工作表叫「平日」。
+ *
+ * 三個地方都讀不到才是「待設定」——意思是**這一筆還不知道**，
+ * 不是第三種資料別，之後可以在「流量核對工作台」補，或重新匯入時被補上。
+ */
+export function resolveSurveyType(input: {
+  explicit?: string;
+  dateText?: string;
+  sheetNames?: string[];
+}) {
+  if (input.explicit) return input.explicit;
+  const inParentheses = (input.dateText || "").match(
+    /[（(]\s*([^）)]+)\s*[）)]/,
+  )?.[1];
+  if (inParentheses) return inParentheses;
+  const fromSheets = Array.from(
+    new Set(
+      (input.sheetNames || [])
+        .map(function (sheet) {
+          return sheet.normalize("NFKC").trim();
+        })
+        .filter(function (sheet) {
+          return sheet === "平日" || sheet === "假日";
+        }),
+    ),
+  );
+  /* 只有一種時才敢用；同時有平日與假日是另一條路徑（每張各產生一筆）。 */
+  if (fromSheets.length === 1) return fromSheets[0];
+  return "待設定";
+}
+
+export const VERSION = "v2.1.20";
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.20",
+    date: "2026-08-24",
+    note: "獨立複核 v2.1.19 後修正尖峰小時的時間格距口徑：只有能精確組成 60 分鐘的格距（例如 15、20、30、60 分鐘）才計算 PCU/hr；45 分鐘或 2 小時一格的資料不再被取一格後誤標為尖峰小時，而是明確顯示資料不足。新增非 60 分鐘格距與第六種自訂車種回歸測試；同時補齊乾淨解壓後可重現的測試、瀏覽器驗收與手冊建置依賴，讓測試會先正式建置再檢查成品。",
+  },
+  {
+    version: "v2.1.19",
+    date: "2026-08-23",
+    note: "外部檢查回報的四項，全部確認屬實並修正。(1) **上午／下午尖峰的搜尋視窗只限制起點**，視窗卻是「起點＋一小時」，於是上午尖峰 [05:00, 12:00) 可以挑到 11:45 起算的 **11:45–12:45**——一個大半在下午的視窗被標成「上午尖峰」，而且和下午尖峰挑到的 12:00–13:00 **重疊 45 分鐘**，同一批車被算進兩個尖峰；晚間也會超出上界（22:45 起算 → 22:45–23:45）。現在要求整個視窗（含結尾）都落在時段內；非 60 分鐘格距的進一步防護於 v2.1.20 完成。(2) **時間欄用全形數字時整張工作表讀成 0 筆**。時間解析的 \\d 不吃全形數字「０７：００」，也不允許「7 : 00」這種冒號旁有空白的寫法；認不出時間欄就找不到資料起始列，那個路口的量憑空消失，而且整體完全不報錯。現在先做 NFKC 正規化並允許冒號旁空白，同時擋掉 25:70 這種不合理的值。(3) **不在內建關鍵字裡的車種被無聲略過**。舊版認不得欄名就跳過整個欄位，調查表裡有「自行車」這類新車種時，那幾欄的量會消失且沒有任何提示，與「可讀取任意數量車種」的說明不符。現在在「這一欄確實有左／直／右或目的地」的前提下收成自訂車種，並列進匯入預覽的新車種清單；合計、備註、時間這類欄名仍會被擋掉，避免總量重複計算。(4) **發布中繼資料版本號不一致**：package.json 是 2.1.8、package-lock.json 是 2.0.1、程式顯示 v2.1.18。三者已同步，並新增測試在版本不一致時直接讓測試失敗，杜絕再次漂移。",
+  },
+  {
+    version: "v2.1.18",
+    date: "2026-08-23",
+    note: "全面稽核修正（發布前最後一次健檢）。**會直接寫錯報告數字的**：(1) 結論草稿的「季度之間的變動幅度」原本只依路口分組，同一路口同一季常常同時有平日與假日兩筆，於是寫出「上午尖峰總流量由 115Q1 的 3,000.0 PCU/hr 變為 115Q1 的 1,200.0 PCU/hr，減少 60.0%」——同一季自己跟自己比，比的還是平日對假日；現在一律**在同一種資料別之內**比較，同一種底下不足兩季時明講原因。(2) 歷季趨勢的**點標籤**與右側「季度變化」摘要原本永遠用駛出總量，折線座標與 Excel 匯出卻跟著駛出／駛入切換——資料有缺口時會變成「點畫在駛入的高度、旁邊標駛出的數字」，而且會被下載成 PNG 交出去；三者現在一致，趨勢 PNG／Excel 的檔名也加上視角、Excel 多一欄「統計視角」。(3)「跨計畫／多路口比較」卡片原本把各路口的尖峰流量相加標成「AM Peak 合計」，但各路口尖峰小時不同、相加不對應任何一個真實小時；改為「最高路口＋平均」並寫明理由。**會遺失資料的**：(4) 完整備份原本只存「匯出當下開著的那個計畫」的當量矩陣與車種設定，還原時又寫進錯的計畫，其他計畫全部退回系統預設而畫面只說「還原完成」；現在存還原每個計畫各自那一份（舊備份自動沿用原本的遷移方式）。(5)「全部清除」原本沒清掉其他計畫的當量矩陣、車種目錄與車種對照；刪除計畫也沒清掉該計畫的設定與還原點，孤兒資料會一直吃空間。(6) 儲存空間不足而降級存檔（丟掉還原點）時原本完全不出聲，畫面上卻仍列出全部還原點——使用者會依據一個已經不存在的救援選項做決定；現在會明確告知保留了幾筆。**其他**：(7) 同一批次匯入含重複站號＋資料別時原本會無聲互相覆蓋、完成訊息還把被蓋掉與略過的一起算進「已寫入」；現在會先擋下並列出是哪幾個檔案，訊息也改成實際寫入筆數。(8) 條件範本缺欄位（舊版存的）會在 render 期丟 TypeError 讓整個結論分頁消失，新增 normalizeCondition 補齊並夾住小數位數。(9) 批次成果包的 PDF／PNG 改為跟著畫面的車種篩選（與單張匯出一致），README 也改為據實寫出車種與單位。(10) 批次成果包中其他計畫的「歷季趨勢比較」工作表原本取到匯入順序決定的任意路口與資料別，改為挑季度數最多的路口與資料別。(11)「待設定」不再被寫成一種資料別，改寫為「資料別未指定」，統計範圍另計筆數。(12) 勾了「季度變動」「最大／最小」卻寫不出來時一律交代原因，不再靜靜消失。新增／補強單元測試至 92 項，端對端 6 支腳本全數通過。",
+  },
+  {
+    version: "v2.1.17",
+    date: "2026-08-23",
+    note: "把已經存在的「待設定」一次補完。v2.1.16 修的是**以後**匯入的行為，它不會回頭改既有紀錄——資料別是匯入當下判定並存進每一筆的，不會自己重讀。於是舊版匯入的那幾季仍然掛著待設定，而「待設定」被當成另一種資料別，同一個路口的歷季趨勢就被拆成兩條：選「平日」只看得到 1 季（畫不出趨勢，顯示「至少需要兩季資料」），選「待設定」才看得到 4 季。本版做三件事：(1)「歷季趨勢比較」的資料別**預設停在真正的資料別**，不再一進來就停在待設定；(2) 同一路口同時有待設定與真實資料別時，趨勢圖上方直接說明「趨勢線為什麼被拆成兩條」，並附上**一鍵補完**按鈕（這個路口的 N 季，或整個計畫的 N 筆）；(3)「流量核對工作台」的資料別區塊也加上同一組批次按鈕。批次只會更動目前是「待設定」的紀錄，已經是平日／假日的一律不碰，每一筆都會先自動保存還原點，可在版本差異還原。端對端腳本補上這個情境的完整重現：做出「同路口一季讀得到、一季讀不到」的資料，確認資料別下拉同時出現平日與待設定、預設不停在待設定、提示與按鈕出現、按下之後待設定消失且兩季合成同一條趨勢線。",
+  },
+  {
+    version: "v2.1.16",
+    date: "2026-08-23",
+    note: "三處和「資料別（平日／假日）」有關的修正。**(1) 日期沒寫括號、但工作表就叫「平日」的檔案不再被判成待設定。** 資料別原本只從日期字樣的括號讀（「日期：115年05月04日(平日)」），工作表名稱只有在「同一個檔案同時有平日與假日兩張」時才會被採用；於是「只做了一天、日期欄沒寫括號、但交通量工作表就叫平日」的檔案會被判成待設定——資訊明明就在檔案裡，只是沒去讀（實際案例：120507T501／502／503 與 06525T2501／2502／2503，日期欄分別是「日期：115年04月15日」「日期：115年06月03-04日」，都沒有括號，工作表都叫「平日」）。現在多一層：整份只有一張叫「平日」或「假日」的交通量工作表時，就用它當資料別。同時有兩張時維持原本的行為（每張各產生一筆，各自帶自己的資料別）。**(2) 重新匯入不會清掉舊的「待設定」，反而多出一筆。** 判斷「這是不是同一份調查」原本用「同計畫＋同季度＋同站號＋同資料別」，但待設定不是一種資料別，而是匯入當下還讀不出來；舊版存成待設定的紀錄，在用同一個檔案重新匯入（這次讀出了平日）時會被當成另一份調查，同一個路口同一季就同時留著兩筆。現在待設定的紀錄可以被有資料別的新匯入接手（先自動保存還原點，完成訊息會寫明補了幾筆）；反向不成立，已經知道是平日的紀錄不會被一筆待設定覆蓋，平日與假日之間也仍然是兩份不同的調查。**(3) 站號沒有連字號時被切錯。** 「站號：06525T2503」原本用貪婪的兩組數字去切，第一組盡量吃，切成「T250-03」；慣例是後兩碼為子編號，正確是 T25-03（同理 T501 應為 T5-01，舊版切成 T50-01）。有連字號時照舊。路口的識別是用路口名稱不是站號，所以既有資料的分組不受影響，但報表上顯示的站號會是對的。三處規則都抽成純函式（resolveSurveyType、isSameSurvey、stationFromFilename）並補上 11 項單元測試；另新增端對端腳本 e2e-survey-type.mjs，從瀏覽器實際匯入一次，驗證「工作表叫平日→讀成平日」「兩處都讀不到→才是待設定」「重新匯入後待設定被接手、路口數沒有增加」。",
+  },
+  {
+    version: "v2.1.15",
+    date: "2026-08-23",
+    note: "結論草稿產生器新增「各支線各車種駛入／駛出車輛數（輛／調查時段）」這個指標，數字直接取自「車種組成分析」的『全調查時段道路方向車種數量』——用的是同一支 surveyDirectionRows，不是另外算一份，所以草稿寫的每一個車種輛數必然和那張表逐格相同（端對端測試會把該表 111 個數值逐一比對回草稿）。單位是**輛／調查時段**（整個調查期間的累計），和上面的 輛/hr、PCU/hr 是不同的單位，草稿每一行都會把單位寫出來，避免有人拿去相加。呈現方式也和那一頁同一套：可選「跟著車種組成分析頁的設定」（您在那一頁把某條支線改成雙向合計，草稿就寫雙向合計，其他支線仍分行車方向）、「一律分行車方向」或「一律雙向合計」，標頭會寫明這次用的是哪一種。沒有逐流向調查明細的紀錄會明講「這一筆沒有逐流向的調查明細」，不會寫成 0。",
+  },
+  {
+    version: "v2.1.14",
+    date: "2026-08-23",
+    note: "車種轉向當量、車種目錄與車種對照改為**依計畫各存一份**，計畫之間完全獨立：A 計畫機車直行 0.42、B 計畫 0.5 不會互相覆蓋；A 計畫有 6 個車種、B 計畫有 10 個，刪掉 B 也不會影響 A 顯示的 6 個。舊版是全域共用一組，雖然已匯入的資料不受影響（每筆紀錄在匯入當下就把矩陣存進 pceUsed、PCU 也在那時算好，改設定不會回頭改數字，本版補上端對端測試把關），但畫面上永遠只看得到「最後一次設定」——切到 A 計畫卻顯示 B 的係數，而且在 A 重新匯入某一季時會用到 B 的係數，同一計畫的季度就對不起來。升級時會把原本那一組自動複製給每一個現有計畫，數字完全不變。另：「流量核對工作台」新增路口與資料別選擇器，不必先到別的分頁挑好再回來；資料別下拉不再把「待設定」當成可主動選的值（只有這一筆目前就是待設定時才列出），說明文字也改為講明「待設定」是指**這一筆**的原始檔沒寫，不是整個計畫都沒讀到。",
+  },
+  {
+    version: "v2.1.13",
+    date: "2026-08-23",
+    note: "「待設定」的說明與更正方式：資料別（平日／假日）是匯入時從原始檔的日期字樣「115年5月4日（平日）」或工作表名稱判斷的，原始檔沒寫就會是「待設定」——但以前沒有任何地方可以補，那筆資料在歷季趨勢、報表與結論草稿裡就永遠掛著「待設定」，也沒辦法和同一路口的另一種資料別分開比較。現在「流量核對工作台」新增資料別下拉，可直接指定平日／假日（更改前會自動保存還原點）。另外，結論草稿產生器的「二、時段與資料別」原本兩排長得一模一樣、沒有小標，「待設定」看起來像是第三個尖峰時段；現在加上「時段」與「資料別」兩個小標題，並在出現「待設定」時說明它的意思與更正路徑。另修正兩處按鈕／文字貼邊：(1)「道路與流向管理」的「開啟圖卡排版預覽」「重設所有圖卡位置」按鈕列內距是 12px 0，兩顆按鈕貼在卡片邊框上，比上面的支線列往左凸出 20px；(2)「多計畫管理」的計畫列在 760px 以下的內距降到 12px，計畫名稱比卡片標題往左凸出 9px。排版量測腳本也一併加強：原本只比對表格與段落，現在按鈕列也納入，且改用 Range 量「文字實際畫在哪裡」，外層包裝元素（padding 在內層）不會再被誤判成貼邊。",
+  },
+  {
+    version: "v2.1.12",
+    date: "2026-08-23",
+    note: "修正結論草稿產生器切換分頁後內容消失：條件與草稿原本是元件自己的狀態，切到別的分頁時元件被卸載、狀態跟著清空，使用者只是去看一眼路口轉向圖再回來，設好的整組條件與已產生的文字就全部不見了。狀態改放在整個 session 都不會卸載的上層元件，只有換計畫時才重設（換了計畫，原本挑的路口與支線本來就不存在）。另在「報告文字草稿」與「結論草稿產生器」各加一段說明，講清楚什麼時候該用哪一個（前者是這批 Excel 的說明文字、段落跟著匯出項目走；後者是自己出題），詳細對照表寫進手冊第 14 章。另外把「流量核對工作台」的表頭分成兩組：中間各車種欄位加上「① 原始調查車輛數（輛/hr）」，右邊加上「② 乘上車種轉向當量後的交通流量」，並在表格上方說明這一頁是核對換算過程用的——車種欄若標成 PCU 就沒有東西可以核對了。車種欄位本來就是依每一筆紀錄自己的車種清單產生（不是寫死四種），多車種調查格式一直都可以用，本次補上端對端測試把關（實測 7 車種全部列出，換算式也逐項使用）。「流量核對工作台」與「歷季趨勢比較」新增**駛出／駛入視角切換**：兩者是同一批 OD 流向、只是分組方式不同，資料完整時整個路口的總量必須相等，所以兩邊都會直接寫出合計關係——相等時說明可以互相核對，不相等時寫出差額並指出「有流向沒有指定目的支線」，因為那個差額正好就是缺口的大小。歷季趨勢的 Excel 匯出也跟著同一個視角走，避免折線圖與附表給出兩組數字。既有計算完全未變動。",
+  },
+  {
+    version: "v2.1.11",
+    date: "2026-08-23",
+    note: "結論草稿產生器的條件面板版面修正：(1)「要寫哪些路口／支線」的清單原本寫死最高 180px，卡片被其他欄位撐高之後清單只佔上面一小塊、下面留一大片空白，現在會撐滿卡片剩下的高度（上限 420px）；(2) 選項標籤原本依內容寬度排列，短標籤被擠成一行一兩個字，改為等寬格線每格至少 104px；(3) 清單與選項字級由 12px 調到 13px，行距放寬。功能與計算完全未變動。",
+  },
+  {
+    version: "v2.1.10",
+    date: "2026-08-23",
+    note: "新增「結論草稿產生器」：可自行勾選統計範圍（單一季度／某一年度／季度區間／整個計畫）、時段（上午尖峰／下午尖峰）、資料別（平日／假日）、要寫哪些路口與哪些支線，以及要寫哪些數字（各支線駛入／駛出流量 PCU、車輛數、佔路口百分比、路口總量、尖峰時段、車種組成、駛入駛出平衡、全日流量、季度變動、範圍內最大最小），再選擇依路口分段／依季度分段／只寫整體，系統照條件寫出一段可直接貼進報告的中文結論。文字可自行修改，改過之後要重新產生會先詢問；條件可存成多組範本重複使用（隨計畫一起備份）。草稿的數字全部取自畫面與 Excel 用的同一組計算，不另外再算一次，並在標頭寫明「PCU/hr 與 輛/hr 僅在同一筆紀錄內可相加，跨路口與跨季度只做比較不做加總」。修正：(1) 歷季趨勢比較把「站號相同」當成必要條件，導致同一路口在不同年度換過站號時（111 年 T13-04、115 年 T15-04）只剩一季對得上，圖表顯示「至少需要兩季資料」——改為每季只有一筆時直接串接並提示站號變動，只有同一季並存多個站號時才需要指定站號（此時多出站號選單）；(2) 報告文字草稿整張卡片沒有寫內距，標題、說明與文字框全部貼在卡片邊框上；(3) 滿版卡片裡的表格第一欄比卡片標題往左凸出，OD 矩陣、各路口駛入／駛出流量、車種組成分析都是；(4) 表格下方說明小字的樣式（.inline-note）根本不存在，整段貼著左邊框；(5) 六張卡片的標題被縮排兩次；(6) 道路與流向管理在 1281～1411px 之間整頁橫向溢出 28px、820px 時溢出 4px。另新增排版量測腳本（17 個分頁 × 12 種視窗寬度，直接量座標）納入端對端測試。",
+  },
+  {
+    version: "v2.1.9",
+    date: "2026-08-23",
+    note: "全面稽核與修正（37 項，涵蓋計算、功能與排版）。四項最嚴重：(1) 15 分鐘資料只要中間缺一格，「一格幾分鐘」的判斷就會誤判成 60 分鐘，所有流量變成真值的四分之一（實測 16,896 → 4,224 PCU/hr），且 13 小時的調查會被當成 53 小時而填滿「全日」欄位——改為取所有間隔的眾數；(2) 三叉路口的左轉與直行被併成同一條 OD 流向，左轉整批消失並以直行當量換算，而且每次重新整理總量都會再少一次（實測 2,328 → 2,264 PCU/hr）——流向的鍵值加入轉向別；(3) 每次開啟網頁會先把空白狀態寫回儲存再寫真實資料，只要有一筆資料格式不對，整個計畫的資料就會在無聲中被空白覆蓋——改為讀取完成前不寫入，並新增讀取失敗的搶救畫面；(4) 還原備份沒有任何確認，且失敗時會留下一半的破壞——改為先驗證整份、詢問後才一次寫入。另修正：季度排序改用民國／西元通用的比較器（99Q4 與 100Q1 不再排反）；儀表板「較上季」改為只比兩季都有的同一路口同一尖峰；歷季趨勢不再把同一交流道的不同站號畫成同一條線；刪除支線後重算路口總量（原本會留下憑空的流量且品質檢查報「沒有異常」）；「總數不一致」這個一直是 0 的檢查真的實作了；人工確認過的轉向分類不再被內建參考表覆寫；匯入的「併入既有路口」下拉兩個方向都失效已修正；取消預覽會還原預覽時新增的車種；全部清除真的清除全部設定；已鎖定的紀錄不能被單筆刪除；路口改名不再每打一個字就失焦。排版修正按鈕被擠成一行一個字、特定寬度整頁左右捲動、手冊頁「Word 版」下載鈕白字白底完全看不見。",
+  },
+  {
+    version: "v2.1.8",
+    date: "2026-08-23",
+    note: "「報表與批次輸出」新增報告文字草稿：依匯出期間與勾選的成果範圍，產出一段可直接貼進報告的中文敘述，可自行修改、複製全文或下載 .txt。除了整體總結之外另有「各路口分項結果」，把匯出期間內每一筆路口季度資料各寫一段（上午尖峰、下午尖峰各一行，含該筆自己的尖峰時段、路口轉向總量、各支線駛出／駛入量與車種組成），兩種總結各自獨立勾選。草稿的數字全部取自產生 Excel 的同一批計算（recordTotal、inboundAnalysisRows、odMatrix、branchBalance、conservationCheck、qualityIssues），不另外再算一次；匯出期間與歷季趨勢的挑選規則也改為兩邊共用同一個函式，避免報告文字與附表分岔。尖峰小時流量不能跨路口、跨季度相加，因此支線與車種的敘述固定以一筆代表資料（目前選定路口在範圍內的最新一季）為準，並在文中寫明是哪一筆；駛入與駛出合計不一致時照實寫出差值，不再無條件宣稱守恆；本次匯出用到多組當量矩陣時不列出單一組係數，改為指向工作表。段落清單直接綁定匯出項目清單，並以測試確保一一對應，日後新增匯出項目不會漏掉草稿段落。",
+  },
+  {
+    version: "v2.1.7",
+    date: "2026-08-23",
+    note: "修正「調查檔格式範本」三張卡片貼著面板邊框的排版問題：.panel 本身沒有內距，而這一格完全沒給，實測左右各只剩 1px，但上面的標題內縮 21px、下面的「已記住的版型」內縮 18px，同一個面板出現三種內縮。現在統一為 21px。",
+  },
+  {
+    version: "v2.1.6",
+    date: "2026-08-23",
+    note: "匯入辨識結果新增「取消預覽」：預覽的用意就是先看有沒有問題、有問題先去修檔案，但過去要放棄整批只能一列一列按刪除，看到錯誤卻放棄不了。現在可以一次清空整批辨識結果（含檔案選取框），正式資料完全不變動。",
+  },
+  {
+    version: "v2.1.5",
+    date: "2026-08-22",
+    note: "全面除錯：(1) 只要路口名稱同時含「中山北路」與「岡山路」，任何路口都會被硬套 T15-01 七叉參考轉向表，把匯入的轉向別整批改寫，現在必須支線代碼恰為 A~G 七支才套用；(2) 刪除支線時留下指向該支線的孤兒 OD 路徑，導致駛入合計與駛出合計對不起來，現在會一併刪除並事先提示影響筆數；(3) 新增支線的序號改用「未被占用的最小序號」，避免刪除後再新增造成代碼撞號、跨季度同步把兩支併成一支；(4) 路口改名只影響目前計畫，不再連帶改掉其他計畫的同名路口；(5) 使用者自行輸入的路口名稱不再於重新整理時被正規化吃掉；(6) 尖峰敏感度分析改為逐格檢查時間連續，中間缺一格的區間不再被當成完整一小時；(7)「車種轉向當量」工作表改為輸出各筆資料實際換算所用的當量矩陣，不再輸出畫面上目前的設定；(8) 匯出前排版預警新增「數據框蓋住右下角圖例／中央路口名稱」的檢查；(9) 各路口駛入／駛出流量表首欄由「目的路口」正名為「路口支線」；(10) 歷季趨勢比較新增「資料別」切換與欄位，平日與假日不再混在同一條折線上比較。",
+  },
+  {
+    version: "v2.1.4",
+    date: "2026-08-22",
+    note: "修正匯出的 .xlsx 在 Excel 開啟時會跳出「部分內容有問題／是否嘗試復原」，按「是」之後歷季趨勢圖被整張丟掉的問題。圖表 XML 有三處不符合 ECMA-376：c:smooth 排在 c:ser 之前、數值軸的 c:majorGridlines 排在 c:numFmt 之後。已全部修正並新增自動檢查，圖表可直接開啟並保持可編輯。可編輯原生圖表需要 Excel 2007 以上，更舊的版本請改用舊版 .xls 數值表。",
+  },
+  {
+    version: "v2.1.3",
+    date: "2026-08-22",
+    note: "統一「駛入／駛出」用詞：駛入路口X＝車輛從其他支線駛入 X（以 X 為終點），駛出路口X＝車輛從 X 駛出開進路口（以 X 為起點）。全站原本就是這樣算，只有「調查資料 → 與路口關係」欄的兩個標籤寫反了，本版修正；歷季趨勢匯出的兩個欄位名稱也改用同一套用詞。數值完全沒有變動。",
+  },
+  {
+    version: "v2.1.2",
+    date: "2026-08-22",
+    note: "修正路口轉向圖右下角的流向圖例：左轉／直行／右轉原本都是同一個深灰色圓點，看不出對應哪一種箭頭；現改為與圖上箭頭同色的箭頭線段（左轉桃紅、直行藍、右轉紅）。",
+  },
   {
     version: "v2.1.1",
     date: "2026-08-22",
@@ -325,7 +504,7 @@ export const VERSION_HISTORY = [
   {
     version: "v1.7.2",
     date: "2026-08-14",
-    notes: "五至七岔路口改用外圍自動避讓排版，流量卡不再互相遮蔽。",
+    note: "五至七岔路口改用外圍自動避讓排版，流量卡不再互相遮蔽。",
   },
   {
     version: "v1.7.1",
@@ -550,15 +729,23 @@ export function canonicalIntersectionKey(input: string) {
 }
 
 export function stationFromFilename(name: string): string {
-  return (
-    name
-      .normalize("NFKC")
-      .match(/T\s*(\d+)[-_.]?\s*(\d+)/i)
-      ?.slice(1)
-      .map((x, i) => (i ? x.padStart(2, "0") : x))
-      .join("-")
-      .replace(/^/, "T") || `S-${Math.abs(hash(name)) % 999}`
-  );
+  const text = name.normalize("NFKC");
+  /* 有分隔符號時最單純，直接照它切：T15-04、T15_04、T15.04 */
+  const separated = text.match(/T\s*(\d+)\s*[-_.]\s*(\d+)/i);
+  if (separated) return `T${separated[1]}-${separated[2].padStart(2, "0")}`;
+  /*
+   * 沒有分隔符號時要自己切，例如「06525T2503」。
+   * 慣例是**後兩碼**為子編號，所以 T2503 → T25-03、T501 → T5-01。
+   * 舊版是用貪婪的兩組 (\d+)(\d+) 去切，第一組會盡量吃，於是 T2503 被切成
+   * 「T250-03」、T501 被切成「T50-01」——站號一旦寫錯，報表與歷季比較上
+   * 顯示的就是錯的站號。
+   * 只有兩碼時（T51）維持舊行為切成 T5-01。
+   */
+  const run = text.match(/T\s*(\d+)/i)?.[1];
+  if (run && run.length >= 3)
+    return `T${run.slice(0, -2)}-${run.slice(-2)}`;
+  if (run && run.length === 2) return `T${run[0]}-${run[1].padStart(2, "0")}`;
+  return `S-${Math.abs(hash(name)) % 999}`;
 }
 
 function hash(value: string) {
@@ -702,6 +889,34 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
             return note.startsWith("日期辨識未成功：");
           }) || "日期辨識未成功；不代表原始檔欄位一定空白。",
       });
+    /*
+     * 總數不一致：路口轉向總量（由 approaches 的左直右加總）與逐條 OD 流向
+     * 加總應該相等。不相等就代表 approaches 與 routes 脫鉤了——最常見的是
+     * 刪除支線之後沒有重算，畫面與每一張 Excel 都會多出一筆憑空的流量。
+     *
+     * 這個類別本來就宣告在型別裡、KPI 也有一格，但沒有任何規則會產生它，
+     * 所以那一格永遠是 0，等於對使用者謊稱「已經檢查過而且沒問題」。
+     */
+    if (record.routes?.length)
+      for (const peak of ["AM", "PM"] as PeakKey[]) {
+        const movementTotal = record.approaches.reduce(function (sum, approach) {
+          return sum + totalMovement(approach, peak);
+        }, 0);
+        const routeTotal = record.routes.reduce(function (sum, route) {
+          return sum + Number(route.volumes[peak]?.pcu || 0);
+        }, 0);
+        const difference = Math.round((movementTotal - routeTotal) * 10) / 10;
+        // 兩邊都做到小數一位，容差取 0.11 與 conservationCheck 一致。
+        if (Math.abs(difference) >= 0.11)
+          issues.push({
+            id: `${record.id}-${peak}-conservation`,
+            severity: "error",
+            category: "總數不一致",
+            station: record.station,
+            quarter: record.quarter,
+            message: `${peak} 尖峰：路口轉向總量 ${movementTotal.toLocaleString()} PCU/hr 與逐條流向加總 ${routeTotal.toLocaleString()} PCU/hr 相差 ${difference.toLocaleString()} PCU/hr。常見原因是刪除支線後未重算，請到「流量核對工作台」確認。`,
+          });
+      }
   }
   return issues;
 }
@@ -714,10 +929,41 @@ export function rollingPeak(
   intervalMinutes = 15,
   weights?: number[],
 ) {
-  const needed = Math.max(1, Math.round(60 / intervalMinutes));
+  /*
+   * 尖峰小時一定要由「恰好 60 分鐘」的原始格距組成。
+   * 例如 15、20、30、60 分鐘都能精確組成一小時；45 或 120 分鐘則不能。
+   * 後兩者若硬取一格再標成 PCU/hr，會把 45 分鐘或 2 小時的量冒充成一小時，
+   * 口徑比顯示缺值更危險，因此明確回傳 null，交由介面說明資料不足。
+   */
+  if (
+    !Number.isFinite(intervalMinutes) ||
+    intervalMinutes <= 0 ||
+    intervalMinutes > 60 ||
+    60 % intervalMinutes !== 0
+  )
+    return null;
+  const needed = 60 / intervalMinutes;
+  /*
+   * 視窗的**頭和尾都要落在時段內**。
+   *
+   * 舊版只檢查起點（row.start < range[1]），視窗卻是 start 到 start+60，
+   * 於是：
+   *  ・上午尖峰 [05:00, 12:00) 可以挑到 11:45 起算 → 11:45–12:45，
+   *    一個橫跨中午、大半在下午的視窗被標成「上午尖峰」；
+   *  ・更糟的是它和下午尖峰 [12:00, 23:00) 挑到的 12:00–13:00 重疊 45 分鐘，
+   *    同一批車同時被算進上午與下午兩個尖峰；
+   *  ・晚間也會超出上界：22:45 起算 → 22:45–23:45，已經超過 23:00。
+   * 現在要求整個視窗（含結尾）都在範圍內。
+   *
+   * 上方已先確認格距可精確組成 60 分鐘，避免非一小時資料誤標成 PCU/hr。
+   */
+  const windowMinutes = 60;
   const candidates = rows
     .map((row, index) => ({ row, index }))
-    .filter(({ row }) => row.start >= range[0] && row.start < range[1]);
+    .filter(
+      ({ row }) =>
+        row.start >= range[0] && row.start + windowMinutes <= range[1],
+    );
   let best: {
     start: number;
     end: number;
@@ -743,7 +989,12 @@ export function rollingPeak(
       0,
     );
     if (!best || total > best.total)
-      best = { start: row.start, end: row.start + 60, total, values };
+      best = {
+        start: row.start,
+        end: row.start + windowMinutes,
+        total,
+        values,
+      };
   }
   return best;
 }
@@ -751,8 +1002,23 @@ export function rollingPeak(
 function parseTime(value: unknown): number | null {
   if (typeof value === "number" && value > 0 && value < 1)
     return Math.round(value * 24 * 60);
-  const match = String(value ?? "").match(/(\d{1,2})[:：](\d{2})/);
-  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+  /*
+   * 一定要先 NFKC 正規化，並允許冒號兩側有空白。
+   *
+   * 從 Word 貼過來的調查表常見全形數字與全形冒號「０７：００」，也有人打成
+   * 「7 : 00」。舊版的 \d 不吃全形數字（雖然吃得到全形冒號），於是整個
+   * 時間欄一格都認不出來——時間欄認不出來就找不到資料起始列，**整張工作表
+   * 讀成 0 筆**，而且整體不會報錯，只是那個路口的量憑空消失。
+   * 這是全系統唯一的時間解析入口，補在這裡等於所有讀取路徑一起修好。
+   */
+  const text = String(value ?? "").normalize("NFKC");
+  const match = text.match(/(\d{1,2})\s*[:：]\s*(\d{2})/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  /* 25:70 這種明顯不是時間的字串不要當成時間，否則會誤判時間欄。 */
+  if (hours > 24 || minutes > 59) return null;
+  return hours * 60 + minutes;
 }
 
 export type ImportPreview = {
@@ -909,12 +1175,57 @@ function vehicleFromHeader(label: string): VehicleDefinition | null {
   ].find(function (item) {
     return item.pattern.test(normalized);
   });
-  if (!matches) return null;
-  return {
-    id: matches.id || customVehicleId(matches.label),
-    label: matches.label,
-    core: Boolean(matches.core),
-  };
+  if (matches)
+    return {
+      id: matches.id || customVehicleId(matches.label),
+      label: matches.label,
+      core: Boolean(matches.core),
+    };
+  return null;
+}
+
+/**
+ * 認不得的欄名，在「這一欄確實是某個車種的左／直／右或目的地欄」時，
+ * 收成自訂車種。
+ *
+ * 為什麼需要：vehicleFromHeader 只認得七組內建關鍵字，不符合就回 null，
+ * 呼叫端接著 `continue` **無聲跳過整個欄位**。調查表裡有「自行車」
+ * 「電動機車」「小貨車」這類新車種時，那幾欄的量會憑空消失，總量少掉
+ * 而且沒有任何提示，也和「可讀取任意數量車種」的說明不符。
+ *
+ * 為什麼不直接放寬 vehicleFromHeader：那支也被「掃描前 20 列找出這份檔案
+ * 有哪些車種」用到，放寬會把時間欄、合計欄一起收成車種。這裡是唯一
+ * 「已經確認有左／直／右或目的地」的地方，才有足夠證據判定它是車種欄。
+ *
+ * 即使如此仍要擋掉明顯不是車種的字樣——合計、備註被當成車種會讓總量重複
+ * 計算，比漏掉還糟。
+ */
+function customVehicleFromHeader(label: string): VehicleDefinition | null {
+  /*
+   * 傳進來的 label 是「上下欄名用｜串起來」的複合字串，例如
+   * 「日期：115.05.04 (平日)｜自行車｜左轉」。要先把流向、日期那幾段拿掉，
+   * 剩下的才是車種名稱——否則「自行車｜左轉」會因為含有「左轉」而被
+   * 下面的排除清單擋掉，那正是這支函式要救的欄位。
+   */
+  const dropSegment =
+    /^(左轉|直進|直行|右轉|迴轉|掉頭|u-?turn|left|through|straight|right)$|^往|^至|^日期|^站號|^站名|^天候|^調查員|^路口編號|^時\s*間$/i;
+  const segments = label
+    .split(/[｜|]/)
+    .map((part) => part.normalize("NFKC").replace(/[\s\u3000]+/g, ""))
+    .filter((part) => part && !dropSegment.test(part));
+  const normalized = segments.at(-1) || "";
+  if (!normalized || normalized.length > 12) return null;
+  /* 時間、時間區間、純數字或百分比一律不是車種 */
+  if (/\d\s*[:：]\s*\d/.test(normalized)) return null;
+  if (/[～~—–]/.test(normalized)) return null;
+  if (/^[\d.,%\-+]+$/.test(normalized)) return null;
+  if (
+    /合計|小計|總計|總和|加總|平均|百分比|比例|佔比|備註|說明|時間|時段|方向|轉向|左轉|直進|直行|右轉|迴轉|流量|pcu|當量|人次|序號|編號|項目|日期|天候|站號|站名|路口|支線|合流|分流/i.test(
+      normalized,
+    )
+  )
+    return null;
+  return { id: customVehicleId(normalized), label: normalized, core: false };
 }
 
 function detectedVehicleHeaders(workbook: XLSX.WorkBook) {
@@ -1027,17 +1338,38 @@ const ZHONGSHAN_GANGSHAN_SEVEN_ARM_MOVEMENTS: Record<
   G: { A: "left", B: "left", C: "through", D: "right", E: "right", F: "right" },
 };
 
+const REFERENCE_ARM_CODES = ["A", "B", "C", "D", "E", "F", "G"];
+
 /**
- * Confirmed movement classification copied from the user's T15-01 reference
- * calculation workbook. D has no through movement in that workbook.
+ * 這張參考表是從使用者 T15-01 的人工計算底稿抄下來的，只對「那一個」七叉
+ * 路口成立（該底稿裡 D 沒有直行）。
+ *
+ * 早期的判斷條件只看路口名稱有沒有同時出現「中山北路」與「岡山路」，於是
+ * 任何名字沾到這兩條路的路口——包含只有四叉的一般路口、或同一條路上的別
+ * 的交叉點——都會被硬套這張表，把使用者匯入的轉向別整批改寫掉（實測會把
+ * A→B 從直行 368.5 改成左轉 538.9），而且畫面上不會有任何提示。
+ *
+ * 因此除了名稱之外，還要求路口的支線代碼恰好是 A~G 七支，形狀對不上就不
+ * 套用，改回幾何推算。
  */
 export function referenceMovementForOd(
   intersectionName: string,
   from: string,
   to: string,
+  armCodes: string[],
 ): MovementKey | null {
   const normalized = intersectionName.normalize("NFKC");
   if (!normalized.includes("中山北路") || !normalized.includes("岡山路"))
+    return null;
+  const codes = [
+    ...new Set(
+      (armCodes || [])
+        .map((code) => String(code || "").trim().toUpperCase())
+        .filter(Boolean),
+    ),
+  ].sort();
+  if (codes.length !== REFERENCE_ARM_CODES.length) return null;
+  if (codes.some((code, index) => code !== REFERENCE_ARM_CODES[index]))
     return null;
   return ZHONGSHAN_GANGSHAN_SEVEN_ARM_MOVEMENTS[from]?.[to] || null;
 }
@@ -1183,8 +1515,15 @@ export async function inspectWorkbook(
         const movement = movementFromHeader(label);
         const destination =
           label.match(/往\s*([A-Z0-9]+)/i)?.[1]?.toUpperCase() || null;
-        const headerVehicle = vehicleFromHeader(label);
-        if (!headerVehicle || (!movement && !destination)) continue;
+        /*
+         * 這一欄要有左／直／右或目的地，才算是「車種 × 流向」的資料欄。
+         * 有了這個前提，欄名認不得時就收成自訂車種而不是無聲丟掉
+         * （見 customVehicleFromHeader 的說明）。
+         */
+        if (!movement && !destination) continue;
+        const headerVehicle =
+          vehicleFromHeader(label) || customVehicleFromHeader(label);
+        if (!headerVehicle) continue;
         candidates.push({
           sourceColumn: col,
           label,
@@ -1270,6 +1609,7 @@ export async function inspectWorkbook(
           workbookName || file.name,
           column.approach,
           column.destination,
+          originOrder,
         ) ||
         defaultMovementForOd(column.approach, column.destination, originOrder);
     }
@@ -1277,20 +1617,39 @@ export async function inspectWorkbook(
   const intervalRows = [...intervalMap.values()].sort(function (a, b) {
     return a.start - b.start;
   });
-  const intervalMinutes = Math.max(
-    15,
-    Math.min(
-      60,
-      intervalRows
-        .slice(1)
-        .map(function (row, index) {
-          return row.start - intervalRows[index].start;
-        })
-        .filter(function (value) {
-          return value > 0;
-        })[0] || 15,
-    ),
-  );
+  /*
+   * 一格是幾分鐘：取「所有間隔裡最常出現的那一個」，不是第一個。
+   *
+   * 舊寫法取 [0]（第一個正的間隔）。真實調查很常見開頭缺幾格（晚開始、
+   * 換設備、第一段作廢），例如 15 分鐘的資料缺了 06:15/06:30/06:45，
+   * 第一個間隔就是 60 分鐘——於是整份 15 分鐘資料被當成整點資料：
+   * 尖峰的滾動視窗只需要 1 格，一格 15 分鐘的量被當成一小時的量
+   *（實測真值 16,896 PCU/hr 被記成 4,224，只有四分之一），
+   * survey.minutes 也會被高估四倍，讓 13 小時的調查填滿「全日」欄位。
+   * 取眾數對「中間缺幾格」是穩健的；同票時取較小者（比較保守，
+   * 寧可把整點資料當成細格資料多算幾格，也不要把細格資料當成整點）。
+   */
+  const gaps = intervalRows
+    .slice(1)
+    .map(function (row, index) {
+      return row.start - intervalRows[index].start;
+    })
+    .filter(function (value) {
+      return value > 0;
+    });
+  const gapCounts = new Map<number, number>();
+  for (const gap of gaps) gapCounts.set(gap, (gapCounts.get(gap) || 0) + 1);
+  let commonGap = 0;
+  let commonCount = 0;
+  for (const [gap, count] of [...gapCounts.entries()].sort(function (a, b) {
+    return a[0] - b[0];
+  }))
+    if (count > commonCount) {
+      commonGap = gap;
+      commonCount = count;
+    }
+  /* 保留實際眾數格距；不要把 2 小時格距壓成 60 分鐘後假裝可算尖峰小時。 */
+  const intervalMinutes = Math.max(1, commonGap || 15);
   const surveyValues = Array.from(
     {
       length: Math.max(
@@ -1417,10 +1776,11 @@ export async function inspectWorkbook(
     dateSource: dateCell
       ? { sheet: dateCell.sheet, cell: dateCell.cell, raw: dateCell.text }
       : null,
-    surveyType:
-      options?.surveyType ||
-      dateText.match(/[（(]\s*([^）)]+)\s*[）)]/)?.[1] ||
-      "待設定",
+    surveyType: resolveSurveyType({
+      explicit: options?.surveyType,
+      dateText,
+      sheetNames: buckets.traffic,
+    }),
     layout,
     approaches: originOrder,
     columns: detectedColumns,

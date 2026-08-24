@@ -124,8 +124,9 @@ test("跨季度同步與新增支線不會互相污染", () => {
   // 重複的支線代碼加上序號，避免多條「人工」支線被併成同一條
   assert.match(appSource, /const codeKey = function/);
   assert.match(appSource, /index \? code \+ "#" \+ index : code/);
-  // 新增支線不沿用第一條的交通量與版面
-  assert.match(appSource, /sourceCode: "人工" \+ \(i \+ 1\)/);
+  // 新增支線不沿用第一條的交通量與版面，且序號要避開已存在的代碼
+  assert.match(appSource, /sourceCode: "人工" \+ seq/);
+  assert.match(appSource, /usedCodes\.has\("人工" \+ seq\)/);
   assert.match(appSource, /cardLayouts: undefined,/);
 });
 

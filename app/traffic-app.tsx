@@ -37,6 +37,7 @@ import {
   VehicleKey,
   VERSION,
   VERSION_HISTORY,
+  isSameSurvey,
 } from "../lib/traffic";
 import {
   branchBalance,
@@ -46,12 +47,38 @@ import {
   peakSensitivity,
   quarterQualitySummary,
   RecordRevision,
+  compareQuarters,
+  recordIntersectionKey,
   REPORT_ITEMS,
   ReportItemKey,
   ReportTemplate,
   normalizeReportItems,
+  trendSeriesRecords,
+  buildTrendSeries,
   VehicleScheme,
 } from "../lib/final-features";
+import {
+  DRAFT_ONLY_SECTIONS,
+  DRAFT_SECTION_LABELS,
+  DRAFT_SECTION_ORDER,
+  buildReportDraft,
+  type DraftSectionKey,
+  type ReportDraftContext,
+} from "../lib/report-draft";
+import {
+  BRANCH_COMPOSITION_MODES,
+  CONCLUSION_METRICS,
+  DEFAULT_CONDITION,
+  buildConclusion,
+  normalizeCondition,
+  quarterKey as conclusionQuarterKey,
+  quarterYear,
+  selectRecords,
+  type ConclusionCondition,
+  type ConclusionMetricKey,
+  type ConclusionRecord,
+  type ConclusionTemplate,
+} from "../lib/conclusion";
 
 type View =
   | "dashboard"
@@ -65,6 +92,7 @@ type View =
   | "trend"
   | "audit"
   | "advanced"
+  | "conclusion"
   | "quality"
   | "names"
   | "geometry"
@@ -92,6 +120,7 @@ type FormatMemory = {
   lastUsedAt: string;
 };
 type VehicleMappingTable = Record<string, string>;
+const EMPTY_VEHICLE_MAPPINGS: VehicleMappingTable = {};
 type ImportConflictMode = "overwrite" | "version" | "skip";
 
 const NAV: { id: View; label: string; icon: string; group?: string }[] = [
@@ -109,7 +138,8 @@ const NAV: { id: View; label: string; icon: string; group?: string }[] = [
   { id: "trend", label: "歷季趨勢比較", icon: "⌁" },
   { id: "audit", label: "流量核對工作台", icon: "≋" },
   { id: "advanced", label: "轉向進階分析", icon: "▦" },
-  { id: "reports", label: "報表與批次輸出", icon: "▤", group: "輸出與維護" },
+  { id: "conclusion", label: "結論草稿產生器", icon: "✎", group: "輸出與維護" },
+  { id: "reports", label: "報表與批次輸出", icon: "▤" },
   { id: "backup", label: "備份、還原與版本", icon: "⟳" },
   { id: "help", label: "新手操作手冊", icon: "?" },
 ];
@@ -194,35 +224,40 @@ function surveyDirectionRows(record: TrafficRecord) {
   };
   const analysisVehicles = recordVehicleIds(record);
   return record.approaches.flatMap(function (approach) {
-    const inbound = emptyVehicle();
-    const outbound = emptyVehicle();
+    // 用詞定義（與全站一致）：
+    //   駛出路口X ＝ 車輛「從支線 X 駛出」開進路口，也就是以 X 為起點（fromApproachId）。
+    //   駛入路口X ＝ 車輛「從其他支線駛入 X」，也就是以 X 為終點（toApproachId）。
+    const departing = emptyVehicle(); // 以本支線為起點
+    const arriving = emptyVehicle(); // 以本支線為終點
     (record.routes || []).forEach(function (route) {
       if (!route.survey) return;
       if (route.fromApproachId === approach.id)
         analysisVehicles.forEach(function (vehicle) {
-          inbound[vehicle] += Number(route.survey?.vehicle[vehicle] || 0);
+          departing[vehicle] += Number(route.survey?.vehicle[vehicle] || 0);
         });
       if (route.toApproachId === approach.id)
         analysisVehicles.forEach(function (vehicle) {
-          outbound[vehicle] += Number(route.survey?.vehicle[vehicle] || 0);
+          arriving[vehicle] += Number(route.survey?.vehicle[vehicle] || 0);
         });
     });
     const bidirectional = emptyVehicle();
     analysisVehicles.forEach(function (vehicle) {
-      bidirectional[vehicle] = inbound[vehicle] + outbound[vehicle];
+      bidirectional[vehicle] = departing[vehicle] + arriving[vehicle];
     });
     return [
       {
         approach,
+        // 由該支線開往路口中心
         direction: bearingFromAngle(approach.angle + 180),
-        relation: "駛入路口",
-        vehicle: inbound,
+        relation: "駛出路口",
+        vehicle: departing,
       },
       {
         approach,
+        // 由路口中心開往該支線
         direction: bearingFromAngle(approach.angle),
-        relation: "駛離路口",
-        vehicle: outbound,
+        relation: "駛入路口",
+        vehicle: arriving,
       },
       {
         approach,
@@ -326,11 +361,13 @@ async function editableTrendWorkbookBlob(
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:style val="10"/>' +
       '<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-TW" sz="1500" b="1"><a:solidFill><a:srgbClr val="17333B"/></a:solidFill></a:rPr><a:t>歷季尖峰交通量趨勢（單位：PCU/hr）</a:t></a:r></a:p></c:rich></c:tx><c:layout/>' +
-      '<c:overlay val="0"/></c:title><c:plotArea><c:layout/><c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/><c:smooth val="0"/>' +
+      '<c:overlay val="0"/></c:title><c:plotArea><c:layout/><c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>' +
       seriesXml +
-      '<c:axId val="48650112"/><c:axId val="48672768"/></c:lineChart>' +
+      // CT_LineChart 的順序：grouping → varyColors → ser* → … → marker → smooth → axId。
+      // c:smooth 一定要排在 c:ser 之後、c:axId 之前。
+      '<c:marker val="1"/><c:smooth val="0"/><c:axId val="48650112"/><c:axId val="48672768"/></c:lineChart>' +
       '<c:catAx><c:axId val="48650112"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-TW" sz="1000"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:rPr><a:t>調查季度</a:t></a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title><c:tickLblPos val="nextTo"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr><c:crossAx val="48672768"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>' +
-      '<c:valAx><c:axId val="48672768"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:title><c:tx><c:rich><a:bodyPr rot="-5400000"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-TW" sz="1000"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:rPr><a:t>尖峰小時交通量（PCU/hr）</a:t></a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title><c:numFmt formatCode="#,##0.0" sourceLinked="0"/><c:majorGridlines><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="DDE6E3"/></a:solidFill></a:ln></c:spPr></c:majorGridlines><c:tickLblPos val="nextTo"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr><c:crossAx val="48650112"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>' +
+      '<c:valAx><c:axId val="48672768"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines><c:spPr><a:ln w="9525"><a:solidFill><a:srgbClr val="DDE6E3"/></a:solidFill></a:ln></c:spPr></c:majorGridlines><c:title><c:tx><c:rich><a:bodyPr rot="-5400000"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-TW" sz="1000"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:rPr><a:t>尖峰小時交通量（PCU/hr）</a:t></a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title><c:numFmt formatCode="#,##0.0" sourceLinked="0"/><c:tickLblPos val="nextTo"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr><c:crossAx val="48650112"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>' +
       '</c:plotArea><c:legend><c:legendPos val="b"/><c:layout/><c:overlay val="0"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr/><a:defRPr sz="900"><a:solidFill><a:srgbClr val="52666D"/></a:solidFill></a:defRPr></a:p></c:txPr></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln w="9525"><a:solidFill><a:srgbClr val="DDE6E3"/></a:solidFill></a:ln></c:spPr></c:chartSpace>',
   );
   const contentTypesFile = zip.file("[Content_Types].xml");
@@ -388,14 +425,6 @@ function nameSimilarity(a: string, b: string) {
     return rightPairs.has(pair);
   }).length;
   return (2 * shared) / Math.max(1, leftPairs.size + rightPairs.size);
-}
-
-function recordIntersectionKey(record: TrafficRecord) {
-  return (
-    canonicalIntersectionKey(record.name) ||
-    record.intersectionId ||
-    record.station
-  );
 }
 
 function resultSignature(record: TrafficRecord) {
@@ -617,7 +646,19 @@ function syncRouteTotals(record: TrafficRecord) {
 }
 
 function applyReferenceMovementRule(record: TrafficRecord) {
+  /*
+   * 使用者自己確認過的轉向分類，任何情況下都不能被覆蓋。
+   *
+   * 這支函式在每次開啟網頁、每次還原備份時都會跑一遍。舊版沒有這一道檢查，
+   * 於是使用者在「檢查起點→終點流向」手動改好的分類，重新整理之後就被
+   * 內建的參考表改回去了——而畫面上明明寫著「本路口採人工確認分類；調整
+   * 圖面角度不會覆蓋」。
+   */
+  if (record.movementRule === "manual") return syncRouteTotals(record);
   let applied = false;
+  const armCodes = (record.approaches || []).map(function (approach) {
+    return approach.sourceCode || "";
+  });
   (record.routes || []).forEach(function (route) {
     const source = record.approaches.find(function (approach) {
       return approach.id === route.fromApproachId;
@@ -629,6 +670,7 @@ function applyReferenceMovementRule(record: TrafficRecord) {
       record.name,
       source?.sourceCode || "",
       destination?.sourceCode || "",
+      armCodes,
     );
     if (movement) {
       route.movement = movement;
@@ -719,7 +761,7 @@ function synchronizeGeometryAcrossQuarters(records: TrafficRecord[]) {
   records.forEach(function (record) {
     const key = (record.projectId || "") + "|" + recordIntersectionKey(record);
     const current = latest.get(key);
-    if (!current || current.quarter.localeCompare(record.quarter) < 0)
+    if (!current || compareQuarters(current.quarter, record.quarter) < 0)
       latest.set(key, record);
   });
   return records.map(function (record) {
@@ -1626,7 +1668,24 @@ export function diagramMarkup(
     (width - 280) +
     " " +
     (height - 26) +
-    ')"><text x="0">● 左轉</text><text x="70">● 直行</text><text x="140">● 右轉</text></g>' +
+    // 這是流向箭頭的顏色圖例。舊版三個項目都寫成同樣的「●」而沒有上色，
+    // 三個黑點看起來毫無意義；現在改成畫出與圖上箭頭同色的短線加箭頭。
+    ')">' +
+    (["left", "through", "right"] as const)
+      .map(
+        (movement, index) =>
+          '<g transform="translate(' +
+          index * 78 +
+          ' 0)"><path d="M0 -4H22" stroke="' +
+          colors[movement] +
+          '" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-' +
+          movement +
+          ')"/><text x="30" y="0">' +
+          MOVE_LABELS[movement] +
+          "</text></g>",
+      )
+      .join("") +
+    "</g>" +
     focusNote +
     '<g transform="translate(' +
     (width - 52) +
@@ -1660,15 +1719,24 @@ async function svgToPng(svg: string, scale = 2) {
   });
 }
 
-function emptyMovement(values: number[] | undefined, index: number) {
-  const left = Number(values?.[index * 3]) || 0;
-  const through = Number(values?.[index * 3 + 1]) || 0;
-  const right = Number(values?.[index * 3 + 2]) || 0;
+/*
+ * 欄位對應不到支線時的空白轉向量。
+ *
+ * 舊版是把 values 依 index*3 切三格當成左／直／右直接存進去，有兩個致命問題：
+ * 1. values 的順序是「車種 × 轉向」（機車左/機車直/機車右/小型車左…），
+ *    不是「支線 × 轉向」，所以切出來的三格根本不是那一支支線的量。
+ * 2. 完全沒有乘當量係數，卻存進 left/through/right 這三個「PCU 欄位」——
+ *    實測 400 輛機車左轉（＝200 PCU/hr）被記成 400 PCU/hr，剛好兩倍，
+ *    而且預覽畫面顯示 200、寫入之後變成 400，同一次匯入兩個數字。
+ * 對應不到就是對應不到，寧可留白讓使用者去修檔案或設定車種對應，
+ * 也不要給一個兩倍且單位錯誤的數字。
+ */
+function emptyMovement() {
   return {
-    left: left,
-    through: through,
-    right: right,
-    vehicle: { motorcycle: 0, car: 0, heavy: 0, special: 0 },
+    left: 0,
+    through: 0,
+    right: 0,
+    vehicle: {} as Record<string, number>,
     rawVehicleTotal: null,
   };
 }
@@ -1814,12 +1882,17 @@ function recordFromPreview(
         cycleLength: null,
         capacity: null,
         movements: {
-          AM: useMapping
+          /*
+           * 只要這一支支線在原始檔裡有對應的欄位，就用 mappedMovement 算
+           *（它會依每一欄自己的車種與轉向別套用當量係數，是正確的算法）。
+           * 完全對應不到才留白。
+           */
+          AM: mappedMovements[index]
             ? mappedMovements[index].AM
-            : emptyMovement(item.am?.values, index),
-          PM: useMapping
+            : emptyMovement(),
+          PM: mappedMovements[index]
             ? mappedMovements[index].PM
-            : emptyMovement(item.pm?.values, index),
+            : emptyMovement(),
         },
       };
     },
@@ -1842,11 +1915,21 @@ function recordFromPreview(
       approaches[targetIndex]?.sourceCode || mappedNames[targetIndex] || ""
     );
   };
+  /*
+   * key 一定要含轉向別。
+   *
+   * 三叉路口（T 字）上，movementTargetIndex 對「左轉」與「直行」會解出
+   * 同一支目的支線（兩個候選與直行目標等距，取到同一個）。舊寫法只用
+   * from→to 當 key，後來的那一欄就把前面的覆蓋掉：左轉整批消失，
+   * 它的流量被併進直行、用直行的當量換算，而且每次重新整理
+   * syncRouteTotals 會用這批殘缺的流向回寫 approaches，路口總量因此
+   * 一次比一次少（實測 2,328 → 2,264 PCU/hr，使用者完全沒有編輯過）。
+   */
   item.columns.forEach(function (column) {
     const movement = column.movement || "through";
     const destination = destinationForColumn(column);
     if (destination)
-      routeKeys.set(column.approach + "→" + destination, {
+      routeKeys.set(column.approach + "→" + destination + "→" + movement, {
         from: column.approach,
         to: destination,
         movement,
@@ -1862,7 +1945,13 @@ function recordFromPreview(
           item.columns
             .filter(function (column) {
               const destination = destinationForColumn(column);
-              return column.approach === route.from && destination === route.to;
+              // 轉向別也要比對，否則同一個 from→to 的左轉與直行兩條流向
+              // 會各自把對方的欄位也加進來，流量變成兩倍。
+              return (
+                column.approach === route.from &&
+                destination === route.to &&
+                (column.movement || "through") === route.movement
+              );
             })
             .forEach(function (column) {
               const count = Number(values?.[column.valueIndex]) || 0;
@@ -1881,7 +1970,13 @@ function recordFromPreview(
       item.columns
         .filter(function (column) {
           const destination = destinationForColumn(column);
-          return column.approach === route.from && destination === route.to;
+          // 與上面的尖峰值一樣，轉向別也要比對；三叉路口的左轉與直行
+          // 共用同一個 from→to，不比對會互相把對方的量也加進來。
+          return (
+            column.approach === route.from &&
+            destination === route.to &&
+            (column.movement || "through") === route.movement
+          );
         })
         .forEach(function (column) {
           const analysisVehicle =
@@ -2030,7 +2125,14 @@ function recordFromPreview(
       : undefined,
     approaches: approaches,
     routes: routes,
-    movementRule: referenceMovementForOd(item.name, "A", "E")
+    movementRule: referenceMovementForOd(
+      item.name,
+      "A",
+      "E",
+      approaches.map(function (approach) {
+        return approach.sourceCode || "";
+      }),
+    )
       ? "reference-calculation"
       : "geometry-suggested",
     sourceFiles: [item.file],
@@ -2249,6 +2351,25 @@ function sourceVehicleTotal(
   return source.movements[peak].rawVehicleTotal ?? null;
 }
 
+/**
+ * 讀檔／還原備份時再正規化一次路口名稱。
+ * normalizeIntersectionName 會把所有括號拿掉，而匯入時會在名稱後面補上
+ * 「（平日）」「（假日）」來區分同一路口的兩種資料別；直接再跑一次的話，
+ * 重新整理後兩筆的名稱會變成「…平日」「…假日」，被當成兩個不同路口，
+ * 資料別下拉、幾何同步與歷季比較都會跟著錯。這裡把括號內容原樣保留。
+ */
+function renormalizeStoredName(input: string) {
+  const name = String(input ?? "");
+  const matched = /^(.*)（([^（）]*)）$/.exec(name);
+  if (matched)
+    return normalizeIntersectionName(matched[1]) + "（" + matched[2] + "）";
+  return normalizeIntersectionName(name);
+}
+/** 使用者自己打過的名稱不再正規化，其餘沿用舊行為。 */
+function storedNameOf(record: TrafficRecord) {
+  return record.nameEdited ? record.name : renormalizeStoredName(record.name);
+}
+
 function inboundAnalysisRows(record: TrafficRecord) {
   return record.approaches.map(function (approach, index) {
     const inboundSurvey = surveyDestinationTotals(record, index);
@@ -2271,6 +2392,127 @@ function inboundAnalysisRows(record: TrafficRecord) {
   });
 }
 
+/**
+ * 把畫面用的 TrafficRecord 換成結論產生器要的資料。
+ *
+ * 這一步是刻意分開的：lib/conclusion.ts 只負責組字，數字全部在這裡取，
+ * 而且取的是**畫面與 Excel 用的同一組函式**（inboundAnalysisRows、
+ * recordTotal、recordVehicleTotal）。只要這裡不另外算，草稿寫的數字就
+ * 不可能和成果表對不起來。
+ */
+function toConclusionRecords(records: TrafficRecord[]): ConclusionRecord[] {
+  return records.map(function (record) {
+    const rows = inboundAnalysisRows(record);
+    const vehicleIds = recordVehicleIds(record);
+    /*
+     * 各支線的逐車種輛數（全調查時段），取自「車種組成分析」那張
+     * 『全調查時段道路方向車種數量』用的同一支 surveyDirectionRows，
+     * 兩邊的數字因此必然相同。沒有逐流向調查明細時給 null，不是 0。
+     */
+    const hasSurveyDetail = (record.routes || []).some(function (route) {
+      return Boolean(route.survey);
+    });
+    const directionRows = hasSurveyDetail ? surveyDirectionRows(record) : [];
+    const byArm = new Map<
+      string,
+      {
+        outbound: { label: string; count: number }[];
+        inbound: { label: string; count: number }[];
+        twoWay: { label: string; count: number }[];
+        display: "split" | "two-way";
+      }
+    >();
+    for (const row of directionRows) {
+      const code = row.approach.sourceCode || row.approach.id;
+      const entry = byArm.get(row.approach.id) || {
+        outbound: [],
+        inbound: [],
+        twoWay: [],
+        /*
+         * 這條支線在「車種組成分析」頁上目前選的呈現方式，直接沿用同一份
+         * record.directionDisplay，使用者在那一頁改成雙向合計，草稿也會跟著改。
+         */
+        display: (record.directionDisplay?.[code] || "split") as
+          | "split"
+          | "two-way",
+      };
+      const list = vehicleIds.map(function (id) {
+        return {
+          label: record.vehicleLabels?.[id] || VEHICLE_LABELS[id] || id,
+          count: Number(row.vehicle[id] || 0),
+        };
+      });
+      if (row.relation === "駛出路口") entry.outbound = list;
+      else if (row.relation === "駛入路口") entry.inbound = list;
+      else entry.twoWay = list;
+      byArm.set(row.approach.id, entry);
+    }
+    const surveyTotal = vehicleIds.reduce(function (sum, id) {
+      return sum + recordVehicleTotal(record, "SURVEY", id);
+    }, 0);
+    /* 車種組成：整份調查有資料就用它，否則退回 AM 尖峰（與分析頁一致）。 */
+    const scope: CompositionScope = surveyTotal > 0 ? "SURVEY" : "AM";
+    const peakData = function (peak: PeakKey) {
+      const window = record.peaks?.[peak];
+      const totalVehicles = rows.reduce(function (sum, row) {
+        const value = peak === "AM" ? row.inboundAmVehicles : row.inboundPmVehicles;
+        return value === null ? sum : sum + value;
+      }, 0);
+      const hasVehicles = rows.some(function (row) {
+        return (peak === "AM" ? row.inboundAmVehicles : row.inboundPmVehicles) !== null;
+      });
+      return {
+        window: window ? window.start + "–" + window.end : "",
+        totalPcu: recordTotal(record, peak),
+        totalVehicles: hasVehicles ? totalVehicles : null,
+        branches: rows.map(function (row) {
+          const composition = byArm.get(row.approach.id);
+          return {
+            name: row.approach.name,
+            outboundByVehicleSafe: composition ? composition.outbound : null,
+            inflowByVehicleSafe: composition ? composition.inbound : null,
+            twoWayByVehicleSafe: composition ? composition.twoWay : null,
+            directionDisplay: composition ? composition.display : "split",
+            inflowPcu: peak === "AM" ? row.inboundAmPcu : row.inboundPmPcu,
+            outflowPcu: peak === "AM" ? row.outboundAmPcu : row.outboundPmPcu,
+            inflowVehicles:
+              peak === "AM" ? row.inboundAmVehicles : row.inboundPmVehicles,
+            outflowVehicles:
+              peak === "AM" ? row.outboundAmVehicles : row.outboundPmVehicles,
+            inflowFullDayVehicles: row.inboundFullDayVehicles,
+            outflowFullDayVehicles: row.outboundFullDayVehicles,
+          };
+        }),
+      };
+    };
+    return {
+      id: record.id,
+      intersectionKey: recordIntersectionKey(record),
+      station: record.station,
+      name: record.name,
+      quarter: record.quarter,
+      surveyType: record.surveyType || "待設定",
+      routeless: !record.routes?.length,
+      compositionScope: scope === "SURVEY" ? "全調查時段" : "上午尖峰小時",
+      compositionUnit: scope === "SURVEY" ? "輛/調查時段" : "輛/hr",
+      composition: vehicleIds.map(function (id) {
+        return {
+          label: record.vehicleLabels?.[id] || VEHICLE_LABELS[id] || id,
+          count: recordVehicleTotal(record, scope, id),
+        };
+      }),
+      peaks: { AM: peakData("AM"), PM: peakData("PM") },
+    };
+  });
+}
+
+/**
+ * 「各路口分項結果」最多逐筆敘述幾筆。
+ * 每一筆會寫成一個標題加兩行（含全部支線與車種），4 季 × 10 路口 × 平假日
+ * 就是 240 行，整段貼進報告反而沒人看得完；超過的部分在段末說明還有幾筆。
+ */
+const SITE_SUMMARY_LIMIT = 30;
+
 function AuditWorkbench(props: {
   record: TrafficRecord | null;
   peak: PeakKey;
@@ -2285,8 +2527,27 @@ function AuditWorkbench(props: {
     note: string,
   ) => void;
   restoreRevision: (revision: RecordRevision) => void;
+  setSurveyType: (value: string) => void;
+  /* 這一頁自己要能換路口，不必先跑去別的分頁挑好再回來。 */
+  intersections: { key: string; label: string }[];
+  selectedIntersection: string;
+  setSelectedIntersection: (value: string) => void;
+  surveyTypes: string[];
+  selectedSurveyType: string;
+  setSelectedSurveyType: (value: string) => void;
+  /* 整個計畫還掛著「待設定」的筆數，以及一次補完的入口。 */
+  pendingSurveyTypeCount: number;
+  /** 那幾筆是哪些（季度＋站號＋路口名），讓使用者看得到才敢按。 */
+  pendingSurveyTypeLabels: string[];
+  assignPendingSurveyType: (value: string) => void;
 }) {
   const record = props.record;
+  /*
+   * 核對視角：依「來源」分組＝駛出路口，依「目的」分組＝駛入路口。
+   * 兩者是同一批 OD 流向、只是分組方式不同，所以整個路口的總量應該相等；
+   * 不相等就代表有流向沒有指定目的支線，那個差額正好是資料的問題所在。
+   */
+  const [flowView, setFlowView] = useState<"outbound" | "inbound">("outbound");
   const lockedCount = props.quarterRecords.filter(function (item) {
     return Boolean(item.resultLock);
   }).length;
@@ -2454,6 +2715,118 @@ function AuditWorkbench(props: {
           }}
         />
       </section>
+      {/*
+        資料別（平日／假日）。
+        匯入時是從原始檔的日期字樣「115年5月4日（平日）」或工作表名稱判斷的；
+        原始檔沒寫就會是「待設定」。以前沒有地方可以補，於是這筆資料在
+        歷季趨勢、報表與結論草稿裡永遠都掛著「待設定」，也沒辦法跟同一路口的
+        另一種資料別分開比較。這裡讓使用者直接指定。
+      */}
+      <section className="panel review-panel">
+        <div>
+          <b>資料別（平日／假日）</b>
+          <p>
+            {record.surveyType && record.surveyType !== "待設定"
+              ? "這一筆已經從原始檔的日期字樣或工作表名稱判讀出來了；判讀錯誤時可在此更正。下拉一定同時提供「平日」與「假日」供更正，**不代表這個計畫有假日資料**。"
+              : "「待設定」是指**這一筆**匯入時讀不出資料別——原始檔的日期沒有寫「（平日）」「（假日）」，交通量工作表也不叫「平日」或「假日」。不是整個計畫都沒讀到。資料別是**匯入當下**判定並存在這一筆上的，之後不會自己重讀；在這裡指定，或用原檔重新匯入同一季（新讀到的資料別會直接接手這一筆，不會多出第二筆）都可以補。設定之後，歷季趨勢與報表才能把平日與假日分開比較。"}
+          </p>
+        </div>
+        <select
+          value={record.surveyType || "待設定"}
+          onChange={function (event) {
+            props.setSurveyType(event.target.value);
+          }}
+        >
+          {/*
+            「待設定」代表「原始檔沒寫」，不是一個使用者會主動想選的值，
+            所以只有在這一筆目前真的是待設定時才列出來。
+          */}
+          {Array.from(
+            new Set(
+              [record.surveyType || "待設定", "平日", "假日"].filter(Boolean),
+            ),
+          ).map(function (value) {
+            return <option key={value}>{value}</option>;
+          })}
+        </select>
+        {/*
+          一筆一筆改要切換路口與季度，很容易漏掉——而漏掉的後果是歷季趨勢被
+          拆成兩條線（選「平日」只看得到一部分的季度）。所以這裡直接給批次入口。
+        */}
+        {props.pendingSurveyTypeCount > 0 && (
+          <div className="review-batch">
+            <small>
+              這個計畫還有 <b>{props.pendingSurveyTypeCount}</b>{" "}
+              筆是「待設定」：{props.pendingSurveyTypeLabels.join("、")}
+              。可以一次補完（只動待設定的，已經是平日／假日的不會被改到，
+              每一筆都會先自動保存還原點）。
+              <b>如果這幾筆不是同一種資料別，不要用批次</b>
+              ——請用這一頁上方的「路口」選擇器選到那一筆，再用上面的
+              「資料別（平日／假日）」下拉逐筆指定。
+              判斷依據是原始調查檔本身（調查日期是星期幾、檔名或工作表有沒有寫）。
+            </small>
+            <div className="head-buttons">
+              {["平日", "假日"].map(function (value) {
+                return (
+                  <button
+                    key={value}
+                    className="secondary"
+                    onClick={function () {
+                      props.assignPendingSurveyType(value);
+                    }}
+                  >
+                    全部指定為{value}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </section>
+      <section className="panel audit-picker">
+        <label>
+          路口
+          <select
+            value={props.selectedIntersection}
+            onChange={function (event) {
+              props.setSelectedIntersection(event.target.value);
+            }}
+          >
+            {props.intersections.map(function (entry) {
+              return (
+                <option key={entry.key} value={entry.key}>
+                  {entry.label}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+        {props.surveyTypes.length > 1 && (
+          <label>
+            資料別
+            <select
+              value={props.selectedSurveyType}
+              onChange={function (event) {
+                props.setSelectedSurveyType(event.target.value);
+              }}
+            >
+              {props.surveyTypes.map(function (type) {
+                return (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+        )}
+        <span>
+          本季共 {props.intersections.length} 個路口
+          {props.surveyTypes.length > 1
+            ? `；此路口有 ${props.surveyTypes.length} 種資料別`
+            : ""}
+        </span>
+      </section>
       <section className="audit-kpis">
         <Kpi
           label="系統尖峰總量"
@@ -2481,28 +2854,86 @@ function AuditWorkbench(props: {
             <h2>
               {record.station} · {record.name}
             </h2>
+            <p className="audit-unit-note">
+              這一頁是核對<b>換算過程</b>用的：中間各車種欄位是原始的
+              <b>調查車輛數（輛/hr）</b>，乘上該車種在該轉向的當量係數（見「換算式」），
+              才得到最右邊的<b>交通流量（PCU/hr）</b>。
+              車種欄若標成 PCU 就沒有東西可以核對了。
+            </p>
           </div>
-          <span className="status-dot">單位：PCU/hr；車種為輛/hr</span>
+          <div className="audit-head-actions">
+            <Segmented
+              value={flowView}
+              options={[
+                ["outbound", "駛出路口（依來源分組）"],
+                ["inbound", "駛入路口（依目的分組）"],
+              ]}
+              onChange={setFlowView}
+            />
+            <span className="status-dot">車種欄＝調查輛數；流量欄＝當量 PCU/hr</span>
+          </div>
         </div>
-        {record.approaches.map(function (origin) {
-          const originRoutes = routes.filter(function (route) {
-            return route.fromApproachId === origin.id;
+        {/*
+          兩種視角是同一批 OD 流向、只是分組方式不同，所以總量必須相等。
+          不相等就是有流向沒有指定目的支線——這裡直接把差額寫出來，
+          否則使用者只會看到「駛入怎麼比較少」卻不知道原因。
+        */}
+        {(function () {
+          const outbound = routes.reduce(function (sum, route) {
+            return sum + Number(route.volumes[props.peak]?.pcu || 0);
+          }, 0);
+          const inbound = routes
+            .filter(function (route) {
+              return record.approaches.some(function (arm) {
+                return arm.id === route.toApproachId;
+              });
+            })
+            .reduce(function (sum, route) {
+              return sum + Number(route.volumes[props.peak]?.pcu || 0);
+            }, 0);
+          const gap = Math.round((outbound - inbound) * 10) / 10;
+          return (
+            <p className={gap ? "audit-flow-gap warn" : "audit-flow-gap"}>
+              {gap
+                ? `駛出合計 ${outbound.toLocaleString()} PCU/hr、駛入合計 ${inbound.toLocaleString()} PCU/hr，差 ${gap.toLocaleString()} PCU/hr。這代表有流向沒有指定目的支線，請到「道路與流向管理」補齊；在補齊之前，「駛入」視角會少掉這個量。`
+                : `駛出與駛入合計相同（${outbound.toLocaleString()} PCU/hr）：每一筆流向都有指定目的支線，兩種視角可以互相核對。`}
+            </p>
+          );
+        })()}
+        {record.approaches.map(function (arm) {
+          const armRoutes = routes.filter(function (route) {
+            return flowView === "outbound"
+              ? route.fromApproachId === arm.id
+              : route.toApproachId === arm.id;
           });
-          if (!originRoutes.length) return null;
-          const originTotal = originRoutes.reduce(function (sum, route) {
+          if (!armRoutes.length) return null;
+          const armTotal = armRoutes.reduce(function (sum, route) {
             return sum + route.volumes[props.peak].pcu;
           }, 0);
           return (
-            <details className="audit-origin" key={origin.id} open>
+            <details className="audit-origin" key={arm.id} open>
               <summary>
                 <span>
-                  來源 {origin.sourceCode || origin.name} · {origin.name}
+                  {flowView === "outbound" ? "駛出路口" : "駛入路口"}{" "}
+                  {arm.sourceCode || arm.name} · {arm.name}
                 </span>
-                <strong>{originTotal.toLocaleString()} PCU/hr</strong>
+                <strong>{armTotal.toLocaleString()} PCU/hr</strong>
               </summary>
               <div className="table-scroll">
                 <table className="audit-table">
                   <thead>
+                    {/*
+                      這一張表是「核對換算過程」用的，所以左半邊一定要是
+                      原始調查車輛數（輛/hr），右半邊才是乘上當量後的 PCU/hr。
+                      沒有分組標題時，很容易誤以為中間那幾欄也應該是 PCU。
+                    */}
+                    <tr className="audit-group-row">
+                      <th colSpan={2} />
+                      <th colSpan={recordVehicleIds(record).length}>
+                        ① 原始調查車輛數（輛/hr）
+                      </th>
+                      <th colSpan={2}>② 乘上車種轉向當量後的交通流量</th>
+                    </tr>
                     <tr>
                       <th>OD 流向</th>
                       <th>轉向</th>
@@ -2524,7 +2955,13 @@ function AuditWorkbench(props: {
                     </tr>
                   </thead>
                   <tbody>
-                    {originRoutes.map(function (route) {
+                    {armRoutes.map(function (route) {
+                      /*
+                       * OD 流向欄要寫這一筆流向自己的起訖，不能沿用分組用的
+                       * 那一支支線——切到「駛入」視角時分組的是目的地，
+                       * 沿用的話每一列的起點都會被寫成目的地。
+                       */
+                      const origin = approachById.get(route.fromApproachId);
                       const destination = approachById.get(route.toApproachId);
                       const counts = route.volumes[props.peak].vehicle;
                       const formula = recordVehicleIds(record)
@@ -2539,7 +2976,7 @@ function AuditWorkbench(props: {
                       return (
                         <tr key={route.id}>
                           <td>
-                            {origin.sourceCode || origin.name} →{" "}
+                            {origin?.sourceCode || origin?.name || "未設定"} →{" "}
                             {destination?.sourceCode ||
                               destination?.name ||
                               "未設定"}
@@ -2691,10 +3128,58 @@ export default function TrafficApp() {
   const [focusIndex, setFocusIndex] = useState(0);
   const [vehicle, setVehicle] = useState<VehicleKey>("all");
   const [nameMap, setNameMap] = useState<Record<string, string>>({});
-  const [pce, setPce] = useState<PceMatrix>(DEFAULT_PCE);
-  const [vehicleCatalog, setVehicleCatalog] =
-    useState<Record<string, string>>(CORE_VEHICLE_LABELS);
-  const [vehicleMappings, setVehicleMappings] = useState<VehicleMappingTable>(
+  /*
+   * ── 車種轉向當量、車種目錄與車種對照：依計畫各存一份 ──
+   *
+   * v2.1.13 以前這三樣是全域共用的。已匯入的資料不會被影響（每一筆紀錄在
+   * 匯入當下就把矩陣存進 pceUsed、PCU 也在那時算好），但畫面上永遠只看得到
+   * 「最後一次設定」——切到 A 計畫卻顯示 B 計畫的係數，而且在 A 重新匯入
+   * 某一季時會用到 B 的係數，同一個計畫裡的季度就對不起來了。
+   * 車種目錄也一樣：某個計畫匯入過大客車，之後每個計畫都會看到大客車。
+   *
+   * 現在改成以計畫 id 為鍵各存一份，計畫之間完全不互相影響。
+   * 下面三個 pce / vehicleCatalog / vehicleMappings 是「目前計畫的那一份」，
+   * setter 也維持原本的用法（可傳物件或 updater），呼叫端不必改。
+   */
+  const [pceByProject, setPceByProject] = useState<Record<string, PceMatrix>>(
+    {},
+  );
+  const [catalogByProject, setCatalogByProject] = useState<
+    Record<string, Record<string, string>>
+  >({});
+  const [mappingsByProject, setMappingsByProject] = useState<
+    Record<string, VehicleMappingTable>
+  >({});
+  const pce = pceByProject[activeProjectId] || DEFAULT_PCE;
+  const vehicleCatalog =
+    catalogByProject[activeProjectId] || CORE_VEHICLE_LABELS;
+  const vehicleMappings =
+    mappingsByProject[activeProjectId] || EMPTY_VEHICLE_MAPPINGS;
+  /** 把「整體設定」的 setter 包成「只改目前計畫那一份」。 */
+  function scopedSetter<T>(
+    setMap: (updater: (previous: Record<string, T>) => Record<string, T>) => void,
+    fallback: T,
+  ) {
+    return function (value: T | ((previous: T) => T)) {
+      setMap(function (previous) {
+        // 沒有選計畫時不要寫進 ""，那會變成一份誰也看不到的孤兒設定。
+        if (!activeProjectId) return previous;
+        const current = previous[activeProjectId] ?? fallback;
+        const next =
+          typeof value === "function"
+            ? (value as (previous: T) => T)(current)
+            : value;
+        return { ...previous, [activeProjectId]: next };
+      });
+    };
+  }
+  const setPce = scopedSetter<PceMatrix>(setPceByProject, DEFAULT_PCE);
+  const setVehicleCatalog = scopedSetter<Record<string, string>>(
+    setCatalogByProject,
+    CORE_VEHICLE_LABELS,
+  );
+  const setVehicleMappings = scopedSetter<VehicleMappingTable>(
+    setMappingsByProject,
     {},
   );
   const [importRows, setImportRows] = useState<ImportPreview[]>([]);
@@ -2702,6 +3187,33 @@ export default function TrafficApp() {
   const [vehicleSchemes, setVehicleSchemes] = useState<VehicleScheme[]>([]);
   // 報表匯出項目：每個計畫記住自己要的組合，另可存成可重複套用的範本
   const [reportTemplates, setReportTemplates] = useState<ReportTemplate[]>([]);
+  const [conclusionTemplates, setConclusionTemplates] = useState<
+    ConclusionTemplate[]
+  >([]);
+  /*
+   * 結論草稿的條件與內容放在這一層，切換分頁才不會被卸載清空。
+   * 換計畫時才重設——換了計畫，原本挑的路口與支線都不存在了。
+   */
+  const [conclusionCondition, setConclusionCondition] =
+    useState<ConclusionCondition>(DEFAULT_CONDITION);
+  const [conclusionDraft, setConclusionDraft] = useState("");
+  const [conclusionEdited, setConclusionEdited] = useState(false);
+  const [conclusionTemplateName, setConclusionTemplateName] = useState("");
+  /*
+   * 換計畫時把條件與草稿重設。不重設的話，A 計畫挑的路口與支線會被帶到
+   * B 計畫，篩出 0 筆卻看不出原因；草稿也會留著別的案子的數字。
+   */
+  const conclusionOwner = useRef(activeProjectId);
+  useEffect(
+    function () {
+      if (conclusionOwner.current === activeProjectId) return;
+      conclusionOwner.current = activeProjectId;
+      setConclusionCondition(DEFAULT_CONDITION);
+      setConclusionDraft("");
+      setConclusionEdited(false);
+    },
+    [activeProjectId],
+  );
   const [reportTemplateName, setReportTemplateName] = useState("");
   const [recordRevisions, setRecordRevisions] = useState<RecordRevision[]>([]);
   const [importConflictModes, setImportConflictModes] = useState<
@@ -2712,6 +3224,16 @@ export default function TrafficApp() {
   >({});
   const [importing, setImporting] = useState(false);
   const [toast, setToast] = useState("");
+  /*
+   * loaded：本機資料讀完了沒有。存檔 effect 在這之前一律不動作，
+   * 避免「開啟網頁時先用空白蓋掉使用者的資料」。
+   * loadError：讀取失敗的原因。有值時整個畫面換成搶救指引，不進主程式——
+   * 因為主程式一旦 render 就會開始存檔，那才是真正把資料弄丟的那一步。
+   */
+  /** 這次預覽新增了哪些車種（取消預覽時要原樣還原）。 */
+  const [previewAddedVehicles, setPreviewAddedVehicles] = useState<string[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
   const [projectForm, setProjectForm] = useState({
     code: "",
@@ -2723,24 +3245,22 @@ export default function TrafficApp() {
   const [selectedIssueId, setSelectedIssueId] = useState("");
   const [reportStartQuarter, setReportStartQuarter] = useState("");
   const [reportEndQuarter, setReportEndQuarter] = useState("");
+  /*
+   * 報告文字草稿。
+   * draftSectionOverride 為 null 代表「跟著匯出勾選走」，使用者自己動過之後
+   * 才變成一份獨立的清單；換計畫時會還原成跟著走。
+   * reportDraftEdited 為 true 代表使用者已經手改過草稿，這時不再自動覆蓋，
+   * 否則改到一半按個篩選就整段被蓋掉。
+   */
+  const [draftSectionOverride, setDraftSectionOverride] = useState<
+    DraftSectionKey[] | null
+  >(null);
+  const [reportDraftText, setReportDraftText] = useState("");
+  const [reportDraftEdited, setReportDraftEdited] = useState(false);
   const [batchProjectIds, setBatchProjectIds] = useState<string[]>([]);
   const [batchQuarterKeys, setBatchQuarterKeys] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  /**
-   * 讀檔／還原備份時再正規化一次路口名稱。
-   * normalizeIntersectionName 會把所有括號拿掉，而匯入時會在名稱後面補上
-   * 「（平日）」「（假日）」來區分同一路口的兩種資料別；直接再跑一次的話，
-   * 重新整理後兩筆的名稱會變成「…平日」「…假日」，被當成兩個不同路口，
-   * 資料別下拉、幾何同步與歷季比較都會跟著錯。這裡把括號內容原樣保留。
-   */
-  const renormalizeStoredName = function (input: string) {
-    const name = String(input ?? "");
-    const matched = /^(.*)（([^（）]*)）$/.exec(name);
-    if (matched)
-      return normalizeIntersectionName(matched[1]) + "（" + matched[2] + "）";
-    return normalizeIntersectionName(name);
-  };
 
   useEffect(function () {
     const saved =
@@ -2763,7 +3283,7 @@ export default function TrafficApp() {
               data.records.map(function (record: TrafficRecord) {
                 return applyReferenceMovementRule({
                   ...record,
-                  name: renormalizeStoredName(record.name),
+                  name: storedNameOf(record),
                   approaches: record.approaches.map(function (approach) {
                     return {
                       ...approach,
@@ -2798,7 +3318,7 @@ export default function TrafficApp() {
                 return applyReferenceMovementRule({
                   ...record,
                   projectId: migratedId,
-                  name: renormalizeStoredName(record.name),
+                  name: storedNameOf(record),
                   approaches: record.approaches.map(function (approach) {
                     return {
                       ...approach,
@@ -2815,25 +3335,70 @@ export default function TrafficApp() {
         }
       }
       if (data.nameMap) setNameMap(data.nameMap);
-      if (data.pce) setPce(data.pce);
-      if (data.vehicleCatalog)
-        setVehicleCatalog({ ...CORE_VEHICLE_LABELS, ...data.vehicleCatalog });
-      if (data.vehicleMappings) setVehicleMappings(data.vehicleMappings);
+      /*
+       * 車種設定：新版是「依計畫各存一份」，舊版是全域一份。
+       * 讀到舊版資料時把那一份複製給每一個現有計畫，使用者原本看到的數字
+       * 完全不變；之後各計畫才會各走各的。
+       */
+      const projectIds = (data.projects || []).map(function (project: Project) {
+        return project.id;
+      });
+      const spread = function <T>(value: T) {
+        return Object.fromEntries(projectIds.map((id: string) => [id, value]));
+      };
+      setPceByProject(
+        data.pceByProject && typeof data.pceByProject === "object"
+          ? data.pceByProject
+          : spread(data.pce || DEFAULT_PCE),
+      );
+      setCatalogByProject(
+        data.catalogByProject && typeof data.catalogByProject === "object"
+          ? data.catalogByProject
+          : spread({ ...CORE_VEHICLE_LABELS, ...(data.vehicleCatalog || {}) }),
+      );
+      setMappingsByProject(
+        data.mappingsByProject && typeof data.mappingsByProject === "object"
+          ? data.mappingsByProject
+          : spread(data.vehicleMappings || {}),
+      );
       if (Array.isArray(data.formatMemories))
         setFormatMemories(data.formatMemories);
       if (Array.isArray(data.vehicleSchemes))
         setVehicleSchemes(data.vehicleSchemes);
       if (Array.isArray(data.reportTemplates))
         setReportTemplates(data.reportTemplates);
+      if (Array.isArray(data.conclusionTemplates))
+        setConclusionTemplates(data.conclusionTemplates);
       if (Array.isArray(data.recordRevisions))
         setRecordRevisions(data.recordRevisions);
-    } catch {
-      /* Invalid stale local data is ignored. */
+    } catch (error) {
+      /*
+       * 讀取失敗絕對不能靜靜吞掉。
+       *
+       * 舊版在這裡什麼都不做，而下面的存檔 effect 又會在同一次 commit 就把
+       * 「還是空的」state 寫回去——只要儲存的資料裡有一筆格式不對（少一個
+       * 欄位就夠），使用者的全部計畫會在開啟網頁的瞬間被空白覆蓋掉，
+       * 畫面上沒有任何訊息。現在改成：讀取失敗就不解鎖存檔，原始資料
+       * 原封不動留在瀏覽器裡，並明確告訴使用者發生什麼事、該怎麼救。
+       */
+      setLoadError(
+        error instanceof Error ? error.message : "資料格式無法解析",
+      );
+      return;
     }
+    setLoaded(true);
   }, []);
 
   useEffect(
     function () {
+      /*
+       * 讀取完成之前一律不寫入。
+       *
+       * 這兩個 effect 屬於同一次 commit，存檔這一個的閉包裡抓到的是「還沒
+       * 載入、全部是空的」那一份 state，所以每次開啟網頁都會先把空白寫回
+       * 儲存、下一個 tick 才寫回真實資料。中間只要出任何差錯，資料就沒了。
+       */
+      if (!loaded) return;
       const base = {
         kind: "TURNING_TRAFFIC_STATE",
         version: VERSION,
@@ -2841,12 +3406,17 @@ export default function TrafficApp() {
         activeProjectId: activeProjectId,
         records: records,
         nameMap: nameMap,
+        pceByProject: pceByProject,
+        catalogByProject: catalogByProject,
+        mappingsByProject: mappingsByProject,
+        /* 舊版欄位仍然寫出目前計畫的那一份，萬一退版也還讀得到東西。 */
         pce: pce,
         vehicleCatalog: vehicleCatalog,
         vehicleMappings: vehicleMappings,
         formatMemories: formatMemories,
         vehicleSchemes: vehicleSchemes,
         reportTemplates: reportTemplates,
+        conclusionTemplates: conclusionTemplates,
       };
       // 儲存空間有上限（約 5MB）。寫入失敗時若讓例外從 effect 逃出去，
       // React 會整棵樹卸載，畫面就變成空白的「This page couldn't load」。
@@ -2863,6 +3433,24 @@ export default function TrafficApp() {
             "turning-traffic-state-v2",
             JSON.stringify(attempts[index]),
           );
+          /*
+           * 降級存檔一定要講出來。
+           * 丟掉還原點之後，畫面上的「版本差異與還原」清單讀的是記憶體裡的
+           * state，仍然完整顯示 N 筆——但那些已經沒有存進去了，重新整理就
+           * 全部消失，而那正是使用者要靠還原點救資料的時候。
+           * 使用者依據一個已經不存在的救援選項做決定，比存不進去更危險。
+           */
+          if (index > 0) {
+            const kept = attempts[index].recordRevisions.length;
+            setToast(
+              "瀏覽器儲存空間快滿了，這次存檔只保留 " +
+                kept +
+                " 筆還原點（原本 " +
+                recordRevisions.length +
+                " 筆）。畫面上仍會列出全部，但重新整理之後只會剩下有存到的那些。" +
+                "請盡快到「備份、還原與版本」下載備份。",
+            );
+          }
           return;
         } catch {
           /* 換下一種較精簡的內容再試一次 */
@@ -2877,13 +3465,18 @@ export default function TrafficApp() {
       activeProjectId,
       records,
       nameMap,
+      pceByProject,
+      catalogByProject,
+      mappingsByProject,
       pce,
       vehicleCatalog,
       vehicleMappings,
       formatMemories,
       vehicleSchemes,
       reportTemplates,
+      conclusionTemplates,
       recordRevisions,
+      loaded,
     ],
   );
 
@@ -2942,7 +3535,7 @@ export default function TrafficApp() {
             return record.quarter;
           }),
         ),
-      ).sort();
+      ).sort(compareQuarters);
     },
     [projectRecords],
   );
@@ -2961,7 +3554,7 @@ export default function TrafficApp() {
             return record.quarter;
           }),
         ),
-      ).sort();
+      ).sort(compareQuarters);
     },
     [records],
   );
@@ -3068,6 +3661,460 @@ export default function TrafficApp() {
     },
     [projectRecords],
   );
+  /*
+   * 報表匯出的季度範圍與資料筆數。
+   *
+   * Excel 匯出與報告文字草稿都要用「完全同一批紀錄」，否則草稿寫的數字會
+   * 跟附表對不起來。所以這段只算一次，兩邊共用。
+   * 起訖季度反過來選（例如起 115Q4、訖 115Q1）時取兩者之間，不當成空範圍。
+   */
+  const reportExportScope = useMemo(
+    function () {
+      const requestedStartIndex = Math.max(
+        0,
+        quarters.indexOf(reportStartQuarter),
+      );
+      const requestedEndIndex = Math.max(0, quarters.indexOf(reportEndQuarter));
+      const startIndex = Math.min(requestedStartIndex, requestedEndIndex);
+      const endIndex = Math.max(requestedStartIndex, requestedEndIndex);
+      const selectedQuarters = quarters.slice(startIndex, endIndex + 1);
+      return {
+        quarters: selectedQuarters,
+        records: projectRecords.filter(function (record) {
+          return selectedQuarters.includes(record.quarter);
+        }),
+      };
+    },
+    [quarters, reportStartQuarter, reportEndQuarter, projectRecords],
+  );
+  /*
+   * 報告文字草稿要用的數字。
+   *
+   * 三個原則：
+   * 1. 全部沿用產生 Excel 的同一批函式（recordTotal、inboundAnalysisRows、
+   *    odMatrix、branchBalance、conservationCheck、qualityIssues…），
+   *    草稿不自己另算一次。
+   * 2. 尖峰小時流量不能跨路口或跨季度相加，所以支線、車種這類敘述固定以
+   *    一筆「代表資料」為準（目前選定路口在範圍內的最新一季），並在草稿裡
+   *    寫明是哪一筆。
+   * 3. 取最大值、計數、逐季列出這類不牽涉相加的敘述才涵蓋整個匯出範圍。
+   */
+  const reportDraftContext = useMemo(
+    function (): ReportDraftContext | null {
+      const exportRecords = reportExportScope.records;
+      if (!exportRecords.length) return null;
+      const quarterKeys = Array.from(
+        new Set(
+          exportRecords.map(function (record) {
+            return record.quarter;
+          }),
+        ),
+      ).sort(compareQuarters);
+      const quarterRange =
+        quarterKeys.length > 1
+          ? quarterKeys[0] + "～" + quarterKeys[quarterKeys.length - 1]
+          : quarterKeys[0] || "";
+      const intersectionKeys = Array.from(
+        new Set(exportRecords.map(recordIntersectionKey)),
+      );
+      /*
+       * 每個「路口 × 資料別」在範圍內的最新一季。
+       *
+       * 一定要把資料別也放進 key：recordIntersectionKey 會把平日與假日
+       * 正規化成同一個 key，只用它分組的話，同一個路口的平日與假日會互相
+       * 覆蓋，「各路口比較」就會少掉一半的列，代表資料也可能挑到使用者
+       * 沒有在看的那一種日別。
+       */
+      const latestBySeries = new Map<string, TrafficRecord>();
+      const seriesKeyOf = function (record: TrafficRecord) {
+        // 站號一起放進 key。recordIntersectionKey 會把同一個交流道的北向與
+        // 南向站正規化成同一個名稱，只用它分組會讓其中一站整個消失，
+        // 而 Excel 的跨計畫多路口比較兩站都會列——兩份成果對不起來。
+        return [
+          recordIntersectionKey(record),
+          record.station,
+          record.surveyType || "待設定",
+        ].join("|");
+      };
+      exportRecords.forEach(function (record) {
+        const key = seriesKeyOf(record);
+        const kept = latestBySeries.get(key);
+        if (!kept || compareQuarters(record.quarter, kept.quarter) > 0)
+          latestBySeries.set(key, record);
+      });
+      /*
+       * 全篇統一的一筆資料標示法。舊版 topFlow／worstBalance 只寫「站號 季度」，
+       * 同一站同一季同時有平日與假日時無法分辨，也對不上其他段落的寫法。
+       */
+      const siteLabelOf = function (record: TrafficRecord) {
+        return `${record.name || record.station} ${record.quarter}（${
+          record.surveyType || "待設定"
+        }）`;
+      };
+      /*
+       * 代表資料：優先取「使用者目前選的路口＋目前選的資料別」的最新一季；
+       * 該資料別在範圍內沒有資料時才退回同一路口的其他資料別。
+       */
+      const focus =
+        (selected && latestBySeries.get(seriesKeyOf(selected))) ||
+        (selected &&
+          [...latestBySeries.values()].find(function (record) {
+            return (
+              recordIntersectionKey(record) === recordIntersectionKey(selected)
+            );
+          })) ||
+        latestBySeries.values().next().value ||
+        exportRecords[0];
+      const focusLabel = siteLabelOf(focus);
+      const peakLabel = function (peakKey: PeakKey) {
+        const own =
+          focus.peaks[peakKey].start + "–" + focus.peaks[peakKey].end;
+        const others = new Set(
+          exportRecords.map(function (record) {
+            return record.peaks[peakKey].start + "–" + record.peaks[peakKey].end;
+          }),
+        );
+        others.delete(own);
+        return own + (others.size ? `（其餘資料另有 ${others.size} 種時段）` : "");
+      };
+      const focusRows = inboundAnalysisRows(focus);
+      const armFlows = function (direction: "inbound" | "outbound") {
+        return focusRows
+          .map(function (row) {
+            return {
+              name: row.approach.name,
+              am: direction === "inbound" ? row.inboundAmPcu : row.outboundAmPcu,
+              pm: direction === "inbound" ? row.inboundPmPcu : row.outboundPmPcu,
+            };
+          })
+          .sort(function (a, b) {
+            return b.am - a.am || b.pm - a.pm;
+          });
+      };
+      const sumBy = function (
+        rows: { am: number; pm: number }[],
+        peak: "am" | "pm",
+      ) {
+        return (
+          Math.round(
+            rows.reduce(function (sum, row) {
+              return sum + row[peak];
+            }, 0) * 10,
+          ) / 10
+        );
+      };
+      const outbound = armFlows("outbound");
+      const inbound = armFlows("inbound");
+      /* 車種組成：全調查時段有資料就用它，否則退回 AM 尖峰。 */
+      const focusVehicleIds = recordVehicleIds(focus);
+      const surveyTotal = focusVehicleIds.reduce(function (sum, id) {
+        return sum + recordVehicleTotal(focus, "SURVEY", id);
+      }, 0);
+      const compositionKey: CompositionScope = surveyTotal > 0 ? "SURVEY" : "AM";
+      const compositionCounts = focusVehicleIds.map(function (id) {
+        return {
+          label: vehicleLabel(focus, id),
+          count: recordVehicleTotal(focus, compositionKey, id),
+        };
+      });
+      const compositionTotal = compositionCounts.reduce(function (sum, item) {
+        return sum + item.count;
+      }, 0);
+      /* OD 矩陣中最大的一筆：取最大值不牽涉相加，可以跨整個範圍找。 */
+      let topFlow: ReportDraftContext["topFlow"] = null;
+      let worstBalance: ReportDraftContext["worstBalance"] = null;
+      let conservationChecked = 0;
+      let conservationPassed = 0;
+      exportRecords.forEach(function (record) {
+        (["AM", "PM"] as PeakKey[]).forEach(function (peakKey) {
+          odMatrix(record, peakKey).forEach(function (row) {
+            row.values.forEach(function (value, destinationIndex) {
+              const destination = record.approaches[destinationIndex];
+              if (!destination || destination.id === row.originId) return;
+              // value > 0 是必要的：舊版匯入的紀錄沒有 routes，整個矩陣都是 0，
+              // 只判斷 !topFlow 會寫出「流量最高的一筆為 … 0.0 PCU/hr」，
+              // 正確的表現是讓這一段落回到「沒有可敘述的資料」。
+              if (value > 0 && (!topFlow || value > topFlow.pcu))
+                topFlow = {
+                  station: siteLabelOf(record),
+                  peak: peakKey,
+                  from: row.origin,
+                  to: destination.name,
+                  pcu: value,
+                };
+            });
+          });
+          branchBalance(record, peakKey).forEach(function (row) {
+            // Number.isFinite 不能省：資料含非數值欄位時 difference 會是 NaN，
+            // 而 `x > NaN` 永遠是 false，之後每一列都比不過它——真正最大的
+            // 失衡就永遠不會被報出來，畫面上只看到一個「—」。
+            if (
+              Number.isFinite(row.difference) &&
+              (!worstBalance ||
+                Math.abs(row.difference) > Math.abs(worstBalance.difference))
+            )
+              worstBalance = {
+                station: siteLabelOf(record),
+                peak: peakKey,
+                name: row.name,
+                difference: row.difference,
+              };
+          });
+          /*
+           * 沒有 routes 的舊版紀錄不算進守恆檢核。
+           * conservationCheck 對這種紀錄會讓 routePeakTotal 直接退回
+           * recordPeakTotal，於是必定「通過」——那不是檢查結果，是同義反覆。
+           * 一整批舊資料會得到「共檢查 N 組，通過 N 組」的假保證。
+           */
+          if (record.routes?.length) {
+            const check = conservationCheck(record, peakKey);
+            conservationChecked += 1;
+            if (check.valid) conservationPassed += 1;
+          }
+        });
+      });
+      const draftIssues = qualityIssues(exportRecords);
+      const categoryCounts = new Map<string, number>();
+      draftIssues.forEach(function (issue) {
+        categoryCounts.set(
+          issue.category,
+          (categoryCounts.get(issue.category) || 0) + 1,
+        );
+      });
+      /* 當量矩陣：與「車種轉向當量」工作表同樣看 pceUsed，不是畫面上的設定。 */
+      const matrixSignatures = new Set(
+        exportRecords.map(function (record) {
+          return JSON.stringify(record.pceUsed || DEFAULT_PCE);
+        }),
+      );
+      const focusMatrix = focus.pceUsed || DEFAULT_PCE;
+      const trendRecords = trendSeriesRecords(exportRecords, selected);
+      return {
+        projectName: activeProject?.name || "",
+        quarterRange,
+        quarterCount: quarterKeys.length,
+        intersectionCount: intersectionKeys.length,
+        recordCount: exportRecords.length,
+        focusLabel,
+        /*
+         * 尖峰時段一定要報「代表資料自己的」時段。
+         * 舊寫法取全範圍的眾數，但下面的支線、車種、路口總量全部來自 focus，
+         * 讀者會把 focus 的數字掛在別筆的時段上。時段不只一種時另外註明。
+         */
+        peaks: {
+          am: peakLabel("AM"),
+          pm: peakLabel("PM"),
+        },
+        /*
+         * 各路口分項結果。整體總結回答「這個範圍加起來多少」，但報告通常還要
+         * 逐個路口交代「A 路口上午尖峰多少、下午尖峰多少」。
+         * 每一筆用自己的尖峰時段與自己的支線，所以這一段可以涵蓋整個匯出
+         * 範圍，不需要像整體總結那樣挑一筆代表資料。
+         */
+        siteSummaries: exportRecords
+          .slice()
+          // 逐筆敘述會很長（每筆兩行、每行含全部支線），超過 30 筆時先截斷，
+          // 並在段末說明還有幾筆——整段塞進文字框反而沒人看得完。
+          /*
+           * 由新到舊排序，截斷時留下的才是最新的資料。
+           * 舊寫法是由舊到新再 .slice(0, 30)，4 季 × 10 路口 × 平假日的案子
+           * 會剛好把最新一季整個切掉，而草稿其他段落講的都是最新一季——
+           * 使用者拿到的分項結果與前後文完全對不上。
+           */
+          .sort(function (a, b) {
+            return (
+              compareQuarters(b.quarter, a.quarter) ||
+              (a.name || a.station).localeCompare(b.name || b.station, "zh-Hant")
+            );
+          })
+          .slice(0, SITE_SUMMARY_LIMIT)
+          .map(function (record) {
+            const rows = inboundAnalysisRows(record);
+            const vehicleIds = recordVehicleIds(record);
+            return {
+              name: siteLabelOf(record),
+              peaks: (["AM", "PM"] as PeakKey[]).map(function (peakKey) {
+                const vehicleSum = vehicleIds.reduce(function (sum, id) {
+                  return sum + recordVehicleTotal(record, peakKey, id);
+                }, 0);
+                return {
+                  label: peakKey === "AM" ? "上午尖峰" : "下午尖峰",
+                  hour:
+                    record.peaks[peakKey].start +
+                    "–" +
+                    record.peaks[peakKey].end,
+                  total: recordTotal(record, peakKey),
+                  arms: rows.map(function (row) {
+                    return {
+                      name: row.approach.name,
+                      outbound:
+                        peakKey === "AM" ? row.outboundAmPcu : row.outboundPmPcu,
+                      inbound:
+                        peakKey === "AM" ? row.inboundAmPcu : row.inboundPmPcu,
+                    };
+                  }),
+                  vehicles: vehicleSum
+                    ? vehicleIds
+                        .map(function (id) {
+                          return {
+                            label: vehicleLabel(record, id),
+                            share:
+                              (recordVehicleTotal(record, peakKey, id) /
+                                vehicleSum) *
+                              100,
+                          };
+                        })
+                        .filter(function (item) {
+                          return item.share > 0;
+                        })
+                        .sort(function (a, b) {
+                          return b.share - a.share;
+                        })
+                    : [],
+                };
+              }),
+            };
+          }),
+        siteOmitted: Math.max(0, exportRecords.length - SITE_SUMMARY_LIMIT),
+        routelessRecords: exportRecords.filter(function (record) {
+          return !record.routes?.length;
+        }).length,
+        compareIntersections: new Set(
+          [...latestBySeries.values()].map(recordIntersectionKey),
+        ).size,
+        outbound,
+        inbound,
+        totals: {
+          am: recordTotal(focus, "AM"),
+          pm: recordTotal(focus, "PM"),
+        },
+        flowTotals: {
+          outboundAm: sumBy(outbound, "am"),
+          outboundPm: sumBy(outbound, "pm"),
+          inboundAm: sumBy(inbound, "am"),
+          inboundPm: sumBy(inbound, "pm"),
+        },
+        vehicles: compositionCounts.map(function (item) {
+          return {
+            label: item.label,
+            count: item.count,
+            share: compositionTotal ? (item.count / compositionTotal) * 100 : 0,
+          };
+        }),
+        compositionScope:
+          compositionKey === "SURVEY" ? "全調查時段" : "上午尖峰小時",
+        compositionUnit: compositionKey === "SURVEY" ? "輛/調查時段" : "輛/hr",
+        trend: trendRecords.map(function (record) {
+          return {
+            quarter: record.quarter,
+            am: recordTotal(record, "AM"),
+            pm: recordTotal(record, "PM"),
+          };
+        }),
+        // 標籤一定要取自趨勢序列自己的第一筆，不能拿 focus 來標：
+        // 兩者的挑選規則不同（趨勢取範圍內第一筆、focus 取最新一季），
+        // 同一路口同時有平日與假日時會標成另一種資料別，數字與說明對不起來。
+        trendLabel: trendRecords.length
+          ? `${trendRecords[0].name || trendRecords[0].station}／${
+              trendRecords[0].surveyType || "待設定"
+            }`
+          : "—",
+        compare: Array.from(latestBySeries.values())
+          .map(function (record) {
+            return {
+              name: siteLabelOf(record),
+              am: recordTotal(record, "AM"),
+              pm: recordTotal(record, "PM"),
+            };
+          })
+          .sort(function (a, b) {
+            return b.am - a.am || b.pm - a.pm;
+          }),
+        topFlow,
+        worstBalance,
+        conservation: {
+          checked: conservationChecked,
+          passed: conservationPassed,
+        },
+        quality: {
+          total: draftIssues.length,
+          errors: draftIssues.filter(function (issue) {
+            return issue.severity === "error";
+          }).length,
+          warnings: draftIssues.filter(function (issue) {
+            return issue.severity === "warning";
+          }).length,
+          topCategories: Array.from(categoryCounts.entries())
+            .sort(function (a, b) {
+              return b[1] - a[1];
+            })
+            .slice(0, 2)
+            .map(function (entry) {
+              return `${entry[0]} ${entry[1]} 項`;
+            }),
+        },
+        factors: Object.keys(focusMatrix)
+          .sort()
+          .map(function (id) {
+            return {
+              label:
+                vehicleCatalog[id] ||
+                VEHICLE_LABELS[id] ||
+                CORE_VEHICLE_LABELS[id] ||
+                id,
+              left: focusMatrix[id].left,
+              through: focusMatrix[id].through,
+              right: focusMatrix[id].right,
+            };
+          }),
+        factorMatrixCount: matrixSignatures.size,
+      };
+    },
+    [reportExportScope, selected, activeProject, vehicleCatalog],
+  );
+  const draftSections = useMemo(
+    function (): DraftSectionKey[] {
+      if (draftSectionOverride) return draftSectionOverride;
+      return (
+        DRAFT_ONLY_SECTIONS.map(function (item) {
+          return item.key as DraftSectionKey;
+        }) as DraftSectionKey[]
+      ).concat(activeReportItems);
+    },
+    [draftSectionOverride, activeReportItems],
+  );
+  const generatedReportDraft = useMemo(
+    function () {
+      return reportDraftContext
+        ? buildReportDraft(reportDraftContext, draftSections)
+        : "";
+    },
+    [reportDraftContext, draftSections],
+  );
+  useEffect(
+    function () {
+      if (!reportDraftEdited) setReportDraftText(generatedReportDraft);
+    },
+    [generatedReportDraft, reportDraftEdited],
+  );
+  /* 換計畫時草稿要重新開始，不然會把上一個計畫的文字留在畫面上。 */
+  useEffect(
+    function () {
+      setDraftSectionOverride(null);
+      setReportDraftEdited(false);
+    },
+    [activeProjectId],
+  );
+  function toggleDraftSection(key: DraftSectionKey) {
+    const next = draftSections.includes(key)
+      ? draftSections.filter(function (item) {
+          return item !== key;
+        })
+      : DRAFT_SECTION_ORDER.filter(function (item) {
+          return item === key || draftSections.includes(item);
+        });
+    setDraftSectionOverride(next);
+  }
   const currentIssues = issues.filter(function (issue) {
     return issue.quarter === quarter;
   });
@@ -3080,16 +4127,49 @@ export default function TrafficApp() {
   });
   const top = ranked[0];
   const previousQuarter = quarters[quarters.indexOf(quarter) - 1];
-  const currentSum = current.reduce(function (sum, record) {
-    return sum + recordTotal(record, "AM") + recordTotal(record, "PM");
-  }, 0);
   const previous = projectRecords.filter(function (record) {
     return record.quarter === previousQuarter;
   });
-  const previousSum = previous.reduce(function (sum, record) {
-    return sum + recordTotal(record, "AM") + recordTotal(record, "PM");
-  }, 0);
-  const change = previousSum ? (currentSum / previousSum - 1) * 100 : null;
+  /*
+   * 「較上季」只能比「兩季都有調查的同一個路口、同一種資料別、同一個尖峰」。
+   *
+   * 舊寫法把整季所有路口的 AM 與 PM 全部相加再相除，有三個問題：
+   * 1. PCU/hr 是某一小時的率，不同路口、不同時段相加沒有意義；
+   * 2. AM 與 PM 是兩個不同的小時，加在一起也沒有意義；
+   * 3. 兩季調查的路口數不同時（本季多測一個路口），分子分母的基準就不同，
+   *    實測出現「本季 +354.4%」而其實每個路口都沒什麼變化，
+   *    或「-50%」而唯一可比的路口其實成長一倍。
+   * 現在改成逐一配對後才加總，並在下面標示實際比較了幾個路口。
+   */
+  const changeSeriesKey = function (record: TrafficRecord) {
+    return [
+      recordIntersectionKey(record),
+      record.station,
+      record.surveyType || "待設定",
+    ].join("|");
+  };
+  const previousByKey = new Map(
+    previous.map(function (record) {
+      return [changeSeriesKey(record), record] as const;
+    }),
+  );
+  const comparablePairs = current
+    .map(function (record) {
+      const before = previousByKey.get(changeSeriesKey(record));
+      return before ? { now: record, before } : null;
+    })
+    .filter(Boolean) as { now: TrafficRecord; before: TrafficRecord }[];
+  const pairedChange = function (peakKey: PeakKey) {
+    const now = comparablePairs.reduce(function (sum, pair) {
+      return sum + recordTotal(pair.now, peakKey);
+    }, 0);
+    const before = comparablePairs.reduce(function (sum, pair) {
+      return sum + recordTotal(pair.before, peakKey);
+    }, 0);
+    return before ? (now / before - 1) * 100 : null;
+  };
+  // AM 與 PM 分開報，不相加。畫面上顯示目前選定的尖峰。
+  const change = comparablePairs.length ? pairedChange(peak) : null;
   const maxRank = Math.max(
     1,
     ...ranked.map(function (record) {
@@ -3117,6 +4197,70 @@ export default function TrafficApp() {
       }),
     ),
   ];
+
+  /*
+   * 一次把這個計畫裡還掛著「待設定」的紀錄補上資料別。
+   *
+   * 為什麼需要這顆按鈕：資料別是**匯入當下**判定並存進每一筆紀錄的，之後不會
+   * 重讀，程式改版也不會回頭改既有資料。所以舊版匯入時讀不到、存成待設定的
+   * 那幾季，即使現在的版本讀得出來了，畫面上仍然掛著待設定——而且因為
+   * 「待設定」和「平日」被當成兩種資料別，同一個路口的趨勢線會被拆成兩條
+   * （選平日只剩 1 季、選待設定才有 4 季）。
+   *
+   * 一筆一筆改要切換路口與季度，很容易漏掉，所以提供這個批次入口。
+   * 它只動「目前是待設定」的紀錄，已經是平日／假日的一律不碰，
+   * 而且每一筆都會先存還原點。
+   */
+  function pendingSurveyTypeRecords(intersectionKey?: string) {
+    return projectRecords.filter(function (record) {
+      if ((record.surveyType || "待設定") !== "待設定") return false;
+      if (!intersectionKey) return true;
+      return recordIntersectionKey(record) === intersectionKey;
+    });
+  }
+
+  function assignPendingSurveyType(value: string, intersectionKey?: string) {
+    const targets = pendingSurveyTypeRecords(intersectionKey);
+    if (!targets.length) return notify("目前沒有『待設定』的紀錄。");
+    if (!authorizeLockedChange(targets, "批次指定資料別")) return;
+    /*
+     * 一定要把「是哪幾筆」列出來。
+     * 這個計畫可能真的同時做過平日與假日調查，只是其中幾筆讀不出來；
+     * 只寫「N 筆」的話，使用者無從判斷全部指定為平日對不對。
+     */
+    const listed = targets
+      .map(function (record) {
+        return "・" + record.quarter + "　" + record.station + "　" + record.name;
+      })
+      .join("\n");
+    if (
+      !confirm(
+        "要把以下 " +
+          targets.length +
+          " 筆「待設定」指定為「" +
+          value +
+          "」嗎？\n\n" +
+          listed +
+          "\n\n" +
+          "只會更動上列這幾筆，已經是平日／假日的不會被改到。\n" +
+          "如果其中有的其實是假日，請按取消，改到「流量核對工作台」逐筆指定。\n" +
+          "每一筆都會先自動保存還原點，之後可以在「版本差異與還原」還原。",
+      )
+    )
+      return;
+    const ids = new Set(targets.map((record) => record.id));
+    targets.forEach(function (record) {
+      saveRevision(record, "批次指定資料別前自動保存");
+    });
+    setRecords(
+      records.map(function (record) {
+        return ids.has(record.id) ? { ...record, surveyType: value } : record;
+      }),
+    );
+    notify(
+      "已把 " + targets.length + " 筆「待設定」指定為「" + value + "」。",
+    );
+  }
 
   function saveRevision(record: TrafficRecord, reason: string) {
     const revision: RecordRevision = {
@@ -3260,6 +4404,33 @@ export default function TrafficApp() {
         return id !== project.id;
       }),
     );
+    /*
+     * 這個計畫的每一份設定與還原點也要跟著刪掉，否則會留下孤兒資料，
+     * 一直吃 localStorage 的空間（空間不足時的降級寫入正是先丟還原點），
+     * 而且下次若出現同 id 的計畫會撿到上一個計畫的當量矩陣。
+     */
+    const dropProject = function <T>(map: Record<string, T>) {
+      const next = { ...map };
+      delete next[project.id];
+      return next;
+    };
+    setPceByProject(dropProject(pceByProject));
+    setCatalogByProject(dropProject(catalogByProject));
+    setMappingsByProject(dropProject(mappingsByProject));
+    const removedIds = new Set(
+      records
+        .filter(function (record) {
+          return record.projectId === project.id;
+        })
+        .map(function (record) {
+          return record.id;
+        }),
+    );
+    setRecordRevisions(
+      recordRevisions.filter(function (revision) {
+        return !removedIds.has(revision.recordId);
+      }),
+    );
     if (activeProjectId === project.id) {
       setActiveProjectId(remainingProjects[0]?.id || "");
       setQuarter("");
@@ -3327,6 +4498,19 @@ export default function TrafficApp() {
       if (existing) conflicts[row.file] = "version";
     });
     setImportConflictModes(conflicts);
+    /*
+     * 預覽階段就把新車種寫進車種目錄／對應／當量矩陣，是為了讓下面的
+     * 「車種歸類」面板馬上能操作。但那會讓「取消預覽」的承諾（正式資料
+     * 完全不會變動）變成假的——實測取消之後，當量矩陣永遠多出一列，
+     * 而畫面上沒有任何地方可以把它刪掉。
+     * 所以這裡記下「這次預覽新增了哪些」，取消時原樣還原。
+     */
+    const addedNow: string[] = [];
+    detectedDefinitions.forEach(function (definition) {
+      if (!vehicleCatalog[definition.id] && !CORE_VEHICLE_LABELS[definition.id])
+        addedNow.push(definition.id);
+    });
+    setPreviewAddedVehicles(addedNow);
     setVehicleCatalog(function (existing) {
       const next = { ...CORE_VEHICLE_LABELS, ...existing };
       detectedDefinitions.forEach(function (definition) {
@@ -3438,22 +4622,67 @@ export default function TrafficApp() {
       );
     });
     if (!originals.length) return notify("沒有可寫入的原始交通量檔。");
+    /* 比對規則見 lib/traffic.ts 的 isSameSurvey（含「待設定」為何要特別處理）。 */
+    const sameSurvey = function (
+      record: TrafficRecord,
+      item: { station: string; surveyType: string },
+    ) {
+      return isSameSurvey(record, item, { projectId: activeProjectId, quarter: q });
+    };
     const overwriteTargets = records.filter(function (record) {
-      return (
-        record.projectId === activeProjectId &&
-        record.quarter === q &&
-        originals.some(function (item) {
-          return (
-            record.station === item.station &&
-            (record.surveyType || "") === (item.surveyType || "")
-          );
-        })
-      );
+      return originals.some(function (item) {
+        return sameSurvey(record, item);
+      });
     });
+    /*
+     * 同一批次裡撞號要先擋下來。
+     * forEach 是對 next 做 findIndex，所以第二份同站號同資料別的檔案會找到
+     * 第一份剛 push 進去的那筆並直接覆蓋——第一份的解析結果無聲消失，
+     * 完成訊息卻說「已寫入 2 個路口」。使用者事後看不出少了哪一份。
+     * 另外兩支程式都有擋（speed 會算出 owners 碰撞、traffic 的 validateImport
+     * 會警告「匯入檔內有 N 組重複鍵值」），turning 這裡補上。
+     */
+    const seen = new Map<string, string[]>();
+    for (const item of originals) {
+      const key = item.station + "｜" + (item.surveyType || "待設定");
+      const bucket = seen.get(key);
+      if (bucket) bucket.push(item.file);
+      else seen.set(key, [item.file]);
+    }
+    const collisions = [...seen.entries()].filter(function (entry) {
+      return entry[1].length > 1;
+    });
+    if (collisions.length) {
+      notify(
+        "這批檔案裡有 " +
+          collisions.length +
+          " 組會互相覆蓋，已停止寫入：" +
+          collisions
+            .map(function (entry) {
+              return entry[0] + "（" + entry[1].join("、") + "）";
+            })
+            .join("；") +
+          "。它們被判定為同一個站號與資料別，一次匯入只會留下最後一份。" +
+          "請在預覽列表用「刪除」留下要用的那一份，或分批匯入。",
+      );
+      return;
+    }
     if (!authorizeLockedChange(overwriteTargets, "重新匯入")) return;
     const next = [...records];
+    /* 有幾筆原本是「待設定」、這次被讀出的資料別補上了 */
+    let upgraded = 0;
+    /* 實際寫入與依使用者選擇略過的筆數——完成訊息要說實話。 */
+    let written = 0;
+    let skipped = 0;
     originals.forEach(function (item) {
-      const found = next.findIndex(function (record) {
+      /*
+       * 先找資料別完全相同的那一筆；找不到才退而找同站號的「待設定」，
+       * 讓這次讀出來的平日／假日去補上它（見上面 sameSurvey 的說明）。
+       * 兩段分開找而不是直接用 sameSurvey，是因為一個檔案同時有平日與假日
+       * 兩張工作表時會產生兩筆，必須讓各自「完全相同」的那筆優先對到，
+       * 不能讓先跑到的那一筆把待設定搶走。
+       */
+      const exact = next.findIndex(function (record) {
         return (
           record.projectId === activeProjectId &&
           record.quarter === q &&
@@ -3461,13 +4690,22 @@ export default function TrafficApp() {
           (record.surveyType || "待設定") === (item.surveyType || "待設定")
         );
       });
+      const found =
+        exact >= 0
+          ? exact
+          : next.findIndex(function (record) {
+              return sameSurvey(record, item);
+            });
       const configuredItem = configuredImportPreview(
         item,
         pce,
         vehicleMappings,
       );
       const conflictMode = importConflictModes[item.file] || "overwrite";
-      if (found >= 0 && conflictMode === "skip") return;
+      if (found >= 0 && conflictMode === "skip") {
+        skipped += 1;
+        return;
+      }
       const created = recordFromPreview(
         configuredItem,
         activeProjectId,
@@ -3489,6 +4727,8 @@ export default function TrafficApp() {
       const geometrySource = found >= 0 ? next[found] : mergeTarget;
       if (geometrySource) inheritRecordGeometry(created, geometrySource);
       if (found >= 0) {
+        if ((next[found].surveyType || "待設定") === "待設定" && exact < 0)
+          upgraded += 1;
         saveRevision(
           next[found],
           conflictMode === "version" ? "重新匯入並建立新版本" : "重新匯入覆蓋",
@@ -3500,16 +4740,32 @@ export default function TrafficApp() {
       });
       if (found >= 0) next[found] = created;
       else next.push(created);
+      written += 1;
     });
     setRecords(next);
     setQuarter(q);
     setImportRows([]);
     setImportResolutions({});
     setImportConflictModes({});
+    /*
+     * 檔案選取框也要清掉。
+     * 使用者修好原始檔之後通常會再選同一個檔名，瀏覽器判斷 value 沒變就
+     * 不會觸發 change，於是「重新選檔 → 什麼都沒發生」，沒有預覽也沒有訊息。
+     *「取消預覽」早就有清，這裡漏掉了。
+     */
+    if (fileRef.current) fileRef.current.value = "";
+    setPreviewAddedVehicles([]);
     notify(
       "已寫入 " +
-        originals.length +
-        " 個路口；同計畫、同季度、同站號採覆蓋更新。",
+        written +
+        " 個路口" +
+        (skipped ? "（另有 " + skipped + " 個依您的選擇略過）" : "") +
+        "；同計畫、同季度、同站號採覆蓋更新。" +
+        (upgraded
+          ? "其中 " +
+            upgraded +
+            " 筆原本是「待設定」，已由這次讀到的資料別（平日／假日）補上，不會再多出一筆。"
+          : ""),
     );
   }
 
@@ -3628,12 +4884,6 @@ export default function TrafficApp() {
     });
   }
 
-  /* eslint-disable react-hooks/preserve-manual-memoization --
-   * React Compiler 會提醒「手動 memo 無法保留」，因為 selected 是從 records 推導出來的
-   * 物件、它判斷可能被就地修改。本專案的建置流程並沒有啟用 React Compiler
-   * （vite.config.ts 沒有掛 babel-plugin-react-compiler），所以這裡的 useMemo 是實際
-   * 生效的最佳化；若日後導入 Compiler，可以把這三個 useMemo 直接拿掉改由它自動處理。
-   */
   /*
    * 三份轉向圖 SVG 都很大（7 叉路口有 14 張卡、上百條路徑），舊版直接寫在 JSX 裡，
    * 任何一次 render（包含輸入框打字、切換分頁）都會重新組三次字串並讓瀏覽器
@@ -3705,8 +4955,6 @@ export default function TrafficApp() {
       flowSummaryMode,
     ],
   );
-
-  /* eslint-enable react-hooks/preserve-manual-memoization */
 
   /*
    * 拖曳圖卡與路口標籤。
@@ -3894,7 +5142,8 @@ export default function TrafficApp() {
   }
 
   async function exportSvg() {
-    if (!selected) return;
+    // 靜靜結束會讓按鈕看起來壞掉。旁邊的 xlsx／PDF／PNG 都有提示，這裡漏了。
+    if (!selected) return notify("目前沒有選定的路口，無法輸出 SVG。");
     downloadBlob(
       new Blob(
         [
@@ -3981,24 +5230,12 @@ export default function TrafficApp() {
     if (!exportRecords.length) throw new Error("選定期間沒有可輸出的資料。");
     const wanted = new Set(items);
     if (!wanted.size) throw new Error("請至少勾選一個要匯出的分析項目。");
-    const trendTarget =
-      exportRecords.find(function (record) {
-        return (
-          selected &&
-          recordIntersectionKey(record) === recordIntersectionKey(selected)
-        );
-      }) || exportRecords[0];
-    const trendKey = recordIntersectionKey(trendTarget);
-    const trendRows = exportRecords
-      .filter(function (record) {
-        return recordIntersectionKey(record) === trendKey;
-      })
-      .sort(function (a, b) {
-        return a.quarter.localeCompare(b.quarter);
-      })
-      .map(function (record) {
+    // 挑選規則與報告文字草稿共用同一個函式，兩邊的數字才不會分岔。
+    const trendRows = trendSeriesRecords(exportRecords, selected).map(
+      function (record) {
         return {
           季度: record.quarter,
+          資料別: record.surveyType || "待設定",
           "AM Peak（PCU/hr）": recordTotal(record, "AM"),
           "PM Peak（PCU/hr）": recordTotal(record, "PM"),
           站號: record.station,
@@ -4120,27 +5357,29 @@ export default function TrafficApp() {
             支線名稱: approach.name,
             "AM 尖峰時段": record.peaks.AM.start + "–" + record.peaks.AM.end,
             "AM 路口轉向總量（PCU/hr）": recordTotal(record, "AM"),
-            "AM 由支線駛入中央路口（PCU/hr）":
+            "AM 駛出路口（該支線→路口中心，PCU/hr）":
               amFlows[index].enteringIntersection,
-            "AM 由中央路口駛出至支線（PCU/hr）":
+            "AM 駛入路口（路口中心→該支線，PCU/hr）":
               amFlows[index].leavingIntersection,
             "PM 尖峰時段": record.peaks.PM.start + "–" + record.peaks.PM.end,
             "PM 路口轉向總量（PCU/hr）": recordTotal(record, "PM"),
-            "PM 由支線駛入中央路口（PCU/hr）":
+            "PM 駛出路口（該支線→路口中心，PCU/hr）":
               pmFlows[index].enteringIntersection,
-            "PM 由中央路口駛出至支線（PCU/hr）":
+            "PM 駛入路口（路口中心→該支線，PCU/hr）":
               pmFlows[index].leavingIntersection,
           };
         });
       });
     const workbook = XLSX.utils.book_new();
     const trendSheet = XLSX.utils.json_to_sheet(trendRows);
-    trendSheet["!cols"] = [12, 20, 20, 12, 30, 18, 18].map(function (wch) {
+    trendSheet["!cols"] = [12, 12, 20, 20, 12, 30, 18, 18].map(function (wch) {
       return { wch };
     });
     trendSheet["!autofilter"] = { ref: trendSheet["!ref"] || "A1:A1" };
+    // 加了「資料別」欄之後，AM／PM 兩欄從 B、C 往後移到 C、D，
+    // 數字格式與圖表系列都必須跟著改，否則圖表會指到文字欄。
     for (let row = 2; row <= trendRows.length + 1; row++)
-      ["B", "C"].forEach(function (column) {
+      ["C", "D"].forEach(function (column) {
         if (trendSheet[column + row]) trendSheet[column + row].z = "#,##0.0";
       });
     if (wanted.has("trend"))
@@ -4342,26 +5581,83 @@ export default function TrafficApp() {
       XLSX.utils.book_append_sheet(workbook, sheet, "資料品質檢核");
     }
     if (wanted.has("pce")) {
-      const rows = Object.keys(pce)
-        .sort()
-        .map(function (vehicleId) {
-          return {
-            車種代碼: vehicleId,
-            車種名稱:
-              vehicleCatalog[vehicleId] ||
-              VEHICLE_LABELS[vehicleId as keyof typeof VEHICLE_LABELS] ||
-              vehicleId,
-            類別: CORE_VEHICLE_LABELS[vehicleId] ? "標準車種" : "新增車種",
-            左轉當量: pce[vehicleId].left,
-            直行當量: pce[vehicleId].through,
-            右轉當量: pce[vehicleId].right,
-            來源: CORE_VEHICLE_LABELS[vehicleId]
+      // 這張表要寫的是「這些資料實際換算時用的當量」，不是畫面上目前的設定。
+      // 每筆記錄在匯入當下就把當時的矩陣存進 pceUsed，之後使用者若在設定頁
+      // 改過係數，畫面上的 pce 和資料實際用的就不一樣了。舊版直接輸出畫面
+      // 上的 pce，等於在報表裡宣稱一組沒有被用來算過任何一個數字的係數。
+      const usedMatrices: { label: string; matrix: PceMatrix }[] = [];
+      exportRecords.forEach(function (record) {
+        const matrix = record.pceUsed || DEFAULT_PCE;
+        const signature = JSON.stringify(matrix);
+        const found = usedMatrices.find(function (item) {
+          return JSON.stringify(item.matrix) === signature;
+        });
+        const label = record.station + " " + record.quarter;
+        if (found) found.label += "、" + label;
+        else usedMatrices.push({ label, matrix });
+      });
+      if (!usedMatrices.length)
+        usedMatrices.push({ label: "目前設定", matrix: pce });
+      const pceRow = function (
+        scopeLabel: string,
+        vehicleId: string,
+        factors: { left: number; through: number; right: number },
+        sourceNote: string,
+      ) {
+        return {
+          適用資料: scopeLabel,
+          車種代碼: vehicleId,
+          車種名稱:
+            vehicleCatalog[vehicleId] ||
+            VEHICLE_LABELS[vehicleId as keyof typeof VEHICLE_LABELS] ||
+            vehicleId,
+          類別: CORE_VEHICLE_LABELS[vehicleId] ? "標準車種" : "新增車種",
+          左轉當量: factors.left,
+          直行當量: factors.through,
+          右轉當量: factors.right,
+          來源:
+            sourceNote ||
+            (CORE_VEHICLE_LABELS[vehicleId]
               ? "交通流量教育訓練簡報第 15 頁「當量參考值」"
-              : "簡報未提供參考值，系統預設 1.0，由使用者確認",
-          };
+              : "簡報未提供參考值，系統預設 1.0，由使用者確認"),
+        };
+      };
+      const rows = usedMatrices.flatMap(function (entry) {
+        return Object.keys(entry.matrix)
+          .sort()
+          .map(function (vehicleId) {
+            return pceRow(
+              usedMatrices.length > 1 ? entry.label : "本次匯出全部資料",
+              vehicleId,
+              entry.matrix[vehicleId],
+              "",
+            );
+          });
+      });
+      // 使用者可能在匯入之後才新增車種或改係數。那些設定沒有被用來換算本次
+      // 匯出的任何一筆資料，但仍要列出來，否則參數表看起來像「這個車種不見了」。
+      const appliedIds = new Set(
+        usedMatrices.flatMap(function (entry) {
+          return Object.keys(entry.matrix);
+        }),
+      );
+      Object.keys(pce)
+        .sort()
+        .forEach(function (vehicleId) {
+          if (appliedIds.has(vehicleId)) return;
+          rows.push(
+            pceRow(
+              "目前設定（未套用於本次匯出資料）",
+              vehicleId,
+              pce[vehicleId],
+              CORE_VEHICLE_LABELS[vehicleId]
+                ? "交通流量教育訓練簡報第 15 頁「當量參考值」；本次匯出的資料匯入時尚未使用此車種"
+                : "簡報未提供參考值，系統預設 1.0，由使用者確認；本次匯出的資料匯入時尚未使用此車種",
+            ),
+          );
         });
       const sheet = XLSX.utils.json_to_sheet(rows);
-      sheet["!cols"] = [18, 18, 12, 12, 12, 12, 52].map(function (wch) {
+      sheet["!cols"] = [28, 18, 18, 12, 12, 12, 12, 52].map(function (wch) {
         return { wch };
       });
       XLSX.utils.book_append_sheet(workbook, sheet, "車種轉向當量");
@@ -4374,7 +5670,7 @@ export default function TrafficApp() {
           return record.quarter;
         }),
       ),
-    ).sort();
+    ).sort(compareQuarters);
     const includedProjectCodes = Array.from(
       new Set(
         exportRecords.map(function (record) {
@@ -4412,8 +5708,8 @@ export default function TrafficApp() {
             "歷季趨勢比較",
             trendRows.length + 1,
             [
-              { name: "AM Peak", column: "B", color: "087F75" },
-              { name: "PM Peak", column: "C", color: "D97706" },
+              { name: "AM Peak", column: "C", color: "087F75" },
+              { name: "PM Peak", column: "D", color: "D97706" },
             ],
           )
         : new Blob(
@@ -4430,17 +5726,8 @@ export default function TrafficApp() {
   }
 
   async function exportExcel(format: "xlsx" | "xls" = "xlsx") {
-    const requestedStartIndex = Math.max(
-      0,
-      quarters.indexOf(reportStartQuarter),
-    );
-    const requestedEndIndex = Math.max(0, quarters.indexOf(reportEndQuarter));
-    const startIndex = Math.min(requestedStartIndex, requestedEndIndex);
-    const endIndex = Math.max(requestedStartIndex, requestedEndIndex);
-    const selectedQuarters = quarters.slice(startIndex, endIndex + 1);
-    const exportRecords = projectRecords.filter(function (record) {
-      return selectedQuarters.includes(record.quarter);
-    });
+    // 與報告文字草稿共用同一個範圍計算，兩邊涵蓋的紀錄必定一致。
+    const exportRecords = reportExportScope.records;
     if (!exportRecords.length) return notify("選定期間沒有可輸出的資料。");
     if (!activeReportItems.length)
       return notify("請至少勾選一個要匯出的分析項目。");
@@ -4693,6 +5980,12 @@ export default function TrafficApp() {
     );
   }
 
+  /*
+   * 批次成果包裡的 PDF／PNG 也要跟著畫面上的車種篩選走。
+   * 舊寫法這裡傳的是字面 "all"，而單張匯出（exportPdf／exportPngZip）傳的是
+   * vehicle：同一個路口、兩顆按鈕，產出的圖內容不同（一張是機車、單位輛/hr，
+   * 一張是全車種、單位 PCU/hr），而且沒有任何地方會提醒使用者。
+   */
   async function pdfBlob(rows: TrafficRecord[]) {
     const pdf = new jsPDF({
       orientation: "landscape",
@@ -4707,7 +6000,7 @@ export default function TrafficApp() {
           peak,
           "formal",
           "both",
-          "all",
+          vehicle,
           "all",
           0,
           flowSummaryMode,
@@ -4770,13 +6063,14 @@ export default function TrafficApp() {
               "_" +
               peak +
               ".png",
+            /* 和單張 PNG 匯出一致：跟著畫面上的車種篩選。 */
             await svgToPng(
               diagramMarkup(
                 record,
                 peak,
                 "formal",
                 "both",
-                "all",
+                vehicle,
                 "all",
                 0,
                 flowSummaryMode,
@@ -4786,11 +6080,33 @@ export default function TrafficApp() {
           );
         }
       }
+      /*
+       * README 要說實話。轉向圖的單位是依「車種篩選」決定的
+       * （全車種＝PCU/hr，指定單一車種＝該車種的 輛/hr），
+       * 而 PDF／PNG 現在跟著畫面上的篩選走，所以不能寫死 PCU/hr。
+       */
+      const diagramVehicleLabel =
+        vehicle === "all"
+          ? "全部車種"
+          : vehicleCatalog[vehicle] ||
+            VEHICLE_LABELS[vehicle] ||
+            CORE_VEHICLE_LABELS[vehicle] ||
+            vehicle;
+      const diagramUnit = vehicle === "all" ? "PCU/hr" : "輛/hr";
       zip.file(
         "README.txt",
         "Turning Traffic 批次成果包\r\n範圍：" +
           selectedQuarters.join("、") +
-          "\r\n內容：各計畫分析 Excel、多頁 PDF、各路口 PNG。\r\n單位：PCU/hr。\r\n",
+          "\r\n時段：" +
+          peak +
+          " 尖峰" +
+          "\r\n內容：各計畫分析 Excel、多頁 PDF、各路口 PNG。" +
+          "\r\n轉向圖車種：" +
+          diagramVehicleLabel +
+          "（單位 " +
+          diagramUnit +
+          "）" +
+          "\r\nExcel 內各欄位的單位以該欄標題為準。\r\n",
       );
       downloadBlob(
         await zip.generateAsync({ type: "blob" }),
@@ -4819,12 +6135,25 @@ export default function TrafficApp() {
       activeProjectId: activeProjectId,
       records: records,
       nameMap: nameMap,
+      /*
+       * 一定要存**每個計畫各自那一份**。
+       * pce／vehicleCatalog／vehicleMappings 是 pceByProject[activeProjectId]
+       * 之類的衍生值，只存它們的話，備份裡只有「匯出當下開著的那個計畫」的
+       * 當量矩陣與車種設定；換一台電腦還原之後，其他計畫全部退回系統預設，
+       * 而畫面只會說「還原完成」——每一張報表的數字都用預設當量算，
+       * 沒有任何警示。
+       * 舊欄位仍然保留，這樣新備份也能被舊版讀。
+       */
+      pceByProject: pceByProject,
+      catalogByProject: catalogByProject,
+      mappingsByProject: mappingsByProject,
       pce: pce,
       vehicleCatalog: vehicleCatalog,
       vehicleMappings: vehicleMappings,
       formatMemories: formatMemories,
       vehicleSchemes: vehicleSchemes,
       reportTemplates: reportTemplates,
+      conclusionTemplates: conclusionTemplates,
       recordRevisions: recordRevisions,
     };
   };
@@ -4873,35 +6202,95 @@ export default function TrafficApp() {
             },
           ];
       const fallbackId = restoredProjects[0].id;
+      /*
+       * 先把整份新狀態算出來，全部成功了才寫進畫面。
+       *
+       * 舊寫法是先 setProjects / setActiveProjectId，再去 map records——
+       * 中間一旦丟例外，畫面上已經換成備份的計畫清單，但舊紀錄還掛在
+       * 舊的 projectId 上，等於整批資料變成孤兒（每個畫面都看不到它們），
+       * 而使用者收到的訊息是「還原失敗」，根本不會想到資料已經沒了。
+       */
+      const restoredRecords = synchronizeGeometryAcrossQuarters(
+        data.records.map(function (record: TrafficRecord) {
+          if (!record || !Array.isArray(record.approaches))
+            throw new Error("備份裡有一筆紀錄缺少支線資料，已中止還原");
+          return applyReferenceMovementRule({
+            ...record,
+            projectId: record.projectId || fallbackId,
+            name: storedNameOf(record),
+            approaches: record.approaches.map(function (approach) {
+              return {
+                ...approach,
+                bearing: bearingFromAngle(approach.angle),
+              };
+            }),
+            intersectionId:
+              record.intersectionId ||
+              "I-" + canonicalIntersectionKey(record.name),
+          });
+        }),
+      );
+      /*
+       * 還原是全站唯一一個會整批覆蓋的動作，一定要先問過。
+       * 刪計畫、刪季度、全部清除、甚至取消預覽都有確認視窗，只有這裡沒有。
+       */
+      const lockedCount = records.filter(function (record) {
+        return Boolean(record.resultLock);
+      }).length;
+      if (
+        records.length &&
+        !window.confirm(
+          "還原會用備份的內容「完整取代」這台電腦上目前的資料。\n\n" +
+            `目前有 ${projects.length} 個計畫、${records.length} 筆路口季度資料` +
+            (lockedCount ? `（其中 ${lockedCount} 筆已鎖定成果）` : "") +
+            "，全部會被覆蓋且無法復原。\n" +
+            `備份內容為 ${restoredProjects.length} 個計畫、${restoredRecords.length} 筆資料。\n\n` +
+            "建議先下載一份目前的備份再繼續。確定要還原嗎？",
+        )
+      ) {
+        notify("已取消還原，資料沒有變動。");
+        return;
+      }
       setProjects(restoredProjects);
       setActiveProjectId(data.activeProjectId || fallbackId);
-      setRecords(
-        synchronizeGeometryAcrossQuarters(
-          data.records.map(function (record: TrafficRecord) {
-            return applyReferenceMovementRule({
-              ...record,
-              projectId: record.projectId || fallbackId,
-              name: renormalizeStoredName(record.name),
-              approaches: record.approaches.map(function (approach) {
-                return {
-                  ...approach,
-                  bearing: bearingFromAngle(approach.angle),
-                };
-              }),
-              intersectionId:
-                record.intersectionId ||
-                "I-" + canonicalIntersectionKey(record.name),
-            });
-          }),
-        ),
-      );
+      setRecords(restoredRecords);
       setNameMap(data.nameMap || {});
-      setPce(data.pce || DEFAULT_PCE);
-      setVehicleCatalog({
-        ...CORE_VEHICLE_LABELS,
-        ...(data.vehicleCatalog || {}),
+      /*
+       * 還原時要直接寫整份 byProject，不能用 scoped setter——
+       * scoped setter 只會寫進「還原前」那個 activeProjectId 的那一格
+       * （setActiveProjectId 不會改變這次 render 閉包裡的值），其他計畫的
+       * 設定全部遺失；還原前沒選任何計畫時甚至完全不寫入。
+       * 舊備份沒有 byProject 時，沿用載入 localStorage 的同一套遷移方式：
+       * 把那一組複製給每一個還原回來的計畫。
+       */
+      const restoredIds = restoredProjects.map(function (project: Project) {
+        return project.id;
       });
-      setVehicleMappings(data.vehicleMappings || {});
+      const spreadToAll = function <T>(value: T) {
+        return Object.fromEntries(
+          restoredIds.map(function (id: string) {
+            return [id, value];
+          }),
+        ) as Record<string, T>;
+      };
+      setPceByProject(
+        data.pceByProject && typeof data.pceByProject === "object"
+          ? data.pceByProject
+          : spreadToAll(data.pce || DEFAULT_PCE),
+      );
+      setCatalogByProject(
+        data.catalogByProject && typeof data.catalogByProject === "object"
+          ? data.catalogByProject
+          : spreadToAll({
+              ...CORE_VEHICLE_LABELS,
+              ...(data.vehicleCatalog || {}),
+            }),
+      );
+      setMappingsByProject(
+        data.mappingsByProject && typeof data.mappingsByProject === "object"
+          ? data.mappingsByProject
+          : spreadToAll(data.vehicleMappings || {}),
+      );
       setFormatMemories(
         Array.isArray(data.formatMemories) ? data.formatMemories : [],
       );
@@ -4910,6 +6299,9 @@ export default function TrafficApp() {
       );
       setReportTemplates(
         Array.isArray(data.reportTemplates) ? data.reportTemplates : [],
+      );
+      setConclusionTemplates(
+        Array.isArray(data.conclusionTemplates) ? data.conclusionTemplates : [],
       );
       setRecordRevisions(
         Array.isArray(data.recordRevisions) ? data.recordRevisions : [],
@@ -4946,6 +6338,58 @@ export default function TrafficApp() {
       />
     );
   };
+
+  /*
+   * 讀取失敗時不進主程式。
+   * 主程式一 render 就會開始存檔，那一步才是真正把使用者資料弄丟的動作；
+   * 這裡先擋下來，把原始 JSON 交還給使用者，讓他至少能救回資料。
+   */
+  if (loadError)
+    return (
+      <div className="load-error">
+        <div className="load-error-card">
+          <h1>無法讀取這台電腦上的資料</h1>
+          <p>
+            儲存在瀏覽器裡的資料有一部分格式不符，系統為了避免把它覆蓋掉，
+            這次<b>沒有載入、也沒有寫入任何東西</b>。您的原始資料仍然完整保留在
+            瀏覽器裡。
+          </p>
+          <p className="load-error-reason">錯誤訊息：{loadError}</p>
+          <p>
+            建議先按下面的按鈕把原始資料存成檔案（那是一份完整的備份），
+            再把檔案提供給維護人員；確認之後可以用「備份、還原與版本」還原回來。
+          </p>
+          <div className="load-error-actions">
+            <button
+              className="primary"
+              onClick={function () {
+                const raw =
+                  localStorage.getItem("turning-traffic-state-v2") ||
+                  localStorage.getItem("turning-traffic-state-v1") ||
+                  "";
+                downloadBlob(
+                  new Blob([raw], { type: "application/json" }),
+                  "turning-traffic-原始資料備份.json",
+                );
+              }}
+            >
+              下載原始資料（先做這個）
+            </button>
+            <button
+              className="secondary"
+              onClick={function () {
+                window.location.reload();
+              }}
+            >
+              重新載入試試
+            </button>
+          </div>
+          <p className="load-error-note">
+            請勿在下載之前按「清除」或重新匯入——那會讓原始資料真的消失。
+          </p>
+        </div>
+      </div>
+    );
 
   return (
     <div className="app-shell">
@@ -5059,7 +6503,9 @@ export default function TrafficApp() {
                   <span className="eyebrow">PROJECT PORTFOLIO</span>
                   <h1>多計畫監測管理</h1>
                   <p>
-                    每個計畫可保有自己的季度、路口與參數，並可跨計畫比較與整包移轉。
+                    每個計畫可保有自己的季度、路口、路口幾何與匯出項目勾選，並可跨計畫比較與整包移轉。
+                    <b>車種轉向當量、車種目錄與報表範本目前是整台電腦共用的</b>
+                    ——在任何計畫改動都會影響其他計畫，交付不同委託案前請先確認係數。
                   </p>
                 </div>
               </section>
@@ -5242,16 +6688,18 @@ export default function TrafficApp() {
                       accent="blue"
                     />
                     <Kpi
-                      label="較上季總流量"
+                      label={`較上季 ${peak} 尖峰`}
                       value={
                         change == null
                           ? "—"
                           : (change >= 0 ? "+" : "") + change.toFixed(1) + "%"
                       }
                       note={
-                        previousQuarter
-                          ? "比較基準 " + previousQuarter
-                          : "尚無上季資料"
+                        !previousQuarter
+                          ? "尚無上季資料"
+                          : comparablePairs.length
+                            ? `比較基準 ${previousQuarter}，兩季都有的 ${comparablePairs.length} 筆`
+                            : `${previousQuarter} 沒有可對應的同一路口資料`
                       }
                       accent="amber"
                     />
@@ -5596,13 +7044,83 @@ export default function TrafficApp() {
                     <span className="eyebrow">IMPORT PREVIEW</span>
                     <h2>匯入辨識結果</h2>
                   </div>
-                  <button
-                    className="primary"
-                    disabled={!importRows.length || !importPeriod}
-                    onClick={commitImport}
-                  >
-                    確認寫入 {importPeriod || "未選季度"}
-                  </button>
+                  <div className="preview-actions">
+                    {/* 預覽的用意就是「先看看有沒有問題，有問題先去修檔案」。
+                        過去只能一列一列按「刪除」，整批要放棄時很麻煩，
+                        也讓人不確定自己是不是已經被寫進去了。 */}
+                    <button
+                      className="ghost"
+                      disabled={!importRows.length}
+                      onClick={function () {
+                        if (
+                          !confirm(
+                            "取消本次預覽？\n已辨識的 " +
+                              importRows.length +
+                              " 個檔案會從畫面清除，正式資料完全不會變動。",
+                          )
+                        )
+                          return;
+                        setImportRows([]);
+                        setImportResolutions({});
+                        setImportConflictModes({});
+                        // 預覽時為了讓車種歸類面板能操作，先把新車種寫進了
+                        // 目錄／對應／當量矩陣。取消就要原樣還原，否則
+                        //「正式資料完全不會變動」是騙人的，而且沒有任何介面
+                        // 可以把多出來的車種刪掉。已經有紀錄在用的不動。
+                        if (previewAddedVehicles.length) {
+                          const inUse = new Set(
+                            records.flatMap(function (record) {
+                              return Object.keys(record.survey?.vehicle || {});
+                            }),
+                          );
+                          const removable = previewAddedVehicles.filter(
+                            function (id) {
+                              return !inUse.has(id);
+                            },
+                          );
+                          if (removable.length) {
+                            setVehicleCatalog(function (existing) {
+                              const next = { ...existing };
+                              removable.forEach(function (id) {
+                                delete next[id];
+                              });
+                              return next;
+                            });
+                            setVehicleMappings(function (existing) {
+                              const next = { ...existing };
+                              removable.forEach(function (id) {
+                                delete next[id];
+                              });
+                              return next;
+                            });
+                            setPce(function (existing) {
+                              const next = structuredClone(existing);
+                              removable.forEach(function (id) {
+                                delete next[id];
+                              });
+                              return next;
+                            });
+                          }
+                          setPreviewAddedVehicles([]);
+                        }
+                        // importVehicleDefinitions 是由 importRows 推導出來的，
+                        // 清空 importRows 就會跟著消失，不需要也不能另外清。
+                        // 檔案輸入也要清掉：使用者修好檔案後通常會重新選同一個
+                        // 檔名，不清掉的話瀏覽器可能不觸發 change。
+                        if (fileRef.current) fileRef.current.value = "";
+                        notify("已取消本次預覽，正式資料沒有變動；修正檔案後請重新選取。");
+                      }}
+                    >
+                      取消預覽
+                    </button>
+                    <button
+                      className="primary"
+                      disabled={!importRows.length || !importPeriod}
+                      onClick={commitImport}
+                    >
+                      確認寫入 {importPeriod || "未選季度"}
+                    </button>
+                  </div>
                 </div>
                 {importVehicleDefinitions.length > 0 && (
                   <div className="vehicle-mapping-panel">
@@ -5752,11 +7270,19 @@ export default function TrafficApp() {
                           const resolution = importResolutions[row.file] || {
                             action: "auto-new",
                           };
+                          /*
+                           * 這裡的比對鍵必須與 targetId 的產生方式一致
+                           *（recordIntersectionKey）。舊版這裡用
+                           * intersectionId || canonical(name)，而 targetId 用
+                           * recordIntersectionKey——只要紀錄有 intersectionId
+                           *（匯入的紀錄都有）兩者就不同，於是：下拉選單顯示
+                           *「建立新路口」卻其實會併入；使用者手動選「併入」時
+                           * 又找不到目標而完全沒有作用。兩個方向都是壞的。
+                           */
                           const matched = canonicalRecords.find(
                             function (record) {
                               return (
-                                (record.intersectionId ||
-                                  canonicalIntersectionKey(record.name)) ===
+                                recordIntersectionKey(record) ===
                                 resolution.targetId
                               );
                             },
@@ -5834,11 +7360,15 @@ export default function TrafficApp() {
                                         });
                                       }}
                                     >
+                                      {/* 兩個選項實際行為相同（都覆蓋、都留還原點），
+                                          差別只在還原點的說明文字。舊版寫成
+                                         「保留舊版並建立新版」，聽起來像舊資料會
+                                          留著，但並不會——那是會讓人做錯決定的敘述。 */}
                                       <option value="version">
-                                        保留舊版並建立新版
+                                        覆蓋，還原點註記「改版」
                                       </option>
                                       <option value="overwrite">
-                                        覆蓋目前版（仍留還原點）
+                                        覆蓋，還原點註記「重新匯入」
                                       </option>
                                       <option value="skip">略過此檔</option>
                                     </select>
@@ -5899,9 +7429,7 @@ export default function TrafficApp() {
                                   >
                                     <option value="new">建立新路口</option>
                                     {canonicalRecords.map(function (record) {
-                                      const id =
-                                        record.intersectionId ||
-                                        canonicalIntersectionKey(record.name);
+                                      const id = recordIntersectionKey(record);
                                       return (
                                         <option key={id} value={"merge:" + id}>
                                           併入：{record.name}
@@ -5994,6 +7522,16 @@ export default function TrafficApp() {
                               <button
                                 key={record.id}
                                 onClick={function () {
+                                  // 已鎖定的成果要走與「刪除整季」同一道授權，
+                                  // 否則旁邊的按鈕擋得住、這一顆卻擋不住。
+                                  if (
+                                    record.resultLock &&
+                                    !authorizeLockedChange(
+                                      [record],
+                                      "刪除這筆資料",
+                                    )
+                                  )
+                                    return;
                                   if (
                                     confirm(
                                       "刪除 " +
@@ -6002,12 +7540,14 @@ export default function TrafficApp() {
                                         record.name +
                                         "？",
                                     )
-                                  )
+                                  ) {
+                                    saveRevision(record, "刪除前自動建立還原點");
                                     setRecords(
                                       records.filter(function (r) {
                                         return r.id !== record.id;
                                       }),
                                     );
+                                  }
                                 }}
                               >
                                 {record.station} ×
@@ -6414,7 +7954,7 @@ export default function TrafficApp() {
                           <span className="eyebrow">ROAD DIRECTION</span>
                           <h2>全調查時段道路方向車種數量</h2>
                           <small>
-                            依各支線的駛入／駛離 OD
+                            依各支線的駛出／駛入 OD
                             流量統計；雙向合計等同兩個行車方向相加。單位：輛／調查時段（
                             {selected.survey?.minutes || 0} 分鐘）
                           </small>
@@ -6722,7 +8262,10 @@ export default function TrafficApp() {
                       <table>
                         <thead>
                           <tr>
-                            <th>目的路口／道路支線</th>
+                            {/* 這一欄不是「目的路口」：同一列同時放了以這支
+                                為終點的駛入量、與以這支為起點的駛出量，寫成
+                                目的路口會讓右半邊的駛出欄位看起來方向相反。 */}
+                            <th>路口支線／道路支線</th>
                             <th>全日駛入／駛出（PCU/調查日）</th>
                             <th>AM Peak 駛入／駛出（PCU/hr）</th>
                             <th>PM Peak 駛入／駛出（PCU/hr）</th>
@@ -6786,7 +8329,7 @@ export default function TrafficApp() {
                       </table>
                     </div>
                     <div className="source-note">
-                      判定原則：各目的路口加總應等於同一統計範圍的路口總量；若有未分配流向，資料品質檢查將提示差異，不採用外部計算表的漏算結果。
+                      判定原則：駛入路口X＝其他支線開往X的車；駛出路口X＝從X開往其他支線的車。同一統計範圍內，各支線的駛入合計與駛出合計應相等，也等於該路口總量；若有未分配流向，資料品質檢查將提示差異，不採用外部計算表的漏算結果。
                     </div>
                   </section>
                 </>
@@ -7125,13 +8668,34 @@ export default function TrafficApp() {
                         onClick={function () {
                           updateSelected(function (record) {
                             const i = record.approaches.length;
+                            // 序號不能直接用支線數量：新增到第 5 支、再把中間
+                            // 某一支刪掉之後，數量又回到 4，下次新增就再產生一
+                            // 次 -A5／人工5，跟既有那一支撞號。撞號的後果是跨季
+                            // 度同步會把兩支併成一支。所以往上找第一個沒被用過
+                            // 的序號。
+                            const usedIds = new Set(
+                              record.approaches.map(function (approach) {
+                                return approach.id;
+                              }),
+                            );
+                            const usedCodes = new Set(
+                              record.approaches.map(function (approach) {
+                                return approach.sourceCode;
+                              }),
+                            );
+                            let seq = i + 1;
+                            while (
+                              usedIds.has(record.station + "-A" + seq) ||
+                              usedCodes.has("人工" + seq)
+                            )
+                              seq += 1;
                             record.approaches.push({
                               ...structuredClone(record.approaches[0]),
-                              id: record.station + "-A" + (i + 1),
+                              id: record.station + "-A" + seq,
                               // 每條人工支線要有自己的代碼；全部叫「人工」的話，
                               // 跨季度同步是用代碼比對的，會把好幾條支線併成同一條。
-                              sourceCode: "人工" + (i + 1),
-                              name: "新增支線 " + (i + 1),
+                              sourceCode: "人工" + seq,
+                              name: "新增支線 " + seq,
                               // 不要沿用第一條支線的交通量與版面，否則新支線會
                               // 直接頂著別人的數字、圖卡也疊在同一個位置。
                               movements: {
@@ -7278,19 +8842,62 @@ export default function TrafficApp() {
                                 >
                                   還原這條支線
                                 </button>
-                                <small>
-                                  直接在圖上拖曳圖卡或「{approach.name}
-                                  」標籤即可調整位置；
-                                  只看駛入、只看駛出、駛入＋駛出三種畫面各自記住自己的位置。
-                                </small>
                               </div>
                               <button
                                 className="icon-danger"
                                 disabled={selected.approaches.length <= 3}
                                 onClick={function () {
+                                  // 刪掉支線之後，原本以這支為起點或終點的 OD
+                                  // 路徑如果留著，就會變成指向不存在的支線的孤
+                                  // 兒資料：合計仍算得到數字，但駛入總和與駛出
+                                  // 總和從此對不起來。所以要一併清掉，並先讓使
+                                  // 用者知道會連帶損失多少筆流量。
+                                  const target = selected.approaches[index];
+                                  const orphans = (
+                                    selected.routes || []
+                                  ).filter(function (route) {
+                                    return (
+                                      route.fromApproachId === target.id ||
+                                      route.toApproachId === target.id
+                                    );
+                                  });
+                                  if (
+                                    orphans.length &&
+                                    !confirm(
+                                      "刪除支線「" +
+                                        (target.name || target.sourceCode) +
+                                        "」會一併刪除 " +
+                                        orphans.length +
+                                        " 筆與它相連的轉向流量，且無法復原。確定要刪除嗎？",
+                                    )
+                                  )
+                                    return;
                                   updateSelected(function (record) {
-                                    record.approaches.splice(index, 1);
-                                    return record;
+                                    const removed = record.approaches.splice(
+                                      index,
+                                      1,
+                                    )[0];
+                                    if (removed)
+                                      record.routes = (
+                                        record.routes || []
+                                      ).filter(function (route) {
+                                        return (
+                                          route.fromApproachId !== removed.id &&
+                                          route.toApproachId !== removed.id
+                                        );
+                                      });
+                                    /*
+                                     * 一定要重算 approaches 的左／直／右。
+                                     *
+                                     * 刪掉孤兒 OD 之後，其他支線的 movements
+                                     * 裡還留著「開往被刪支線」的那些量。
+                                     * recordTotal() 讀的正是 movements，所以
+                                     * 儀表板、排名、轉向圖與每一張 Excel 都會
+                                     * 多出一筆憑空的流量（實測核對差值
+                                     * 1,095.6 PCU/hr），而資料品質檢查卻報
+                                     *「沒有異常」。
+                                     */
+                                    return syncRouteTotals(record);
                                   });
                                 }}
                               >
@@ -7336,13 +8943,14 @@ export default function TrafficApp() {
                           ，調整後會同步至其他季度。
                         </span>
                       </div>
-                      {diagramCollisionWarnings(selected, flowSummaryMode)
+                      {diagramCollisionWarnings(selected, flowSummaryMode, diagramStyle)
                         .length > 0 && (
                         <div className="collision-warning">
                           <b>匯出前排版預警</b>
                           {diagramCollisionWarnings(
                             selected,
                             flowSummaryMode,
+                            diagramStyle,
                           ).map(function (warning) {
                             return <p key={warning}>{warning}</p>;
                           })}
@@ -7359,8 +8967,12 @@ export default function TrafficApp() {
                           </p>
                           {selected.movementRule === "reference-calculation" ? (
                             <p className="inline-note">
-                              本路口採 T15-01 參考計算檔的既有分法；D
-                              支線沒有直行流向。調整圖面角度不會覆蓋此分類。
+                              本路口（{selected.station} {selected.name}）的名稱與七支支線代碼
+                              A～G 與內建的參考計算檔相符，因此套用該檔的既有分法（D
+                              支線沒有直行流向），<b>而不是依圖面角度推算</b>。
+                              調整圖面角度不會覆蓋此分類；若這不是您要的分法，
+                              請在下方逐條改成正確的轉向別——改過之後會轉為「人工確認分類」，
+                              日後重新整理也不會再被參考表改回去。
                             </p>
                           ) : selected.movementRule === "manual" ? (
                             <p className="inline-note">
@@ -7609,12 +9221,32 @@ export default function TrafficApp() {
                     const selectedQuarterRows = rows.filter(function (r) {
                       return r.quarter === quarter;
                     });
-                    const am = selectedQuarterRows.reduce(function (sum, r) {
-                      return sum + recordTotal(r, "AM");
-                    }, 0);
-                    const pm = selectedQuarterRows.reduce(function (sum, r) {
-                      return sum + recordTotal(r, "PM");
-                    }, 0);
+                    /*
+                     * 這裡**不可以**把各路口的尖峰流量相加。
+                     *
+                     * PCU/hr 是「某一個特定小時」的流率，而每個路口的尖峰小時
+                     * 是各自搜出來的（A 路口 07:15–08:15、B 路口 08:00–09:00）。
+                     * 相加得到的數字不對應任何一個真實存在的小時，卻會被讀成
+                     * 「這個計畫的尖峰總量」。同一頁下方的比較表就是正確做法
+                     * ——逐筆列出各自的尖峰時段與總量。
+                     * 所以這張卡改成寫「最高的那一個路口」與「平均」。
+                     */
+                    const peakStat = function (peak: PeakKey) {
+                      const values = selectedQuarterRows.map(function (r) {
+                        return { value: recordTotal(r, peak), record: r };
+                      });
+                      if (!values.length) return null;
+                      const top = values.reduce(function (best, item) {
+                        return item.value > best.value ? item : best;
+                      });
+                      const mean =
+                        values.reduce(function (sum, item) {
+                          return sum + item.value;
+                        }, 0) / values.length;
+                      return { top, mean };
+                    };
+                    const am = peakStat("AM");
+                    const pm = peakStat("PM");
                     return (
                       <article className="panel compare-card" key={project.id}>
                         <span>{project.code}</span>
@@ -7631,14 +9263,53 @@ export default function TrafficApp() {
                             <dd>{selectedQuarterRows.length} 處</dd>
                           </div>
                           <div>
-                            <dt>AM Peak 合計</dt>
-                            <dd>{am.toLocaleString()} PCU/hr</dd>
+                            <dt>AM Peak 最高路口</dt>
+                            <dd>
+                              {am
+                                ? am.top.value.toLocaleString() +
+                                  " PCU/hr（" +
+                                  am.top.record.station +
+                                  "）"
+                                : "—"}
+                            </dd>
                           </div>
                           <div>
-                            <dt>PM Peak 合計</dt>
-                            <dd>{pm.toLocaleString()} PCU/hr</dd>
+                            <dt>AM Peak 平均</dt>
+                            <dd>
+                              {am
+                                ? am.mean.toLocaleString(undefined, {
+                                    maximumFractionDigits: 1,
+                                  }) + " PCU/hr"
+                                : "—"}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>PM Peak 最高路口</dt>
+                            <dd>
+                              {pm
+                                ? pm.top.value.toLocaleString() +
+                                  " PCU/hr（" +
+                                  pm.top.record.station +
+                                  "）"
+                                : "—"}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>PM Peak 平均</dt>
+                            <dd>
+                              {pm
+                                ? pm.mean.toLocaleString(undefined, {
+                                    maximumFractionDigits: 1,
+                                  }) + " PCU/hr"
+                                : "—"}
+                            </dd>
                           </div>
                         </dl>
+                        <p className="compare-note">
+                          各路口的尖峰小時不一定相同，PCU/hr 是「某一個特定小時」
+                          的流率，相加不對應任何一個真實存在的小時，因此這裡
+                          只做比較與平均，不做加總。
+                        </p>
                         <button
                           className="secondary full"
                           onClick={function () {
@@ -7724,7 +9395,7 @@ export default function TrafficApp() {
                         <h3>各支線駛入／駛出尖峰流量</h3>
                       </div>
                       <p>
-                        「駛入」為車流由支線進入中央路口；「駛出」為車流由中央路口進入該支線。各支線駛入或駛出合計皆應等於路口尖峰轉向總量，單位均為
+                        「駛出路口X」為車流由支線 X 駛出、開進中央路口（以 X 為起點）；「駛入路口X」為車流穿越中央路口後駛入支線 X（以 X 為終點）。各支線駛出或駛入合計皆應等於路口尖峰轉向總量，單位均為
                         PCU/hr。
                       </p>
                     </div>
@@ -7774,10 +9445,10 @@ export default function TrafficApp() {
                                       <th colSpan={2}>PM Peak（PCU/hr）</th>
                                     </tr>
                                     <tr>
+                                      <th>駛出路口</th>
                                       <th>駛入路口</th>
-                                      <th>駛出至支線</th>
+                                      <th>駛出路口</th>
                                       <th>駛入路口</th>
-                                      <th>駛出至支線</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -7924,6 +9595,8 @@ export default function TrafficApp() {
               peak={peak}
               setPeak={setPeak}
               notify={notify}
+              pendingCount={pendingSurveyTypeRecords().length}
+              assignPendingSurveyType={assignPendingSurveyType}
             />
           )}
 
@@ -7955,6 +9628,42 @@ export default function TrafficApp() {
                       : record;
                   }),
                 );
+              }}
+              intersections={currentCanonicalRecords.map(function (record) {
+                return {
+                  key: recordIntersectionKey(record),
+                  label: record.station + "　" + record.name,
+                };
+              })}
+              selectedIntersection={selectedIntersection}
+              setSelectedIntersection={setSelectedIntersection}
+              surveyTypes={Array.from(
+                new Set(
+                  selectedIntersectionRecords.map(function (record) {
+                    return record.surveyType || "待設定";
+                  }),
+                ),
+              )}
+              selectedSurveyType={selected?.surveyType || "待設定"}
+              setSelectedSurveyType={setSelectedSurveyType}
+              pendingSurveyTypeCount={pendingSurveyTypeRecords().length}
+              pendingSurveyTypeLabels={pendingSurveyTypeRecords().map(
+                function (record) {
+                  return record.quarter + "　" + record.station;
+                },
+              )}
+              assignPendingSurveyType={assignPendingSurveyType}
+              setSurveyType={function (value) {
+                if (!selected) return;
+                saveRevision(selected, "更改資料別前自動保存");
+                setRecords(
+                  records.map(function (record) {
+                    return record.id === selected.id
+                      ? { ...record, surveyType: value }
+                      : record;
+                  }),
+                );
+                notify("資料別已更新為「" + value + "」。");
               }}
               restoreRevision={function (revision) {
                 if (
@@ -8376,35 +10085,74 @@ export default function TrafficApp() {
                       <tbody>
                         {canonicalRecords.map(function (record) {
                           const key = recordIntersectionKey(record);
+                          /*
+                           * React key 不能用名稱衍生的 key。
+                           * recordIntersectionKey 是從名稱算出來的，改名時
+                           * 第一個字一打進去 key 就變了，React 會把整個 <tr>
+                           * 拆掉重建——輸入框失焦，後面的字全部打不進去。
+                           * 改用不會變的 intersectionId／id。
+                           */
                           return (
-                            <tr key={key}>
+                            <tr key={record.intersectionId || record.id}>
                               <td>{key}</td>
                               <td>
                                 <input
                                   value={record.name}
-                                  onChange={function (e) {
-                                    const value = e.target.value;
+                                  onFocus={function (e) {
+                                    /*
+                                     * 鎖定授權與還原點只做一次，在開始編輯時。
+                                     * 舊版放在 onChange，等於每打一個字就跳一次
+                                     * 確認視窗，鎖定的路口根本改不了名字。
+                                     */
                                     const targets = records.filter(
                                       function (item) {
                                         return (
+                                          item.projectId === record.projectId &&
                                           recordIntersectionKey(item) === key
                                         );
                                       },
                                     );
                                     if (
+                                      !targets.some(function (item) {
+                                        return Boolean(item.resultLock);
+                                      })
+                                    )
+                                      return;
+                                    if (
                                       !authorizeLockedChange(
                                         targets,
                                         "路口名稱修改",
                                       )
-                                    )
+                                    ) {
+                                      e.currentTarget.blur();
                                       return;
+                                    }
+                                    targets.forEach(function (item) {
+                                      saveRevision(item, "路口名稱修改前");
+                                    });
+                                  }}
+                                  onChange={function (e) {
+                                    const value = e.target.value;
+                                    // 只改「這個計畫」裡的同一個路口。這頁列出
+                                    // 的本來就只有目前計畫的路口，但改名時是用
+                                    // 路口鍵值比對全部記錄，別的計畫只要有同名
+                                    // 路口就會一起被改掉，使用者在這個計畫改名，
+                                    // 另一個計畫的名稱卻無聲跟著變。
+                                    const inProject = function (
+                                      item: TrafficRecord,
+                                    ) {
+                                      return (
+                                        item.projectId === record.projectId &&
+                                        recordIntersectionKey(item) === key
+                                      );
+                                    };
                                     setRecords(function (all) {
                                       return all.map(function (item) {
-                                        return recordIntersectionKey(item) ===
-                                          key
+                                        return inProject(item)
                                           ? {
                                               ...item,
                                               name: value,
+                                              nameEdited: true,
                                               resultLock: undefined,
                                             }
                                           : item;
@@ -8424,6 +10172,24 @@ export default function TrafficApp() {
             </>
           )}
 
+          {view === "conclusion" && (
+            <ConclusionStudio
+              records={projectRecords}
+              projectName={activeProject?.name || "未命名計畫"}
+              templates={conclusionTemplates}
+              setTemplates={setConclusionTemplates}
+              notify={notify}
+              condition={conclusionCondition}
+              setCondition={setConclusionCondition}
+              draft={conclusionDraft}
+              setDraft={setConclusionDraft}
+              edited={conclusionEdited}
+              setEdited={setConclusionEdited}
+              templateName={conclusionTemplateName}
+              setTemplateName={setConclusionTemplateName}
+            />
+          )}
+
           {view === "reports" && (
             <>
               <section className="page-head">
@@ -8440,7 +10206,7 @@ export default function TrafficApp() {
                 <section
                   className={
                     "panel export-preflight " +
-                    (diagramCollisionWarnings(selected, flowSummaryMode).length
+                    (diagramCollisionWarnings(selected, flowSummaryMode, diagramStyle).length
                       ? "has-warning"
                       : "ready")
                   }
@@ -8449,17 +10215,18 @@ export default function TrafficApp() {
                     <span className="eyebrow">EXPORT PREFLIGHT</span>
                     <h2>匯出前檢查 · {selected.station}</h2>
                     <p>
-                      {diagramCollisionWarnings(selected, flowSummaryMode)
+                      {diagramCollisionWarnings(selected, flowSummaryMode, diagramStyle)
                         .length
                         ? diagramCollisionWarnings(
                             selected,
                             flowSummaryMode,
+                            diagramStyle,
                           ).join("；") + "。請先到道路與流向管理拖曳圖卡位置。"
                         : "圖卡位置未偵測到重疊；日期、尖峰時段與單位會一併輸出。"}
                     </p>
                   </div>
                   <strong>
-                    {diagramCollisionWarnings(selected, flowSummaryMode).length
+                    {diagramCollisionWarnings(selected, flowSummaryMode, diagramStyle).length
                       ? "需調整"
                       : "可匯出"}
                   </strong>
@@ -8622,6 +10389,141 @@ export default function TrafficApp() {
                   )}
                 </div>
               </section>
+              <section className="panel report-draft-panel">
+                <div className="report-items-head report-draft-head">
+                  <div>
+                    <span className="eyebrow">REPORT DRAFT</span>
+                    <h2>報告文字草稿</h2>
+                    <p>
+                      <b>這一份是「這批 Excel 的說明文字」</b>：段落跟著上面勾選的匯出項目走，
+                      勾了哪幾張工作表就寫哪幾段，會和 Excel 一起交出去。
+                      要自己挑條件（只寫某一季、某幾個路口、只寫駛入流量⋯）請改用左側選單的
+                      <b>「結論草稿產生器」</b>。兩邊的數字來源完全相同。
+                      <br />
+                      數字全部取自產生 Excel 的同一批計算，不會另外再算一次。
+                      支線與車種這類不能跨路口、跨季度相加的敘述，會固定以一筆代表資料為準，並在文中寫明是哪一筆。
+                    </p>
+                  </div>
+                  <div className="report-draft-head-actions">
+                    <button
+                      className="secondary"
+                      onClick={function () {
+                        setDraftSectionOverride(null);
+                      }}
+                    >
+                      跟著匯出勾選
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={function () {
+                        setDraftSectionOverride([...DRAFT_SECTION_ORDER]);
+                      }}
+                    >
+                      全選
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={function () {
+                        setDraftSectionOverride([]);
+                      }}
+                    >
+                      全部不勾
+                    </button>
+                  </div>
+                </div>
+                <div className="draft-section-chips">
+                  {DRAFT_SECTION_ORDER.map(function (key) {
+                    return (
+                      <label
+                        key={key}
+                        className={
+                          "chip-check" +
+                          (draftSections.includes(key) ? " selected" : "")
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          aria-label={DRAFT_SECTION_LABELS[key]}
+                          checked={draftSections.includes(key)}
+                          onChange={function () {
+                            toggleDraftSection(key);
+                          }}
+                        />
+                        <span>{DRAFT_SECTION_LABELS[key]}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="report-draft-box">
+                  <textarea
+                    aria-label="報告文字草稿"
+                    value={reportDraftText}
+                    placeholder="這個計畫在選定期間內還沒有可敘述的資料。"
+                    onChange={function (e) {
+                      setReportDraftText(e.target.value);
+                      setReportDraftEdited(true);
+                    }}
+                  />
+                  <div className="report-draft-actions">
+                    <button
+                      className="secondary"
+                      onClick={function () {
+                        setReportDraftEdited(false);
+                        setReportDraftText(generatedReportDraft);
+                        notify("草稿已依目前的匯出範圍重新產生。");
+                      }}
+                    >
+                      重新產生
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={!reportDraftText.trim()}
+                      onClick={function () {
+                        // 沒有剪貼簿權限（http 或舊瀏覽器）時要講清楚，
+                        // 不能靜靜失敗讓使用者以為複製成功了。
+                        if (!navigator.clipboard?.writeText)
+                          return notify(
+                            "這個瀏覽器不允許程式複製，請手動選取草稿文字後複製。",
+                          );
+                        navigator.clipboard
+                          .writeText(reportDraftText)
+                          .then(function () {
+                            notify("草稿全文已複製。");
+                          })
+                          .catch(function () {
+                            notify(
+                              "複製失敗，請手動選取草稿文字後複製。",
+                            );
+                          });
+                      }}
+                    >
+                      複製全文
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={!reportDraftText.trim()}
+                      onClick={function () {
+                        downloadBlob(
+                          new Blob(["﻿" + reportDraftText], {
+                            type: "text/plain;charset=utf-8",
+                          }),
+                          (activeProject?.code || "Project") +
+                            "_" +
+                            (reportDraftContext?.quarterRange || "all") +
+                            "_報告文字草稿.txt",
+                        );
+                      }}
+                    >
+                      下載 .txt
+                    </button>
+                    <span className="report-draft-note">
+                      {reportDraftEdited
+                        ? "已手動修改，改期間或改勾選都不會覆蓋掉；但切換計畫會重新產生，請先複製或下載。"
+                        : "會隨匯出期間與勾選自動更新；只要開始手改就停止自動更新（切換計畫仍會重新產生）。"}
+                    </span>
+                  </div>
+                </div>
+              </section>
               <section className="report-grid">
                 <article className="panel report-card">
                   <span className="file-type excel">XLS</span>
@@ -8728,7 +10630,7 @@ export default function TrafficApp() {
                                 return e.target.checked
                                   ? Array.from(
                                       new Set([...values, item]),
-                                    ).sort()
+                                    ).sort(compareQuarters)
                                   : values.filter(function (value) {
                                       return value !== item;
                                     });
@@ -8862,7 +10764,8 @@ export default function TrafficApp() {
                 <div>
                   <b>清除本機資料</b>
                   <p>
-                    會清除所有計畫與設定，且不會恢復任何示範值；請先下載完整備份。
+                    會清除所有計畫、資料與設定（含當量矩陣、車種目錄、車種對應、
+                    格式範本、報表範本與版本紀錄），且不會恢復任何示範值；請先下載完整備份。
                   </p>
                 </div>
                 <button
@@ -8870,11 +10773,32 @@ export default function TrafficApp() {
                     if (
                       confirm("確定清除這台電腦內的 Turning Traffic 資料？")
                     ) {
+                      /*
+                       * 「所有設定」就是所有設定。舊版只清了計畫與紀錄，
+                       * 上一個委託案的當量係數、車種目錄與報表範本會留在
+                       * 下一個案子裡繼續生效，而畫面上寫的是「已清除，
+                       * 系統回到空白正式環境」。
+                       */
                       setProjects([]);
                       setRecords([]);
                       setNameMap({});
                       setActiveProjectId("");
                       setQuarter("");
+                      /*
+                       * 一定要清整份 byProject。setPce 等是 scoped setter，
+                       * 只會把預設值寫進「目前這個計畫」那一格，其他計畫的
+                       * 當量矩陣、車種目錄與車種對照會原封不動留在
+                       * localStorage 裡——而按鈕上方明寫「會清除所有計畫、
+                       * 資料與設定（含當量矩陣、車種目錄、車種對應…）」。
+                       */
+                      setPceByProject({});
+                      setCatalogByProject({});
+                      setMappingsByProject({});
+                      setFormatMemories([]);
+                      setVehicleSchemes([]);
+                      setReportTemplates([]);
+                      setConclusionTemplates([]);
+                      setRecordRevisions([]);
                       notify("已清除，系統回到空白正式環境。");
                     }
                   }}
@@ -8898,14 +10822,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.1-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.20-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.1-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.20-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
@@ -9122,11 +11046,677 @@ export default function TrafficApp() {
   );
 }
 
+/**
+ * 結論草稿產生器。
+ *
+ * 使用者自己勾條件（範圍／時段／路口／支線／指標／分段方式），系統照著寫。
+ * 產生的文字可以直接手改，改過之後不會被自動覆蓋——只有按「重新產生」
+ * 才會蓋掉，而且會先問過。條件可以存成範本重複使用。
+ */
+function ConclusionStudio(props: {
+  records: TrafficRecord[];
+  projectName: string;
+  templates: ConclusionTemplate[];
+  setTemplates: (value: ConclusionTemplate[]) => void;
+  notify: (value: string) => void;
+  /*
+   * 條件與草稿刻意「不」放在這個元件裡。
+   *
+   * 切到別的分頁時這個元件會被卸載，狀態跟著消失——使用者設好一整組條件、
+   * 產生了草稿，只是去看一眼路口轉向圖再回來，文字就全部不見了。
+   * 狀態放在上層元件（它整個 session 都不會卸載），切分頁才留得住。
+   */
+  condition: ConclusionCondition;
+  setCondition: (value: ConclusionCondition) => void;
+  draft: string;
+  setDraft: (value: string) => void;
+  edited: boolean;
+  setEdited: (value: boolean) => void;
+  templateName: string;
+  setTemplateName: (value: string) => void;
+}) {
+  const { condition, setCondition, draft, setDraft, edited, setEdited, templateName, setTemplateName } =
+    props;
+
+  const source = useMemo(
+    function () {
+      return toConclusionRecords(props.records);
+    },
+    [props.records],
+  );
+
+  const quarters = useMemo(
+    function () {
+      return Array.from(new Set(source.map((record) => record.quarter))).sort(
+        function (a, b) {
+          return conclusionQuarterKey(a) - conclusionQuarterKey(b);
+        },
+      );
+    },
+    [source],
+  );
+  const years = useMemo(
+    function () {
+      return Array.from(
+        new Set(source.map((record) => quarterYear(record.quarter)).filter(Boolean)),
+      ).sort();
+    },
+    [source],
+  );
+  const intersections = useMemo(
+    function () {
+      return Array.from(
+        new Map(
+          source.map((record) => [
+            record.intersectionKey,
+            record.station + "　" + record.name,
+          ]),
+        ).entries(),
+      );
+    },
+    [source],
+  );
+  const surveyTypes = useMemo(
+    function () {
+      return Array.from(new Set(source.map((record) => record.surveyType))).sort();
+    },
+    [source],
+  );
+  /* 支線清單只列「目前所選路口」有的，否則選單會長到不能看。 */
+  const branchNames = useMemo(
+    function () {
+      const keys = condition.intersectionKeys;
+      const names = new Set<string>();
+      for (const record of source) {
+        if (keys.length && !keys.includes(record.intersectionKey)) continue;
+        for (const peak of ["AM", "PM"] as PeakKey[])
+          for (const branch of record.peaks[peak]?.branches || [])
+            names.add(branch.name);
+      }
+      return Array.from(names).sort();
+    },
+    [source, condition.intersectionKeys],
+  );
+
+  const matched = useMemo(
+    function () {
+      return selectRecords(source, condition).length;
+    },
+    [source, condition],
+  );
+
+  const patch = function (next: Partial<ConclusionCondition>) {
+    setCondition({ ...condition, ...next });
+  };
+  const toggle = function <T,>(list: T[], value: T): T[] {
+    return list.includes(value)
+      ? list.filter((item) => item !== value)
+      : [...list, value];
+  };
+
+  function generate(force = false) {
+    if (edited && !force) {
+      if (
+        !window.confirm(
+          "您已經手動修改過草稿。重新產生會覆蓋掉修改內容，確定要繼續嗎？",
+        )
+      )
+        return;
+    }
+    const now = new Date();
+    const stamp =
+      now.getFullYear() +
+      "-" +
+      String(now.getMonth() + 1).padStart(2, "0") +
+      "-" +
+      String(now.getDate()).padStart(2, "0") +
+      " " +
+      String(now.getHours()).padStart(2, "0") +
+      ":" +
+      String(now.getMinutes()).padStart(2, "0");
+    setDraft(
+      buildConclusion(source, condition, {
+        projectName: props.projectName,
+        systemVersion: VERSION,
+        generatedAt: stamp,
+      }),
+    );
+    setEdited(false);
+    props.notify("結論草稿已產生。");
+  }
+
+  const scope = condition.scope;
+
+  return (
+    <>
+      <section className="page-head">
+        <div>
+          <span className="eyebrow">CONCLUSION STUDIO</span>
+          <h1>結論草稿產生器</h1>
+          <p>
+            <b>這一份是「您自己出題」</b>：自己勾選統計範圍、時段、路口、支線與要寫哪些數字，
+            系統照著條件寫出結論，和 Excel 匯出無關。
+            要產生「這批 Excel 的說明文字」請用「報表與批次輸出」裡的<b>報告文字草稿</b>。
+            兩邊的數字來源完全相同，都取自畫面與 Excel 用的同一組計算，不會另外再算一次。
+          </p>
+        </div>
+        <button className="primary" onClick={() => generate()}>
+          產生草稿
+        </button>
+      </section>
+
+      {!source.length ? (
+        <Empty
+          title="這個計畫還沒有調查資料"
+          text="請先到「季度批次匯入」匯入調查檔，再回來產生結論草稿。"
+        />
+      ) : (
+        <>
+          <section className="panel conclusion-panel">
+            <div className="conclusion-head">
+              <div>
+                <span className="eyebrow">CONDITIONS</span>
+                <h2>條件設定</h2>
+              </div>
+              <b className={matched ? "conclusion-count" : "conclusion-count zero"}>
+                符合條件 {matched} 筆
+              </b>
+            </div>
+
+            <div className="conclusion-grid">
+              <fieldset className="conclusion-field">
+                <legend>一、統計範圍</legend>
+                <div className="conclusion-radios">
+                  {(
+                    [
+                      ["quarter", "單一季度"],
+                      ["year", "某一年度"],
+                      ["range", "季度區間"],
+                      ["project", "整個計畫"],
+                    ] as const
+                  ).map(function (entry) {
+                    return (
+                      <label key={entry[0]}>
+                        <input
+                          type="radio"
+                          name="conclusion-scope"
+                          checked={scope.kind === entry[0]}
+                          onChange={function () {
+                            if (entry[0] === "quarter")
+                              patch({
+                                scope: {
+                                  kind: "quarter",
+                                  quarter: quarters.at(-1) || "",
+                                },
+                              });
+                            else if (entry[0] === "year")
+                              patch({
+                                scope: { kind: "year", year: years.at(-1) || "" },
+                              });
+                            else if (entry[0] === "range")
+                              patch({
+                                scope: {
+                                  kind: "range",
+                                  from: quarters[0] || "",
+                                  to: quarters.at(-1) || "",
+                                },
+                              });
+                            else patch({ scope: { kind: "project" } });
+                          }}
+                        />
+                        {entry[1]}
+                      </label>
+                    );
+                  })}
+                </div>
+                {scope.kind === "quarter" && (
+                  <label className="conclusion-inline">
+                    季度
+                    <select
+                      value={scope.quarter}
+                      onChange={function (e) {
+                        patch({ scope: { kind: "quarter", quarter: e.target.value } });
+                      }}
+                    >
+                      {quarters.map((q) => (
+                        <option key={q} value={q}>
+                          {q}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {scope.kind === "year" && (
+                  <label className="conclusion-inline">
+                    年度
+                    <select
+                      value={scope.year}
+                      onChange={function (e) {
+                        patch({ scope: { kind: "year", year: e.target.value } });
+                      }}
+                    >
+                      {years.map((y) => (
+                        <option key={y} value={y}>
+                          {y} 年
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {scope.kind === "range" && (
+                  <div className="conclusion-inline">
+                    <label>
+                      起
+                      <select
+                        value={scope.from}
+                        onChange={function (e) {
+                          patch({
+                            scope: { kind: "range", from: e.target.value, to: scope.to },
+                          });
+                        }}
+                      >
+                        {quarters.map((q) => (
+                          <option key={q} value={q}>
+                            {q}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      迄
+                      <select
+                        value={scope.to}
+                        onChange={function (e) {
+                          patch({
+                            scope: {
+                              kind: "range",
+                              from: scope.from,
+                              to: e.target.value,
+                            },
+                          });
+                        }}
+                      >
+                        {quarters.map((q) => (
+                          <option key={q} value={q}>
+                            {q}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                )}
+              </fieldset>
+
+              <fieldset className="conclusion-field">
+                <legend>二、時段與資料別</legend>
+                {/*
+                  這裡是兩件不同的事：上排是「哪一個尖峰」，下排是「平日還是
+                  假日」。以前兩排長得一模一樣又沒有小標，「待設定」看起來
+                  像是第三個尖峰時段。
+                */}
+                <span className="conclusion-sublabel">時段</span>
+                <div className="conclusion-checks">
+                  {(
+                    [
+                      ["AM", "上午尖峰"],
+                      ["PM", "下午尖峰"],
+                    ] as const
+                  ).map(function (entry) {
+                    return (
+                      <label key={entry[0]}>
+                        <input
+                          type="checkbox"
+                          checked={condition.peaks.includes(entry[0])}
+                          onChange={function () {
+                            const next = toggle(condition.peaks, entry[0]);
+                            patch({ peaks: next.length ? next : condition.peaks });
+                          }}
+                        />
+                        {entry[1]}
+                      </label>
+                    );
+                  })}
+                </div>
+                <span className="conclusion-sublabel">資料別</span>
+                <div className="conclusion-checks">
+                  {surveyTypes.map(function (type) {
+                    return (
+                      <label key={type}>
+                        <input
+                          type="checkbox"
+                          checked={condition.surveyTypes.includes(type)}
+                          onChange={function () {
+                            patch({ surveyTypes: toggle(condition.surveyTypes, type) });
+                          }}
+                        />
+                        {type}
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="conclusion-hint">
+                  資料別一個都不勾＝全部都寫。時段至少要留一個。
+                  {surveyTypes.includes("待設定") ? (
+                    <>
+                      <br />
+                      <b>「待設定」不是一種時段</b>，而是那幾筆資料還沒指定是平日還是假日
+                      （原始檔的日期沒有寫「（平日）」「（假日）」）。
+                      要更正請到「流量核對工作台」，選到該筆路口季度後在「資料別」下拉指定。
+                    </>
+                  ) : null}
+                </p>
+              </fieldset>
+
+              <fieldset className="conclusion-field">
+                <legend>三、要寫哪些路口</legend>
+                <div className="conclusion-actions-row">
+                  <button
+                    className="ghost"
+                    onClick={function () {
+                      patch({ intersectionKeys: [], branchNames: [] });
+                    }}
+                  >
+                    全部路口
+                  </button>
+                </div>
+                <div className="conclusion-list">
+                  {intersections.map(function (entry) {
+                    return (
+                      <label key={entry[0]}>
+                        <input
+                          type="checkbox"
+                          checked={condition.intersectionKeys.includes(entry[0])}
+                          onChange={function () {
+                            patch({
+                              intersectionKeys: toggle(
+                                condition.intersectionKeys,
+                                entry[0],
+                              ),
+                              branchNames: [],
+                            });
+                          }}
+                        />
+                        {entry[1]}
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="conclusion-hint">
+                  一個都不勾＝全部路口都寫（目前 {intersections.length} 個）。
+                </p>
+              </fieldset>
+
+              <fieldset className="conclusion-field">
+                <legend>四、要寫哪些支線</legend>
+                <div className="conclusion-list">
+                  {branchNames.map(function (name) {
+                    return (
+                      <label key={name}>
+                        <input
+                          type="checkbox"
+                          checked={condition.branchNames.includes(name)}
+                          onChange={function () {
+                            patch({ branchNames: toggle(condition.branchNames, name) });
+                          }}
+                        />
+                        {name}
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="conclusion-hint">
+                  一個都不勾＝全部支線都寫。支線清單會跟著上面所選的路口變動。
+                </p>
+              </fieldset>
+
+              <fieldset className="conclusion-field conclusion-field-wide">
+                <legend>五、要寫哪些數字</legend>
+                <div className="conclusion-metrics">
+                  {CONCLUSION_METRICS.map(function (metric) {
+                    const key = metric.key as ConclusionMetricKey;
+                    return (
+                      <label
+                        key={key}
+                        className={
+                          condition.metrics.includes(key) ? "selected" : ""
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={condition.metrics.includes(key)}
+                          onChange={function () {
+                            patch({ metrics: toggle(condition.metrics, key) });
+                          }}
+                        />
+                        {metric.label}
+                      </label>
+                    );
+                  })}
+                </div>
+                {condition.metrics.includes("branchComposition") ? (
+                  <div className="conclusion-submode">
+                    <span className="conclusion-sublabel">
+                      各支線各車種要怎麼呈現
+                    </span>
+                    <div className="conclusion-radios">
+                      {BRANCH_COMPOSITION_MODES.map(function (mode) {
+                        return (
+                          <label key={mode.key}>
+                            <input
+                              type="radio"
+                              name="conclusion-branch-composition-mode"
+                              checked={
+                                (condition.branchCompositionMode ||
+                                  "follow") === mode.key
+                              }
+                              onChange={function () {
+                                patch({ branchCompositionMode: mode.key });
+                              }}
+                            />
+                            {mode.label}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="conclusion-hint">
+                      和「車種組成分析」頁上每條支線的下拉選單同一套。選「跟著設定」時，
+                      您在那一頁把某條支線改成雙向合計，草稿就會跟著寫成雙向合計。
+                    </p>
+                  </div>
+                ) : null}
+              </fieldset>
+
+              <fieldset className="conclusion-field conclusion-field-wide">
+                <legend>六、敘述方式</legend>
+                <div className="conclusion-radios">
+                  {(
+                    [
+                      ["byIntersection", "依路口分段（每個路口一段）"],
+                      ["byQuarter", "依季度分段（每一季一段）"],
+                      ["overall", "只寫整體結論"],
+                    ] as const
+                  ).map(function (entry) {
+                    return (
+                      <label key={entry[0]}>
+                        <input
+                          type="radio"
+                          name="conclusion-grouping"
+                          checked={condition.grouping === entry[0]}
+                          onChange={function () {
+                            patch({ grouping: entry[0] });
+                          }}
+                        />
+                        {entry[1]}
+                      </label>
+                    );
+                  })}
+                </div>
+                <label className="conclusion-inline">
+                  小數位數
+                  <select
+                    value={String(condition.digits)}
+                    onChange={function (e) {
+                      patch({ digits: Number(e.target.value) });
+                    }}
+                  >
+                    {[0, 1, 2].map((d) => (
+                      <option key={d} value={d}>
+                        {d} 位
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </fieldset>
+            </div>
+
+            <div className="conclusion-templates">
+              <strong>條件範本</strong>
+              <div className="conclusion-actions-row">
+                <input
+                  value={templateName}
+                  placeholder="例如：季報用、年報用"
+                  onChange={function (e) {
+                    setTemplateName(e.target.value);
+                  }}
+                />
+                <button
+                  className="secondary"
+                  onClick={function () {
+                    const name = templateName.trim();
+                    if (!name) return props.notify("請先輸入範本名稱。");
+                    props.setTemplates([
+                      {
+                        id: "CT-" + Date.now(),
+                        name,
+                        condition,
+                        savedAt: new Date().toISOString(),
+                      },
+                      ...props.templates.filter(function (item) {
+                        return item.name !== name;
+                      }),
+                    ]);
+                    setTemplateName("");
+                    props.notify("已存成範本「" + name + "」。");
+                  }}
+                >
+                  存成範本
+                </button>
+              </div>
+              {props.templates.length ? (
+                <div className="conclusion-template-list">
+                  {props.templates.map(function (template) {
+                    return (
+                      <span key={template.id} className="conclusion-template">
+                        <button
+                          className="ghost"
+                          onClick={function () {
+                            /*
+                              * 一定要正規化：舊版存下來的範本可能缺欄位，
+                              * 直接套用會在 render 期間丟 TypeError，
+                              * 整個結論分頁會消失。
+                              */
+                            setCondition(
+                              normalizeCondition(template.condition),
+                            );
+                            props.notify("已套用範本「" + template.name + "」。");
+                          }}
+                        >
+                          {template.name}
+                        </button>
+                        <button
+                          className="ghost danger"
+                          aria-label={"刪除範本 " + template.name}
+                          onClick={function () {
+                            props.setTemplates(
+                              props.templates.filter(function (item) {
+                                return item.id !== template.id;
+                              }),
+                            );
+                          }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="conclusion-hint">
+                  還沒有存過範本。存起來之後，下次直接按一下就套用同一組條件。
+                </p>
+              )}
+            </div>
+          </section>
+
+          <section className="panel conclusion-output">
+            <div className="conclusion-head">
+              <div>
+                <span className="eyebrow">CONCLUSION DRAFT</span>
+                <h2>結論草稿</h2>
+              </div>
+              <div className="conclusion-actions-row">
+                <button className="secondary" onClick={() => generate()}>
+                  重新產生
+                </button>
+                <button
+                  className="secondary"
+                  disabled={!draft}
+                  onClick={function () {
+                    navigator.clipboard
+                      ?.writeText(draft)
+                      .then(function () {
+                        props.notify("已複製到剪貼簿。");
+                      })
+                      .catch(function () {
+                        props.notify("瀏覽器不允許複製，請手動全選複製。");
+                      });
+                  }}
+                >
+                  複製全文
+                </button>
+                <button
+                  className="secondary"
+                  disabled={!draft}
+                  onClick={function () {
+                    downloadBlob(
+                      new Blob([draft], { type: "text/plain;charset=utf-8" }),
+                      "結論草稿.txt",
+                    );
+                  }}
+                >
+                  下載 .txt
+                </button>
+              </div>
+            </div>
+            <textarea
+              aria-label="結論草稿"
+              value={draft}
+              placeholder="設定好上面的條件後，按「產生草稿」。"
+              onChange={function (e) {
+                setDraft(e.target.value);
+                setEdited(true);
+              }}
+            />
+            <p className="conclusion-hint">
+              {edited
+                ? "您已手動修改過這份草稿；按「重新產生」會先詢問再覆蓋。"
+                : "這段文字可以直接修改，改過之後不會被自動覆蓋。"}
+            </p>
+          </section>
+        </>
+      )}
+    </>
+  );
+}
+
 function TrendView(props: {
   records: TrafficRecord[];
   peak: PeakKey;
   setPeak: (value: PeakKey) => void;
   notify: (value: string) => void;
+  /** 這個計畫裡還掛著「待設定」的紀錄筆數。 */
+  pendingCount: number;
+  assignPendingSurveyType: (value: string, intersectionKey?: string) => void;
 }) {
   const [trendMode, setTrendMode] = useState<PeakKey | "ALL">(props.peak);
   const intersectionKey = function (record: TrafficRecord) {
@@ -9155,7 +11745,7 @@ function TrendView(props: {
         return record.quarter;
       }),
     ),
-  ).sort();
+  ).sort(compareQuarters);
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
   useEffect(
@@ -9166,7 +11756,7 @@ function TrendView(props: {
             return record.quarter;
           }),
         ),
-      ).sort();
+      ).sort(compareQuarters);
       setRangeStart(available[0] || "");
       setRangeEnd(available.at(-1) || "");
     },
@@ -9178,24 +11768,87 @@ function TrendView(props: {
   const activeRangeEnd = allQuarters.includes(rangeEnd)
     ? rangeEnd
     : allQuarters.at(-1) || "";
+  // 同一路口的同一季可能同時有平日與假日兩筆。舊版沒有分開，兩筆會被畫成
+  // 同一條折線上的兩個點、季別標籤還一樣，「較前季」也變成拿假日跟平日比。
+  const surveyTypes = Array.from(
+    new Set(
+      props.records
+        .filter(function (record) {
+          return intersectionKey(record) === activeIntersection;
+        })
+        .map(function (record) {
+          return record.surveyType || "待設定";
+        }),
+    ),
+  ).sort();
+  const [surveyTypeFilter, setSurveyTypeFilter] = useState("");
+  /*
+   * 「待設定」不是一種資料別，而是那幾筆在匯入當下讀不出來。所以預設要停在
+   * 真正的資料別上，不要一進來就停在待設定；同時記下這個路口有幾季還沒指定，
+   * 好在下方直接讓使用者補完。
+   */
+  const realSurveyTypes = surveyTypes.filter(function (type) {
+    return type !== "待設定";
+  });
+  const pendingHere = props.records.filter(function (record) {
+    return (
+      intersectionKey(record) === activeIntersection &&
+      (record.surveyType || "待設定") === "待設定"
+    );
+  });
+  const activeSurveyType = surveyTypes.includes(surveyTypeFilter)
+    ? surveyTypeFilter
+    : realSurveyTypes[0] || surveyTypes[0] || "";
   const startIndex = Math.max(0, allQuarters.indexOf(activeRangeStart));
   const endIndex = Math.max(startIndex, allQuarters.indexOf(activeRangeEnd));
   const chosen = allQuarters.slice(startIndex, endIndex + 1);
-  const rows = props.records
-    .filter(function (record) {
-      return (
-        intersectionKey(record) === activeIntersection &&
-        chosen.includes(record.quarter)
-      );
-    })
-    .sort(function (a, b) {
-      return a.quarter.localeCompare(b.quarter);
-    });
+  /*
+   * 站號的處理交給 buildTrendSeries：站號逐年換（T13-04→T15-04）時要串成
+   * 同一條線，只有「同一季同時存在兩個站號」（北向／南向並存）才需要指定
+   * 站號。報表與 Excel 用的 trendSeriesRecords 也是呼叫同一支，畫面上的
+   * 「較前季」才不會跟報表工作表給出兩個不同的百分比。
+   */
+  const [stationFilter, setStationFilter] = useState("");
+  const trend = buildTrendSeries(props.records, {
+    intersectionKey: activeIntersection,
+    surveyType: activeSurveyType,
+    quarters: chosen,
+    preferStation: stationFilter || undefined,
+  });
+  const rows = trend.rows;
   const trendPeaks: PeakKey[] =
     trendMode === "ALL" ? ["AM", "PM"] : [trendMode];
+  /*
+   * 趨勢用「駛出」還是「駛入」的總量。
+   *
+   * 兩者是同一批 OD 流向、只是分組方式不同，資料完整時總量會完全相等；
+   * 不相等就代表有流向沒有指定目的支線，差額正好是那些流向的量。
+   * 讓使用者能切換，一來符合報告需求，二來一眼就看得出資料有沒有缺口。
+   */
+  const [trendFlow, setTrendFlow] = useState<"outbound" | "inbound">("outbound");
+  const totalOf = function (record: TrafficRecord, peak: PeakKey) {
+    if (trendFlow === "outbound") return recordTotal(record, peak);
+    const armIds = new Set(record.approaches.map((arm) => arm.id));
+    const inbound = (record.routes || [])
+      .filter(function (route) {
+        return armIds.has(route.toApproachId);
+      })
+      .reduce(function (sum, route) {
+        return sum + Number(route.volumes[peak]?.pcu || 0);
+      }, 0);
+    return Math.round(inbound * 10) / 10;
+  };
+  /* 兩種視角的總量若不同，代表有流向沒有指定目的支線。 */
+  const flowGap = rows.reduce(function (worst, record) {
+    return trendPeaks.reduce(function (inner, peak) {
+      const gap =
+        Math.round((recordTotal(record, peak) - totalOf(record, peak)) * 10) / 10;
+      return Math.abs(gap) > Math.abs(inner) ? gap : inner;
+    }, worst);
+  }, 0);
   const values = rows.flatMap(function (record) {
     return trendPeaks.map(function (peak) {
-      return recordTotal(record, peak);
+      return totalOf(record, peak);
     });
   });
   const max = Math.max(...values, 1) * 1.12;
@@ -9207,7 +11860,7 @@ function TrendView(props: {
       points: rows.map(function (record, index) {
         return {
           x: 100 + (index * (chartWidth - 170)) / Math.max(1, rows.length - 1),
-          y: 310 - (recordTotal(record, peak) / max) * 235,
+          y: 310 - (totalOf(record, peak) / max) * 235,
           record,
         };
       }),
@@ -9223,6 +11876,13 @@ function TrendView(props: {
       })?.[1] || "路口") +
         "_" +
         (trendMode === "ALL" ? "AM_PM" : trendMode) +
+        /*
+         * 檔名一定要帶視角。整張圖（折線、點標籤、右側摘要）都跟著
+         * 駛出／駛入切換走，兩種視角各匯出一次會得到內容不同、
+         * 檔名卻一模一樣的兩份交付物。
+         */
+        "_" +
+        (trendFlow === "outbound" ? "駛出總量" : "駛入總量") +
         "_歷季趨勢.png",
     );
     props.notify("趨勢圖已下載。");
@@ -9230,12 +11890,14 @@ function TrendView(props: {
   async function exportTrendExcel() {
     if (!rows.length) return props.notify("目前範圍沒有可輸出的季度資料。");
     const data = rows.map(function (record, index) {
-      const am = recordTotal(record, "AM");
-      const pm = recordTotal(record, "PM");
-      const priorAm = index ? recordTotal(rows[index - 1], "AM") : 0;
-      const priorPm = index ? recordTotal(rows[index - 1], "PM") : 0;
+      /* 匯出要跟畫面同一個視角，否則折線圖與附表會給出兩組數字。 */
+      const am = totalOf(record, "AM");
+      const pm = totalOf(record, "PM");
+      const priorAm = index ? totalOf(rows[index - 1], "AM") : 0;
+      const priorPm = index ? totalOf(rows[index - 1], "PM") : 0;
       return {
         季度: record.quarter,
+        資料別: record.surveyType || "待設定",
         "AM Peak（PCU/hr）": am,
         "PM Peak（PCU/hr）": pm,
         "AM 較前季（%）": priorAm ? am / priorAm - 1 : null,
@@ -9244,31 +11906,40 @@ function TrendView(props: {
         路口名稱: record.name,
         "AM 尖峰時段": record.peaks.AM.start + "–" + record.peaks.AM.end,
         "PM 尖峰時段": record.peaks.PM.start + "–" + record.peaks.PM.end,
+        /*
+         * 這一欄讓收到 Excel 的人看得出數字是哪一種視角算出來的。
+         * 一定要放在**最後**：下面的原生折線圖是用欄位字母（C、D）指定
+         * 數列的，百分比格式也是套在 E、F 欄，插在中間會讓圖表畫到別欄。
+         */
+        統計視角: trendFlow === "outbound" ? "駛出總量" : "駛入總量",
       };
     });
     const workbook = XLSX.utils.book_new();
     const sheet = XLSX.utils.json_to_sheet(data);
-    sheet["!cols"] = [12, 20, 20, 18, 18, 12, 30, 18, 18].map(function (wch) {
-      return { wch };
-    });
+    sheet["!cols"] = [12, 12, 20, 20, 18, 18, 12, 30, 18, 18, 14].map(
+      function (wch) {
+        return { wch };
+      },
+    );
     sheet["!autofilter"] = { ref: sheet["!ref"] || "A1:A1" };
+    // 欄位多了「資料別」，數值欄整體右移一欄。
     for (let row = 2; row <= data.length + 1; row++)
-      ["B", "C"].forEach(function (column) {
+      ["C", "D"].forEach(function (column) {
         if (sheet[column + row]) sheet[column + row].z = "#,##0.0";
       });
     for (let row = 2; row <= data.length + 1; row++)
-      ["D", "E"].forEach(function (column) {
+      ["E", "F"].forEach(function (column) {
         if (sheet[column + row]) sheet[column + row].z = "0.0%";
       });
     XLSX.utils.book_append_sheet(workbook, sheet, "歷季趨勢比較");
     const chartSeries =
       trendMode === "AM"
-        ? [{ name: "AM Peak", column: "B", color: "087F75" }]
+        ? [{ name: "AM Peak", column: "C", color: "087F75" }]
         : trendMode === "PM"
-          ? [{ name: "PM Peak", column: "C", color: "D97706" }]
+          ? [{ name: "PM Peak", column: "D", color: "D97706" }]
           : [
-              { name: "AM Peak", column: "B", color: "087F75" },
-              { name: "PM Peak", column: "C", color: "D97706" },
+              { name: "AM Peak", column: "C", color: "087F75" },
+              { name: "PM Peak", column: "D", color: "D97706" },
             ];
     await downloadEditableTrendWorkbook(
       workbook,
@@ -9282,6 +11953,8 @@ function TrendView(props: {
         activeRangeStart +
         "_至_" +
         activeRangeEnd +
+        "_" +
+        (trendFlow === "outbound" ? "駛出總量" : "駛入總量") +
         "_歷季趨勢.xlsx",
     );
     props.notify("趨勢 Excel 已下載，折線圖可直接編輯。");
@@ -9327,6 +12000,44 @@ function TrendView(props: {
             })}
           </select>
         </label>
+        {surveyTypes.length > 1 && (
+          <label>
+            資料別
+            <select
+              value={activeSurveyType}
+              onChange={function (e) {
+                setSurveyTypeFilter(e.target.value);
+              }}
+            >
+              {surveyTypes.map(function (type) {
+                return (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+        )}
+        {trend.parallelStations && (
+          <label>
+            站號
+            <select
+              value={trend.station}
+              onChange={function (e) {
+                setStationFilter(e.target.value);
+              }}
+            >
+              {trend.availableStations.map(function (station) {
+                return (
+                  <option key={station} value={station}>
+                    {station}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+        )}
         <Segmented
           value={trendMode}
           options={[
@@ -9338,6 +12049,14 @@ function TrendView(props: {
             setTrendMode(value);
             if (value !== "ALL") props.setPeak(value);
           }}
+        />
+        <Segmented
+          value={trendFlow}
+          options={[
+            ["outbound", "駛出總量"],
+            ["inbound", "駛入總量"],
+          ]}
+          onChange={setTrendFlow}
         />
         <div className="quarter-range">
           <label>
@@ -9387,8 +12106,99 @@ function TrendView(props: {
               })}
             </select>
           </label>
-          <b>{chosen.length} 季</b>
+          <b>
+            {chosen.length} 季 · 有資料 {rows.length} 季
+          </b>
         </div>
+        {rows.length > 0 && (
+          <p
+            className={
+              flowGap ? "trend-station-note warn" : "trend-station-note"
+            }
+          >
+            {flowGap
+              ? `注意：這個路口的「駛出」與「駛入」總量不相等，最大差 ${Math.abs(flowGap).toLocaleString()} PCU/hr。` +
+                "兩者是同一批流向、只是分組方式不同，總量本來應該相等；不相等代表有流向沒有指定目的支線。" +
+                "請到「道路與流向管理」補齊，在補齊之前「駛入總量」會少掉這個量。"
+              : "「駛出」與「駛入」總量相同：每一筆流向都有指定目的支線，兩種視角可以互相核對。" +
+                "切換視角只會改變分組方式，不會改變路口總量。"}
+          </p>
+        )}
+        {/*
+          * 這個路口同時有「待設定」和真正的資料別時，趨勢線會被拆成兩條
+          * ——選平日只剩 1 季、選待設定才有 4 季。這不是趨勢頁的計算問題，
+          * 而是那幾季在匯入當下讀不出資料別（舊版），紀錄裡就存著待設定；
+          * 資料別不會自己重讀，所以要在這裡讓使用者直接補完。
+          */}
+        {pendingHere.length > 0 && realSurveyTypes.length > 0 && (
+          <p className="trend-station-note warn trend-pending-note">
+            <span>
+              這個路口有 <b>{pendingHere.length}</b> 季的資料別是「待設定」，
+              另有 {realSurveyTypes.join("、")} 的資料
+              ——「待設定」會被當成另一種資料別，所以趨勢線被拆成兩條
+              （選「{realSurveyTypes[0]}」只看得到一部分的季度）。
+              資料別是<b>匯入當下</b>判定並存進每一筆的，不會自己重讀，
+              請直接指定：
+            </span>
+            <span className="trend-pending-list">
+              尚未指定的是：
+              <b>
+                {pendingHere
+                  .map(function (record) {
+                    return record.quarter;
+                  })
+                  .join("、")}
+              </b>
+              （按下去之前會再列一次完整清單，含站號與路口名稱，讓您確認再決定）
+            </span>
+            <span className="trend-pending-warn">
+              ⚠ <b>這幾季如果不是同一種資料別，不要用批次。</b>
+              例如其中有幾季其實是假日調查，批次會把它們一起指定成同一種。
+              這種情況請到左側選單的
+              <b>「流量核對工作台」</b>
+              ，用上方的路口選擇器選到那一筆，再用「資料別（平日／假日）」下拉
+              <b>逐筆指定</b>
+              。判斷依據是原始調查檔本身（調查日期是星期幾、檔名或工作表有沒有寫）。
+            </span>
+            <span className="trend-pending-actions">
+              {["平日", "假日"].map(function (value) {
+                return (
+                  <button
+                    key={value}
+                    className="secondary"
+                    onClick={function () {
+                      props.assignPendingSurveyType(value, activeIntersection);
+                    }}
+                  >
+                    把這個路口的 {pendingHere.length} 季都指定為{value}
+                  </button>
+                );
+              })}
+              {props.pendingCount > pendingHere.length && (
+                <button
+                  className="ghost"
+                  onClick={function () {
+                    props.assignPendingSurveyType("平日");
+                  }}
+                >
+                  整個計畫的 {props.pendingCount} 筆都指定為平日
+                </button>
+              )}
+            </span>
+          </p>
+        )}
+        {trend.chainedStations && (
+          <p className="trend-station-note">
+            本路口的站號歷年有變動（{trend.stations.join(" → ")}
+            ），已依路口名稱串接為同一條趨勢線。
+          </p>
+        )}
+        {trend.parallelStations && (
+          <p className="trend-station-note">
+            同一季同時有多個站號（{trend.availableStations.join("、")}
+            ），趨勢僅呈現所選站號；要看另一個站請切換上方「站號」。
+          </p>
+        )}
       </section>
       <section className="trend-layout">
         <article className="panel trend-chart">
@@ -9501,7 +12311,16 @@ function TrendView(props: {
                               fill={item.color}
                             >
                               {trendMode === "ALL" ? item.peak + " " : ""}
-                              {recordTotal(
+                              {/*
+                                * 一定要用 totalOf，不能用 recordTotal。
+                                * 點的座標（y）是用 totalOf 算的，會跟著駛出／駛入
+                                * 視角變；recordTotal 永遠是駛出總量。兩者混用時，
+                                * 資料有缺口（有流向沒指定目的支線）的路口切到
+                                * 「駛入總量」，就會變成「點畫在駛入的高度、旁邊
+                                * 標的卻是駛出的數字」，而且這張圖會被下載成 PNG
+                                * 交出去。
+                                */}
+                              {totalOf(
                                 p.record,
                                 item.peak,
                               ).toLocaleString()}{" "}
@@ -9526,18 +12345,26 @@ function TrendView(props: {
               </svg>
             </div>
           ) : (
-            <Empty title="至少需要兩季資料" text="請擴大起始與結束季度範圍。" />
+            <Empty
+              title="至少需要兩季資料"
+              text={
+                chosen.length > 1
+                  ? `所選範圍有 ${chosen.length} 季，但這個路口在「${activeSurveyType || "此資料別"}」底下只有 ${rows.length} 季有資料。請改選其他資料別，或確認這些季度的路口名稱是否一致（名稱不同會被當成不同路口）。`
+                  : "請擴大起始與結束季度範圍。"
+              }
+            />
           )}
         </article>
         <article className="panel trend-summary">
           <h2>季度變化</h2>
           {rows.map(function (record, index) {
             const activePeak: PeakKey = trendMode === "ALL" ? "AM" : trendMode;
-            const value = recordTotal(record, activePeak);
-            const prior = index ? recordTotal(rows[index - 1], activePeak) : 0;
+            /* 同上：右側摘要也要跟著視角走，否則和左邊的折線圖互相矛盾。 */
+            const value = totalOf(record, activePeak);
+            const prior = index ? totalOf(rows[index - 1], activePeak) : 0;
             const pct = prior ? (value / prior - 1) * 100 : null;
-            const pmValue = recordTotal(record, "PM");
-            const pmPrior = index ? recordTotal(rows[index - 1], "PM") : 0;
+            const pmValue = totalOf(record, "PM");
+            const pmPrior = index ? totalOf(rows[index - 1], "PM") : 0;
             const pmPct = pmPrior ? (pmValue / pmPrior - 1) * 100 : null;
             return (
               <div key={record.id}>

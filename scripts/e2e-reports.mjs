@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as XLSX from "xlsx";
 import { serve } from "./serve.mjs";
+import { chromiumLaunchOptions } from "./chromium.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const seed = readFileSync(join(here, "seed-state.json"), "utf8");
@@ -17,10 +18,7 @@ const ok = (label, condition, detail = "") => {
 };
 
 const server = await serve(8113);
-const browser = await chromium.launch({
-  executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
-  args: ["--no-sandbox"],
-});
+const browser = await chromium.launch(chromiumLaunchOptions());
 const ctx = await browser.newContext({ viewport: { width: 1680, height: 1050 }, locale: "zh-TW", acceptDownloads: true });
 const page = await ctx.newPage();
 const errors = [];

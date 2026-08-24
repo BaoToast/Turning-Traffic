@@ -9,10 +9,12 @@ import {
   DEFAULT_PCE,
   inspectWorkbook,
   inspectWorkbookVariants,
+  isSameSurvey,
   normalizeIntersectionName,
   pceFactor,
   qualityIssues,
   referenceMovementForOd,
+  resolveSurveyType,
   rollingPeak,
   stationFromFilename,
 } from "../lib/traffic.ts";
@@ -59,12 +61,29 @@ test("derives compass bearing from the editable diagram angle", () => {
 
 test("keeps the confirmed T15-01 seven-arm movement classification", () => {
   const name = "中山北路－岡山路口（七岔路口）";
-  assert.equal(referenceMovementForOd(name, "A", "E"), "through");
-  assert.equal(referenceMovementForOd(name, "A", "B"), "left");
-  assert.equal(referenceMovementForOd(name, "A", "G"), "right");
-  assert.equal(referenceMovementForOd(name, "D", "E"), "left");
-  assert.equal(referenceMovementForOd(name, "D", "A"), "right");
-  assert.equal(referenceMovementForOd("其他路口", "A", "E"), null);
+  const arms = ["A", "B", "C", "D", "E", "F", "G"];
+  assert.equal(referenceMovementForOd(name, "A", "E", arms), "through");
+  assert.equal(referenceMovementForOd(name, "A", "B", arms), "left");
+  assert.equal(referenceMovementForOd(name, "A", "G", arms), "right");
+  assert.equal(referenceMovementForOd(name, "D", "E", arms), "left");
+  assert.equal(referenceMovementForOd(name, "D", "A", arms), "right");
+  assert.equal(referenceMovementForOd("其他路口", "A", "E", arms), null);
+});
+
+test("does not force the T15-01 table onto other intersections that share the road names", () => {
+  // 名稱同時含「中山北路」與「岡山路」但只有四叉，不能套七叉參考表。
+  const name = "中山北路／岡山路口";
+  assert.equal(referenceMovementForOd(name, "A", "B", ["A", "B", "C", "D"]), null);
+  // 支線數對但代碼不是 A~G，也不套用。
+  assert.equal(
+    referenceMovementForOd(name, "A", "B", ["A", "B", "C", "D", "E", "F", "H"]),
+    null,
+  );
+  // 刪掉一支之後剩六叉，同樣退回幾何推算。
+  assert.equal(
+    referenceMovementForOd(name, "A", "B", ["A", "B", "C", "D", "E", "F"]),
+    null,
+  );
 });
 
 test("reads side-by-side approach blocks from legacy Excel without mixing time columns", async () => {
@@ -145,6 +164,29 @@ test("selects a continuous four-interval peak and breaks ties early", () => {
   assert.equal(peak?.start, 420);
   assert.equal(peak?.end, 480);
   assert.equal(peak?.total, 200);
+});
+
+test("尖峰小時只接受能精確組成 60 分鐘的格距", () => {
+  const rows = [
+    { start: 420, label: "07:00", values: [10] },
+    { start: 465, label: "07:45", values: [20] },
+    { start: 510, label: "08:30", values: [30] },
+  ];
+  assert.equal(rollingPeak(rows, [360, 720], 45), null);
+  assert.equal(
+    rollingPeak([{ start: 420, label: "07:00", values: [100] }], [360, 720], 120),
+    null,
+  );
+  assert.ok(
+    rollingPeak(
+      [
+        { start: 420, label: "07:00", values: [10] },
+        { start: 450, label: "07:30", values: [20] },
+      ],
+      [360, 720],
+      30,
+    ),
+  );
 });
 
 test("demo data covers three through seven approaches and four quarters", () => {
@@ -276,4 +318,309 @@ test("splits weekday and holiday hourly workbooks into independent previews", as
   );
   assert.ok(previews.every(function (preview) { return preview.templateId === "hourly-weekday-holiday-turning-v1"; }));
   assert.ok(previews.every(function (preview) { return preview.am?.end - preview.am?.start === 60; }));
+});
+
+/*
+ * 重新匯入時的「待設定」接手規則。
+ *
+ * 使用者實際遇到的情形：原始檔的日期欄位寫著「115年05月04日(平日)」，
+ * 系統也讀得出來，但畫面上那一筆仍然是「待設定」——因為那一筆是更早以前
+ * 匯入的（當時沒讀到），而重新匯入時比對條件把資料別也算進去，於是新讀出
+ * 的「平日」被當成另一份調查，同一路口同一季就同時留著兩筆。
+ * 這一組測試把規則釘住。
+ */
+test("重新匯入：讀出資料別的新檔會接手同站號的「待設定」舊紀錄", () => {
+  const ctx = { projectId: "P1", quarter: "115Q2" };
+  const old = {
+    projectId: "P1",
+    quarter: "115Q2",
+    station: "T15-01",
+    surveyType: "待設定",
+  };
+  assert.equal(isSameSurvey(old, { station: "T15-01", surveyType: "平日" }, ctx), true);
+});
+
+test("重新匯入：已經知道是平日的紀錄，不會被一筆「待設定」覆蓋", () => {
+  const ctx = { projectId: "P1", quarter: "115Q2" };
+  const known = {
+    projectId: "P1",
+    quarter: "115Q2",
+    station: "T15-01",
+    surveyType: "平日",
+  };
+  assert.equal(isSameSurvey(known, { station: "T15-01", surveyType: "待設定" }, ctx), false);
+});
+
+test("重新匯入：平日與假日仍然是兩份不同的調查，不會互相覆蓋", () => {
+  const ctx = { projectId: "P1", quarter: "115Q2" };
+  const weekday = {
+    projectId: "P1",
+    quarter: "115Q2",
+    station: "T15-01",
+    surveyType: "平日",
+  };
+  assert.equal(isSameSurvey(weekday, { station: "T15-01", surveyType: "假日" }, ctx), false);
+  assert.equal(isSameSurvey(weekday, { station: "T15-01", surveyType: "平日" }, ctx), true);
+});
+
+test("重新匯入：不同計畫、不同季度、不同站號一律不算同一份", () => {
+  const ctx = { projectId: "P1", quarter: "115Q2" };
+  const base = {
+    projectId: "P1",
+    quarter: "115Q2",
+    station: "T15-01",
+    surveyType: "待設定",
+  };
+  const item = { station: "T15-01", surveyType: "平日" };
+  assert.equal(isSameSurvey({ ...base, projectId: "P2" }, item, ctx), false);
+  assert.equal(isSameSurvey({ ...base, quarter: "115Q1" }, item, ctx), false);
+  assert.equal(isSameSurvey({ ...base, station: "T15-02" }, item, ctx), false);
+});
+
+/*
+ * 資料別（平日／假日）要從哪裡讀。
+ *
+ * 使用者實際遇到的檔案：日期欄是「日期：115年04月15日」（**沒有括號**），
+ * 但交通量工作表就叫「平日」——資訊明明在檔案裡，舊版卻判成「待設定」，
+ * 因為工作表名稱以前只在「同時有平日與假日兩張」時才會被採用。
+ */
+test("資料別：日期括號優先", () => {
+  assert.equal(
+    resolveSurveyType({ dateText: "日期：115年05月04日(平日)", sheetNames: ["假日"] }),
+    "平日",
+  );
+  assert.equal(
+    resolveSurveyType({ dateText: "日期：115年05月04日（假日）" }),
+    "假日",
+  );
+});
+
+test("資料別：日期沒寫括號時，改用工作表名稱（只有一張平日或假日）", () => {
+  assert.equal(
+    resolveSurveyType({
+      dateText: "日期：115年04月15日",
+      sheetNames: ["平日"],
+    }),
+    "平日",
+  );
+  /* 工作表名稱帶全形空白或尾隨空白也要認得 */
+  assert.equal(
+    resolveSurveyType({ dateText: "日期：115年04月15日", sheetNames: ["假日 "] }),
+    "假日",
+  );
+});
+
+test("資料別：同時有平日與假日兩張時不猜，交給逐張匯入那條路徑", () => {
+  assert.equal(
+    resolveSurveyType({
+      dateText: "日期：115年04月15日",
+      sheetNames: ["平日", "假日"],
+    }),
+    "待設定",
+  );
+  /* 那條路徑會直接指定，指定的最優先 */
+  assert.equal(
+    resolveSurveyType({
+      explicit: "假日",
+      dateText: "日期：115年04月15日(平日)",
+      sheetNames: ["平日", "假日"],
+    }),
+    "假日",
+  );
+});
+
+test("資料別：三個地方都讀不到才是「待設定」", () => {
+  assert.equal(
+    resolveSurveyType({ dateText: "日期：115年04月15日", sheetNames: ["路口A", "路口B"] }),
+    "待設定",
+  );
+  assert.equal(resolveSurveyType({}), "待設定");
+});
+
+/*
+ * 站號沒有分隔符號時要怎麼切。
+ *
+ * 實際案例：檔案裡寫「站號：06525T2503」（沒有連字號）。
+ * 舊版用貪婪的兩組 (\d+)(\d+) 去切，第一組盡量吃，於是切成「T250-03」；
+ * 慣例是後兩碼為子編號，正確答案是 T25-03。
+ */
+test("站號：有分隔符號時照它切", () => {
+  assert.equal(stationFromFilename("06525T25-01嘉45縣167路口.xlsx"), "T25-01");
+  assert.equal(stationFromFilename("11017T15-99測試.xls"), "T15-99");
+  assert.equal(stationFromFilename("T15_04"), "T15-04");
+  assert.equal(stationFromFilename("T15.04"), "T15-04");
+});
+
+test("站號：沒有分隔符號時取後兩碼當子編號", () => {
+  assert.equal(stationFromFilename("06525T2503嘉45縣168路口.xlsx"), "T25-03");
+  assert.equal(stationFromFilename("站號：06525T2503"), "T25-03");
+  assert.equal(stationFromFilename("120507T501縣142彰鹿路.xls"), "T5-01");
+});
+
+test("站號：完全讀不到時給穩定的替代值，同一個名稱永遠得到同一個", () => {
+  const first = stationFromFilename("沒有站號的檔名.xlsx");
+  assert.match(first, /^S-\d+$/);
+  assert.equal(stationFromFilename("沒有站號的檔名.xlsx"), first);
+});
+
+/*
+ * ── 尖峰視窗的頭和尾都要落在時段內 ──
+ *
+ * 舊版只檢查起點（row.start < range[1]），視窗卻是 start 到 start+60，
+ * 於是上午尖峰 [05:00, 12:00) 可以挑到 11:45 起算的 11:45–12:45——
+ * 一個大半在下午的視窗被標成「上午尖峰」，而且和下午尖峰挑到的
+ * 12:00–13:00 重疊 45 分鐘，同一批車被算進兩個尖峰。
+ */
+function minuteRows(fromMinutes: number, toMinutes: number, heavy: [number, number]) {
+  const rows = [];
+  for (let m = fromMinutes; m < toMinutes; m += 15)
+    rows.push({
+      start: m,
+      label: "",
+      values: [m >= heavy[0] && m < heavy[1] ? 1000 : 10],
+      sourceRows: {},
+    });
+  return rows as never[];
+}
+
+test("上午尖峰不會挑到跨越中午的視窗，也不會和下午尖峰重疊", () => {
+  const rows = minuteRows(9 * 60, 13 * 60, [11 * 60 + 45, 12 * 60 + 45]);
+  const am = rollingPeak(rows, [5 * 60, 12 * 60], 15);
+  const pm = rollingPeak(rows, [12 * 60, 23 * 60], 15);
+  assert.ok(am, "上午應該還是挑得到視窗");
+  assert.ok(am!.end <= 12 * 60, `上午尖峰跨過中午：${am!.start}–${am!.end}`);
+  assert.ok(pm, "下午應該挑得到視窗");
+  assert.ok(pm!.start >= 12 * 60);
+  assert.ok(am!.end <= pm!.start, "上午與下午尖峰不可以重疊");
+});
+
+test("下午尖峰的視窗不會超過上界（23:00）", () => {
+  const rows = minuteRows(21 * 60, 24 * 60, [22 * 60 + 45, 24 * 60]);
+  const pm = rollingPeak(rows, [12 * 60, 23 * 60], 15);
+  assert.ok(pm, "應該還是挑得到視窗");
+  assert.ok(pm!.end <= 23 * 60, `視窗超出 23:00：${pm!.start}–${pm!.end}`);
+});
+
+/*
+ * ── 時間欄的容錯：全形數字與冒號旁空白 ──
+ * 時間欄認不出來就找不到資料起始列，整張工作表會讀成 0 筆，
+ * 而且整體不會報錯，只是那個路口的量憑空消失。
+ */
+function turningSheet(options: {
+  timeText: (row: number) => string;
+  vehicles?: string[];
+}) {
+  const vehicles = options.vehicles ?? ["機車", "小型車", "大型車", "特種車"];
+  const stride = vehicles.length * 3 + 2;
+  const rows: unknown[][] = Array.from({ length: 10 }, () =>
+    Array(stride * 4 + 4).fill(null),
+  );
+  const movements = ["左轉", "直進", "右轉"];
+  for (let approach = 0; approach < 4; approach++) {
+    const base = approach * stride;
+    rows[1][base] = "站號：11017T15-99";
+    rows[1][base + 4] = "日期：115.05.04 (平日)";
+    rows[2][base] = "站名：測試路/驗證路口";
+    rows[3][base] = `路口編號：路口${String.fromCharCode(65 + approach)}`;
+    rows[4][base] = "時間";
+    vehicles.forEach(function (vehicle, vehicleIndex) {
+      rows[4][base + 1 + vehicleIndex * 3] = vehicle;
+      movements.forEach(function (movement, movementIndex) {
+        rows[5][base + 1 + vehicleIndex * 3 + movementIndex] = movement;
+      });
+    });
+    for (let row = 0; row < 4; row++) {
+      rows[6 + row][base] = options.timeText(row);
+      for (let column = 1; column <= vehicles.length * 3; column++)
+        rows[6 + row][base + column] = 2;
+    }
+  }
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!merges"] = Array.from({ length: 4 }).flatMap(function (_, approach) {
+    return vehicles.map(function (__, vehicleIndex) {
+      return {
+        s: { r: 4, c: approach * stride + 1 + vehicleIndex * 3 },
+        e: { r: 4, c: approach * stride + 3 + vehicleIndex * 3 },
+      };
+    });
+  });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "平日");
+  return new File(
+    [XLSX.write(workbook, { type: "array", bookType: "xlsx" })],
+    "11017T15-99.xlsx",
+  );
+}
+
+const halfWidthTime = (row: number) =>
+  `07:${String(row * 15).padStart(2, "0")}~07:${String((row + 1) * 15).padStart(2, "0")}`;
+const toFullWidth = (text: string) =>
+  text
+    .replace(/[0-9]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) + 0xfee0))
+    .replace(/:/g, "：")
+    .replace(/~/g, "～");
+
+test("時間欄用全形數字或冒號旁有空白時，整張表仍讀得到（不會變成 0 筆）", async () => {
+  for (const [label, timeText] of [
+    ["半形", halfWidthTime],
+    ["全形數字與全形冒號", (row: number) => toFullWidth(halfWidthTime(row))],
+    ["冒號兩側有空白", (row: number) => halfWidthTime(row).replace(/:/g, " : ")],
+  ] as const) {
+    const preview = await inspectWorkbook(turningSheet({ timeText }), DEFAULT_PCE);
+    assert.equal(preview.intervals, 4, `${label}：整張表讀成 0 筆`);
+    assert.equal(preview.columns.length, 48, label);
+    assert.ok(preview.am, `${label}：找不到上午尖峰`);
+  }
+});
+
+/*
+ * ── 不在內建關鍵字裡的車種不可以被無聲略過 ──
+ * 舊版 vehicleFromHeader 認不得就回 null，呼叫端直接 continue，
+ * 「自行車」那幾欄的量會憑空消失，總量少掉而且沒有任何提示，
+ * 與「可讀取任意數量車種」的說明不符。
+ */
+test("新車種（自行車）會被收成自訂車種，不會被無聲丟掉", async () => {
+  const preview = await inspectWorkbook(
+    turningSheet({
+      timeText: halfWidthTime,
+      vehicles: ["機車", "小型車", "大型車", "特種車", "自行車"],
+    }),
+    DEFAULT_PCE,
+  );
+  assert.equal(preview.columns.length, 60, "4 個路口 × 5 車種 × 3 轉向");
+  const labels = [...new Set(preview.columns.map((column) => column.vehicleLabel))];
+  assert.ok(labels.includes("自行車"), labels.join("、"));
+  assert.ok(
+    preview.detectedVehicles.some((vehicle) => vehicle.label === "自行車"),
+    "匯入預覽要列出這個新車種，才不會是無聲新增",
+  );
+});
+
+test("六種以上車種也會全部保留並列入匯入預覽", async () => {
+  const vehicles = ["機車", "小型車", "大型車", "特種車", "自行車", "電動滑板車"];
+  const preview = await inspectWorkbook(
+    turningSheet({ timeText: halfWidthTime, vehicles }),
+    DEFAULT_PCE,
+  );
+  assert.equal(preview.columns.length, 4 * vehicles.length * 3);
+  const labels = [...new Set(preview.columns.map((column) => column.vehicleLabel))];
+  assert.ok(labels.includes("自行車"), labels.join("、"));
+  assert.ok(labels.includes("電動滑板車"), labels.join("、"));
+  assert.ok(
+    preview.detectedVehicles.some((vehicle) => vehicle.label === "電動滑板車"),
+    "第六種車種也必須出現在匯入預覽與後續參數設定",
+  );
+});
+
+test("合計、備註、時間這類欄名不會被誤收成車種", async () => {
+  const preview = await inspectWorkbook(
+    turningSheet({
+      timeText: halfWidthTime,
+      vehicles: ["機車", "小型車", "合計", "備註"],
+    }),
+    DEFAULT_PCE,
+  );
+  const labels = [...new Set(preview.columns.map((column) => column.vehicleLabel))];
+  assert.ok(!labels.includes("合計"), labels.join("、"));
+  assert.ok(!labels.includes("備註"), labels.join("、"));
 });

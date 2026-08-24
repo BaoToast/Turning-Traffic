@@ -989,10 +989,23 @@ button {
 .trend-controls {
   padding: 13px 16px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 16px;
+}
+/* 站號變動／並存的提示：整段自己佔一列，不要把上面的控制項擠掉。 */
+.trend-station-note {
+  flex: 1 0 100%;
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent, #0e7c75);
+  border-radius: 6px;
+  background: #f2f8f7;
+  color: #2c4a46;
+  font-size: 12px;
+  line-height: 1.7;
 }
 .quarter-checks {
   display: flex;
@@ -2055,6 +2068,11 @@ input:focus {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px;
+  /* .panel 本身沒有 padding，內距是各區塊自己給的。這一格原本完全沒給，
+     三張卡片就貼著面板邊框（實測左右各只剩 1px），而上面的標題內縮 21px、
+     下面的「已記住的版型」內縮 18px，中間這一排卻齊邊，看起來像沾到邊。
+     這裡對齊標題的 21px。 */
+  padding: 0 21px;
 }
 .format-template-grid article {
   padding: 14px 16px;
@@ -2386,7 +2404,8 @@ input:focus {
   white-space: nowrap;
 }
 .format-memory {
-  margin: 14px 18px 18px;
+  /* 與標題、範本卡片一致的 21px，避免同一個面板裡出現三種內縮。 */
+  margin: 14px 21px 18px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: #f8faf9;
@@ -2446,8 +2465,13 @@ input:focus {
 .geometry-tools {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
-  padding: 12px 0;
+  /*
+   * 左右內距要和同一張卡片裡的 .geometry-list（0 20px 20px）對齊。
+   * 原本是 12px 0，按鈕因此貼在卡片邊框上，比上面的支線列往左凸出 20px。
+   */
+  padding: 12px 20px 16px;
   color: #687b80;
   font-size: 9px;
 }
@@ -2524,6 +2548,9 @@ input:focus {
 .geometry-card-preview-canvas [data-card-id]:active {
   cursor: grabbing;
 }
+/* 這個 class 同時用在 .primary（深底白字）與 .secondary（白底深字）兩顆按鈕上，
+   所以絕對不能寫死 color——寫死 #fff 會讓 .secondary 那顆變成白字白底，
+   完全看不見（Word 版下載鈕實測 contrast 1.00:1）。顏色交給 .primary/.secondary。 */
 .help-download {
   display: inline-flex;
   align-items: center;
@@ -2531,10 +2558,10 @@ input:focus {
   min-height: 42px;
   padding: 0 18px;
   border-radius: 9px;
-  color: #fff;
   text-decoration: none;
   white-space: nowrap;
 }
+.help-download.primary { color: #fff; }
 .help-steps {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2605,7 +2632,12 @@ input:focus {
 .help-advanced table {
   width: 100%;
 }
-@media (max-width: 1280px) {
+/*
+ * 兩欄的道路與流向管理需要 720 + 360 + 16 = 1096px 的內容寬度；
+ * 加上側邊欄 248px 與內容左右各 34px，視窗要有 1412px 才夠。
+ * 原本斷點只設到 1280px，1281～1411px 之間整頁會橫向溢出（實測 1350px 溢出 28px）。
+ */
+@media (max-width: 1420px) {
   .geometry-layout {
     grid-template-columns: 1fr;
   }
@@ -2614,8 +2646,16 @@ input:focus {
   }
 }
 @media (max-width: 900px) {
+  /*
+   * 這一列本來是 28+190+100+120+30 加四個 8px 間隔＝500px，
+   * 再加上 .geometry-list 左右各 20px 內距就是 540px，
+   * 在 820px 視窗（內容區只有 504px）會凸出 4px。
+   */
+  .geometry-list {
+    padding: 0 12px 20px;
+  }
   .geometry-expanded > div {
-    grid-template-columns: 28px minmax(190px, 1fr) 100px 120px 30px !important;
+    grid-template-columns: 28px minmax(150px, 1fr) 92px 104px 30px !important;
   }
   .card-position-field {
     grid-column: 2 / 5;
@@ -2692,7 +2732,12 @@ input:focus {
   }
   .project-open {
     grid-template-columns: 72px 1fr 16px;
-    padding: 14px 12px;
+    /*
+     * 左右內距要維持 20px，和同一張卡片的標題（.panel-head 的 21px）對齊。
+     * 原本窄視窗降到 12px，計畫名稱因此比標題往左凸出 9px。
+     * 上下留白可以縮，左右不行。
+     */
+    padding: 14px 20px;
   }
   .project-delete {
     margin-right: 10px;
@@ -2712,6 +2757,11 @@ input:focus {
 .report-items-head h2{margin:4px 0 6px}
 .report-items-head p{margin:0;max-width:70ch;color:#5b6f77;font-size:13px;line-height:1.7}
 .report-items-actions{display:flex;gap:8px}
+/* 草稿面板的按鈕列刻意用自己的類別：與匯出項目那一排共用類別的話，
+   「全選」在同一頁會出現兩顆同名按鈕，自動化測試與輔助技術都分不出來。 */
+/* 報告文字草稿的整張卡片本來沒有寫內距，標題、說明與文字框全部貼著卡片邊框。 */
+.report-draft-panel{padding:20px;margin-bottom:18px}
+.report-draft-head-actions{display:flex;gap:8px;flex-wrap:wrap}
 .report-items-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin:16px 0}
 .report-items-grid label{display:flex;gap:10px;align-items:flex-start;padding:11px 13px;border:1px solid #d9e3e6;border-radius:10px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}
 .report-items-grid label:hover{border-color:#0e7c75}
@@ -2733,5 +2783,584 @@ input:focus {
 .report-template-row>span:last-child{display:flex;gap:6px;flex:none}
 .report-template-empty{margin:12px 0 0;font-size:12px;color:#6b7d84;line-height:1.6}
 .report-empty-hint{margin:8px 0 0;font-size:12px;color:#a9660f;line-height:1.6}
+
+/* 報告文字草稿：段落勾選的小方塊 ＋ 可直接編輯的全文欄位。 */
+.draft-section-chips{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 12px}
+.chip-check{display:inline-flex;gap:7px;align-items:center;padding:7px 11px;border:1px solid #d9e3e6;border-radius:999px;background:#fff;cursor:pointer;font-size:12.5px;color:#33505a;transition:border-color .15s,background .15s}
+.chip-check:hover{border-color:#0e7c75}
+.chip-check.selected{border-color:#0e7c75;background:#f0f8f7;color:#0b5f5a;font-weight:600}
+.chip-check input{width:15px;height:15px;flex:none;accent-color:#0e7c75}
+.report-draft-box{display:grid;gap:10px}
+.report-draft-box textarea{width:100%;min-height:260px;padding:13px 14px;border:1px solid #cfdcdf;border-radius:10px;background:#fbfdfd;font-size:13px;line-height:1.85;color:#173a43;resize:vertical;font-family:inherit}
+.report-draft-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.report-draft-note{font-size:11.5px;color:#6b7d84;line-height:1.6;flex:1;min-width:200px}
 .help-downloads{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .help-downloads .help-download{white-space:nowrap}
+
+/* 匯入辨識結果的兩個動作：取消預覽（放棄整批）與確認寫入。
+   之前只有「確認寫入」，要放棄整批只能一列一列按刪除。 */
+.preview-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+/* 讀取失敗時的搶救畫面。刻意做得很簡單：這個畫面出現時，主程式的任何
+   狀態都不能被信任，所以它不依賴任何既有的版面類別。 */
+.load-error{min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f7f8}
+.load-error-card{max-width:620px;background:#fff;border:1px solid #d9e3e6;border-left:4px solid #c0563f;border-radius:12px;padding:28px 30px;box-shadow:0 10px 30px rgba(23,53,62,.08)}
+.load-error-card h1{margin:0 0 14px;font-size:21px;color:#12333c}
+.load-error-card p{margin:0 0 12px;font-size:14px;line-height:1.85;color:#33505a}
+.load-error-reason{padding:10px 12px;border-radius:8px;background:#fdf3f1;color:#8d3f2c;font-size:13px;word-break:break-all}
+.load-error-actions{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 14px}
+.load-error-note{font-size:12.5px;color:#8d3f2c}
+
+/* ── 版面：不讓按鈕被壓成「一行一個字」 ──────────────────────────
+   下面這幾排都是 display:flex 而沒有 flex-wrap，視窗一窄就把按鈕壓到
+   只剩一個字寬，文字直向排列、甚至畫到面板外。實測 1280px（很常見的
+   筆電寬度）「＋ 新增支線」變成 52px 寬、105px 高的直條。
+   解法一律是：允許換行，並且不准按鈕被壓縮。 */
+.diagram-toolbar{flex-wrap:wrap}
+.head-buttons{flex-wrap:wrap}
+.head-buttons>button,
+.head-buttons .segmented,
+.diagram-toolbar>button,
+.diagram-toolbar .segmented{flex:none}
+.page-head{flex-wrap:wrap}
+/* 只要按鈕在 flex/grid 裡，就不要讓字被拆行 */
+button,.button,.help-download{white-space:nowrap}
+
+/* 資料維護／流量核對工作台的表單控制項沒有任何樣式，
+   直接貼在面板左下角。補上與其他面板一致的內距與外觀。 */
+.review-panel{padding:20px 21px}
+.review-panel select,
+.review-panel input{margin-top:7px;padding:9px 11px;border:1px solid #cfdcdf;border-radius:8px;font:inherit;background:#fff}
+.review-panel select{max-width:220px}
+.review-panel input{width:100%;max-width:420px}
+
+/* 車種組成分析：說明框的左右外距比面板內距還大，會頂出面板。 */
+.source-note{margin:16px 0 4px}
+
+/* 轉向進階分析與歷季趨勢：單欄化時忘了保留 minmax(0,…)，
+   內容的 min-content 會把整個格線撐開，整頁跟著左右捲動。 */
+@media(max-width:900px){.advanced-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:1100px){.trend-layout{grid-template-columns:minmax(0,1fr)}}
+
+/* ── 版面：把「兩個 media query 之間沒人管」的空窗補起來 ──────────
+   下面三個格線的內容各自在 1229 / 1221 / 1249px 就撐不下了，
+   但單欄化的規則都寫在 max-width:1100px，中間留下 100～150px 的空窗，
+   在那個寬度區間內容會擠出面板、整頁左右捲動。改成在真正撐不下的
+   寬度就單欄化。 */
+@media(max-width:1250px){
+  .import-period{grid-template-columns:minmax(0,1fr)}
+  .quality-layout{grid-template-columns:minmax(0,1fr)}
+  .diagram-layout{grid-template-columns:minmax(0,1fr)}
+  .diagram-layout aside{position:static}
+}
+
+/* ──────────────────────────────────────────────────────────────
+ * 卡片內的左緣對齊（v2.1.10）
+ *
+ * 問題：同一張卡片裡，標題（.eyebrow / h2）縮排 21px，但表格是滿版的，
+ * 第一欄只有儲存格自己的 12px，文字因此比標題往左凸出 9px；某些卡片
+ * 反過來，卡片自己有內距、標題又被 .panel > .panel-head 多加一次 21px，
+ * 變成標題比內容多縮 21px。兩種都讓人看到「文字貼著卡片邊」。
+ *
+ * 這裡把兩邊拉回同一條線，數值一律用 21px（等於 .panel > .panel-head 的
+ * 水平內距），改動只影響內距，不改任何寬度、格線或計算。
+ * ────────────────────────────────────────────────────────────── */
+
+/* 一、卡片本身已經有內距時，標題不要再縮一次。 */
+.action-panel > .panel-head,
+.ranking > .panel-head,
+.parameter-card > .panel-head,
+.trend-chart > .panel-head,
+.help-advanced > .panel-head,
+.help-glossary > .panel-head {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/*
+ * 二、滿版卡片裡的表格與說明段落：補到和標題同一條線。
+ *
+ * :not(...) 列的就是「卡片自己已經有內距」的那幾種（見上一組規則）；
+ * 那些卡片的內容本來就已經縮在內距裡，再補一次會變成縮兩層。
+ */
+.panel:not(.action-panel):not(.ranking):not(.parameter-card):not(.trend-chart):not(.help-advanced):not(.help-glossary)
+  .table-scroll
+  th:first-child,
+.panel:not(.action-panel):not(.ranking):not(.parameter-card):not(.trend-chart):not(.help-advanced):not(.help-glossary)
+  .table-scroll
+  td:first-child {
+  padding-left: 21px;
+}
+.panel:not(.action-panel):not(.ranking):not(.parameter-card):not(.trend-chart):not(.help-advanced):not(.help-glossary)
+  .table-scroll
+  th:last-child,
+.panel:not(.action-panel):not(.ranking):not(.parameter-card):not(.trend-chart):not(.help-advanced):not(.help-glossary)
+  .table-scroll
+  td:last-child {
+  padding-right: 21px;
+}
+
+/*
+ * 表格底下的說明小字（.inline-note）原本完全沒有樣式，整段貼著卡片左邊框，
+ * 這就是「轉向進階分析、報告文字草稿文字靠左沾黏」最明顯的一處。
+ */
+.inline-note,
+.panel > p {
+  margin: 0;
+  padding: 12px 21px 18px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.75;
+}
+.action-panel > .inline-note,
+.ranking > .inline-note,
+.parameter-card > .inline-note,
+.trend-chart > .inline-note,
+.help-advanced > .inline-note,
+.help-glossary > .inline-note,
+.action-panel > p,
+.ranking > p,
+.parameter-card > p,
+.trend-chart > p,
+.help-advanced > p,
+.help-glossary > p {
+  padding-left: 0;
+  padding-right: 0;
+}
+/* OD 矩陣的第一欄是 sticky 的，補內距時底色也要一起帶，才不會露出白邊。 */
+.od-table th:first-child,
+.od-table td:first-child {
+  padding-left: 21px;
+}
+
+/* ── 結論草稿產生器 ─────────────────────────────────────────── */
+.conclusion-panel,
+.conclusion-output {
+  padding: 20px;
+  margin-bottom: 18px;
+}
+.conclusion-head {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.conclusion-head h2 {
+  margin: 4px 0 6px;
+  font-size: 16px;
+}
+.conclusion-count {
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #eef6f4;
+  color: #0e7c75;
+  white-space: nowrap;
+}
+.conclusion-count.zero {
+  background: #fdf1ee;
+  color: #a4472f;
+}
+.conclusion-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin: 14px 0 4px;
+}
+.conclusion-field {
+  border: 1px solid #dde6e8;
+  border-radius: 10px;
+  padding: 12px 14px 14px;
+  margin: 0;
+  min-width: 0;
+}
+.conclusion-field-wide {
+  grid-column: 1 / -1;
+}
+.conclusion-field legend {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0e7c75;
+  padding: 0 6px;
+}
+.conclusion-radios,
+.conclusion-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+.conclusion-radios label,
+.conclusion-checks label,
+.conclusion-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+  min-width: 0;
+}
+.conclusion-list {
+  display: grid;
+  gap: 6px;
+  max-height: 190px;
+  overflow: auto;
+  padding: 2px 2px 2px 0;
+}
+.conclusion-list label {
+  word-break: break-word;
+}
+.conclusion-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.conclusion-inline select {
+  min-width: 96px;
+}
+.conclusion-hint {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: #6b7d84;
+}
+.conclusion-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+.conclusion-metrics label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid #d9e3e6;
+  border-radius: 9px;
+  background: #fff;
+  font-size: 12.5px;
+  line-height: 1.5;
+  cursor: pointer;
+  min-width: 0;
+}
+.conclusion-metrics label.selected {
+  border-color: #0e7c75;
+  background: #f0f8f7;
+}
+.conclusion-metrics input {
+  margin-top: 2px;
+  flex: none;
+  accent-color: #0e7c75;
+}
+.conclusion-templates {
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+.conclusion-templates strong {
+  display: block;
+  font-size: 12.5px;
+  margin-bottom: 8px;
+}
+.conclusion-actions-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.conclusion-actions-row input {
+  border: 1px solid #cfd9da;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  min-width: 180px;
+  flex: 1 1 180px;
+}
+.conclusion-template-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.conclusion-template {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #cfdcdf;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #fff;
+}
+.conclusion-template button {
+  border: 0;
+  background: transparent;
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  color: #1d2a34;
+}
+.conclusion-template button.danger {
+  padding: 7px 10px;
+  color: #a4472f;
+  border-left: 1px solid #e6eef0;
+}
+.conclusion-output textarea {
+  width: 100%;
+  min-height: 380px;
+  margin-top: 12px;
+  padding: 14px 15px;
+  border: 1px solid #cfdcdf;
+  border-radius: 10px;
+  background: #fbfdfd;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.9;
+  color: #173a43;
+  resize: vertical;
+}
+@media (max-width: 760px) {
+  .conclusion-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .conclusion-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+ * 勾選卡片的文字要能換行。
+ * display:flex 時文字是「匿名 flex 項目」，min-width 預設 auto，長標籤
+ * 不會換行而是把卡片撐寬（在交通服務水準那支實測單一標籤溢出 62px）。
+ * 改成兩欄 grid，第二欄 minmax(0,1fr) 才是真的允許縮小換行。
+ */
+.conclusion-metrics label,
+.report-items-grid label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  column-gap: 9px;
+  overflow-wrap: anywhere;
+}
+.conclusion-grid > *,
+.conclusion-metrics > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.conclusion-checks label,
+.conclusion-radios label,
+.conclusion-list label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * 條件卡片的版面（與交通服務水準同步的修正）。
+ * 1. 清單原本寫死 max-height，卡片被其他欄位撐高後下方留一大片空白 →
+ *    改成撐滿卡片剩餘高度，上限 420px。
+ * 2. 選項標籤原本是 flex-wrap，只拿到內容寬度，短標籤被擠成一行一兩個字 →
+ *    改成等寬格線，每格至少 104px。
+ * 3. 字級調大到 13px。
+ */
+.conclusion-field {
+  display: flex;
+  flex-direction: column;
+}
+.conclusion-radios,
+.conclusion-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 9px 12px;
+  margin-bottom: 9px;
+}
+.conclusion-radios label,
+.conclusion-checks label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+.conclusion-list {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  flex: 1 1 auto;
+  min-height: 150px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 2px 4px 2px 0;
+}
+.conclusion-list label {
+  font-size: 13px;
+  line-height: 1.55;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+.conclusion-list input {
+  margin-top: 2px;
+  flex: none;
+}
+.conclusion-field > .conclusion-hint {
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+/* 流量核對工作台：把「原始輛數」與「換算後 PCU」分成兩組，避免誤讀單位 */
+.audit-unit-note {
+  margin: 6px 0 0;
+  max-width: 78ch;
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+.audit-group-row th {
+  padding: 8px 12px 4px;
+  background: #eef4f2;
+  color: #4a6068;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-align: center;
+  border-bottom: 1px solid #dfe8ea;
+}
+.audit-group-row th:first-child {
+  background: transparent;
+  border-bottom: 0;
+}
+.audit-group-row th:nth-child(2) {
+  border-right: 1px solid #dfe8ea;
+}
+
+/* 流量核對工作台：視角切換與駛出／駛入差額提示 */
+.audit-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.audit-flow-gap {
+  margin: 0;
+  padding: 10px 21px 14px;
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+.audit-flow-gap.warn {
+  color: #8d3f2c;
+  background: #fdf3f1;
+  border-left: 3px solid #c0563f;
+  border-radius: 0 8px 8px 0;
+  margin: 0 21px 12px;
+  padding: 10px 13px;
+}
+
+/* 歷季趨勢：駛出／駛入總量不一致時的提示 */
+.trend-station-note.warn {
+  border-left-color: #c0563f;
+  background: #fdf3f1;
+  color: #8d3f2c;
+}
+
+/* 條件卡片裡的小標題：把「時段」與「資料別」分開，兩者不是同一件事 */
+.conclusion-sublabel {
+  display: block;
+  margin: 2px 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #6b7d84;
+  letter-spacing: 0.03em;
+}
+.conclusion-sublabel + .conclusion-checks {
+  margin-bottom: 12px;
+}
+
+/* 流量核對工作台：這一頁自己的路口／資料別選擇器 */
+.audit-picker {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 21px;
+  margin-bottom: 14px;
+}
+.audit-picker label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.audit-picker select {
+  min-width: 200px;
+  max-width: 100%;
+}
+.audit-picker > span {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/*
+ * 結論草稿產生器：「各支線各車種」的呈現方式（分行車方向／雙向合計）。
+ * 只有勾了那個指標才會出現，所以用一條淡邊界把它和上面的指標清單分開，
+ * 讓使用者看得出它是那個指標的子選項，不是第七類新條件。
+ */
+.conclusion-submode {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line, #d8dee9);
+}
+.conclusion-submode .conclusion-hint {
+  margin-top: 8px;
+}
+
+/*
+ * 「待設定」的批次補完入口。
+ * 出現在「流量核對工作台」的資料別區塊，以及「歷季趨勢比較」上方——
+ * 後者是使用者真的會被卡住的地方（趨勢線被拆成兩條）。
+ */
+.review-batch {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line, #dbe3e4);
+  display: grid;
+  gap: 8px;
+}
+.review-batch small {
+  line-height: 1.7;
+}
+.trend-pending-note {
+  display: grid;
+  gap: 10px;
+}
+.trend-pending-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.trend-pending-actions button {
+  font-size: 13px;
+}
+.trend-pending-list {
+  font-size: 12.5px;
+  opacity: 0.85;
+  line-height: 1.7;
+}
+.trend-pending-warn {
+  font-size: 12.5px;
+  line-height: 1.8;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(217, 119, 6, 0.09);
+}
+.compare-note {
+  font-size: 12px;
+  line-height: 1.7;
+  opacity: 0.8;
+  margin: 6px 0 10px;
+}

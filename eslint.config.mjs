@@ -15,6 +15,7 @@ const eslintConfig = defineConfig([
     "build/**",
     "assets/**",
     "github-pages-dist/**",
+    "已建置網站/**",
     "next-env.d.ts",
   ]),
   eslint.configs.recommended,
@@ -39,6 +40,13 @@ const eslintConfig = defineConfig([
     },
     rules: {
       "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
+    files: ["lib/conclusion.ts", "scripts/manual/build-pdf.mjs"],
+    rules: {
+      // 這兩個檔案刻意以全形空白排版中文報告內容。
+      "no-irregular-whitespace": "off",
     },
   },
 ]);
