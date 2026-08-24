@@ -3364,3 +3364,19 @@ button,.button,.help-download{white-space:nowrap}
   opacity: 0.8;
   margin: 6px 0 10px;
 }
+
+/*
+ * 本筆成果鎖定狀態卡。
+ * 「鎖定有沒有作用」是使用者實際問過的問題，所以這一塊要一眼看得出來：
+ * 鎖著是綠底鎖頭、沒鎖是灰底並明講「現在改東西不會有確認視窗」。
+ */
+.review-panel.lock-state{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;
+  border-left:4px solid #2f8f6b;background:#f2fbf7}
+.review-panel.lock-state.unlocked{border-left-color:#c2ccd0;background:#f7f9fa}
+.review-panel.lock-state p{margin:6px 0 0;line-height:1.7}
+.review-panel.lock-state .status-dot{white-space:nowrap;padding:6px 12px;border-radius:999px;
+  background:#e6ecee;color:#4a5a60;font-weight:600}
+.review-panel.lock-state .status-dot.locked{background:#2f8f6b;color:#fff}
+/* 鎖定期間審核欄位是停用的，要讓它看起來就是不能改，而不是壞掉。 */
+.review-panel select:disabled,
+.review-panel input:disabled{background:#eef2f3;color:#7b8a90;cursor:not-allowed}

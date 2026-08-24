@@ -379,8 +379,13 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.21";
+export const VERSION = "v2.1.22";
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.22",
+    date: "2026-08-24",
+    note: "修正使用者回報的兩項，另外查出並修掉一個會讓資料整個不見的嚴重問題。(1) **全新的瀏覽器從頭到尾不會存檔**（本輪查出，使用者沒回報但影響最大）：載入時若這台電腦還沒有資料，程式直接跳出而沒有解鎖存檔開關，於是後面每一次存檔都被擋住。症狀是建立計畫、匯入一整季、核對、鎖定，畫面上一切正常，只要重新整理或關掉分頁就全部消失，而且沒有任何訊息；在另一台空白電腦還原備份也一樣，還原完看起來成功、重開就沒了。已改為「沒有資料可讀」也要解鎖存檔（只有「讀不出來」才維持不寫入，那是為了保住原始資料）。(2) **可以只備份一個計畫**：舊版「完整 ZIP」與「JSON 純資料」其實是同一份東西——整台電腦的所有計畫，只差在壓不壓縮，畫面上卻沒有寫。使用者在 A 電腦匯出 A 計畫帶到 B 電腦，結果 B 電腦冒出 A 電腦裡的每一個計畫（包含別的委託案），而 B 電腦原有的計畫被整批覆蓋。現在分成「只備份目前這個計畫」與「備份全部計畫」兩組，檔名帶計畫編號與名稱；單一計畫的備份匯入時是**併入**（同一個計畫被取代，其他計畫不動），全部計畫的備份匯入時才是完整取代，動手前都會把哪一種寫清楚讓您確認。成果審核狀態、鎖定狀態與還原點都會跟著備份走。(3) **成果審核狀態現在真的管得到鎖定**：舊版不論選「待核對」「已核對」「已確認」還是「需修正」都鎖得起來，那個欄位等於只是備註。現在「需修正」會擋下鎖定並列出是哪幾個路口，「待核對」鎖定前會再問一次，鎖定之後審核狀態就改不動（要改先解除鎖定）；核對工作台另外新增一張「本筆成果鎖定狀態」卡，寫出何時鎖的、鎖定當時的版本、鎖定後內容有沒有被動過，以及鎖定期間哪些操作會先跳出確認。(4) **下載的檔名不再變成 download**：產生下載用的連結沒有掛進頁面，部分瀏覽器會忽略指定的檔名。(5) xlsx 上游安全警示：npm 上沒有修好的版本可以升，改在自己的邊界處理——解析時關掉用不到的公式、內嵌 HTML 與 VBA，並在解析前後比對瀏覽器內建物件；一旦真的被動到就中止這次匯入並指出是哪一個檔案，而不是只在說明裡寫一句「請匯入可信來源的檔案」。新增兩支端對端測試（備份與匯入、審核狀態與鎖定）與三項單元測試。",
+  },
   {
     version: "v2.1.21",
     date: "2026-08-24",
@@ -1139,6 +1144,96 @@ function movementFromHeader(label: string): MovementKey | null {
   return null;
 }
 
+/**
+ * 檔案裡來的字串要當成物件的鍵時，先擋掉會污染原型的那幾個名字。
+ *
+ * 為什麼需要：工作表名稱、支線代碼這些都直接來自使用者上傳的檔案，而程式
+ * 有好幾處是 `object[名稱] = 值`。一個工作表如果真的叫 `__proto__`，
+ * 這一行就會改寫到 Object.prototype，之後全站每一個物件都會多出那個屬性
+ * ——症狀千奇百怪而且極難追。
+ *
+ * 這也是對 xlsx（SheetJS 0.18.5）已知原型污染警示的一層防禦：
+ * npm 上沒有修好的版本可用（修正版只在 SheetJS 自己的 CDN 上），
+ * 所以在**我們自己的邊界**擋一次，不完全依賴上游。
+ */
+export function safeObjectKey(key: string): string {
+  return key === "__proto__" || key === "constructor" || key === "prototype"
+    ? "_" + key + "_"
+    : key;
+}
+
+/*
+ * ────────────────────────────────────────────────────────────────
+ *  對 xlsx（SheetJS 0.18.5）上游安全警示的實際處置
+ * ────────────────────────────────────────────────────────────────
+ *
+ * 狀況：npm 上的 xlsx 停在 0.18.5，那一版有一則原型污染的警示
+ * （prototype pollution），而**修正版只發在 SheetJS 自己的 CDN**，
+ * npm 沒有可以直接升上去的版本（`npm audit` 也回報 fixAvailable: false）。
+ *
+ * 「請只匯入可信來源的檔案」本身沒有錯，但那是把責任推回使用者，
+ * 而且這支程式的使用情境正好是「收別人給的調查檔」。所以在我們自己的
+ * 邊界做兩件做得到的事：
+ *
+ *  1. 解析時關掉用不到的解析路徑。這支程式只讀儲存格的值，公式、
+ *     內嵌 HTML 與 VBA 巨集一個都不需要，關掉就少一片攻擊面。
+ *  2. 解析前後各拍一次 Object.prototype 的自有屬性清單。攻擊要生效
+ *     一定得先污染成功，污染成功就一定看得到差異：把多出來的屬性
+ *     刪掉、中止這次匯入，並明講是哪一個檔案、多了什麼。
+ *     （安靜地清掉更危險——使用者會以為那個檔案沒問題。）
+ *
+ * 這不能取代升級，但它把「無聲被污染」變成「當場中止並告知」。
+ */
+export const SAFE_XLSX_READ_OPTIONS = {
+  type: "array",
+  cellDates: true,
+  cellFormula: false,
+  cellHTML: false,
+  bookVBA: false,
+} as const;
+
+/** 解析前先記下 Object.prototype 目前有哪些自有屬性。 */
+export function prototypeFingerprint(): string[] {
+  return Object.getOwnPropertyNames(Object.prototype);
+}
+
+/**
+ * 解析後比對；多出來的屬性代表這個檔案動到了原型。
+ * 回傳多出來的屬性名稱（已經刪掉），沒有就是空陣列。
+ */
+export function detectPrototypePollution(before: string[]): string[] {
+  const known = new Set(before);
+  const added = Object.getOwnPropertyNames(Object.prototype).filter(
+    function (name) {
+      return !known.has(name);
+    },
+  );
+  added.forEach(function (name) {
+    try {
+      delete (Object.prototype as unknown as Record<string, unknown>)[name];
+    } catch {
+      /* 刪不掉也要繼續往下報告，不能因此吞掉警告 */
+    }
+  });
+  return added;
+}
+
+/** 解析後立刻呼叫；被污染就丟例外中止匯入。 */
+export function assertNoPrototypePollution(
+  before: string[],
+  fileLabel: string,
+): void {
+  const added = detectPrototypePollution(before);
+  if (!added.length) return;
+  throw new Error(
+    "「" +
+      fileLabel +
+      "」在解析過程中試圖修改瀏覽器的內建物件（" +
+      added.join("、") +
+      "），本次匯入已中止，系統資料沒有變動。請確認這個檔案的來源。",
+  );
+}
+
 function customVehicleId(label: string) {
   return (
     "custom:" +
@@ -1393,7 +1488,9 @@ export async function inspectWorkbook(
   },
 ): Promise<ImportPreview> {
   const array = await file.arrayBuffer();
-  const workbook = XLSX.read(array, { type: "array", cellDates: true });
+  const fingerprint = prototypeFingerprint();
+  const workbook = XLSX.read(array, SAFE_XLSX_READ_OPTIONS);
+  assertNoPrototypePollution(fingerprint, options?.fileLabel || file.name);
   const detectedVehicles = detectedVehicleHeaders(workbook);
   const buckets = {
     traffic: [] as string[],
@@ -1596,7 +1693,7 @@ export async function inspectWorkbook(
           values: [],
           sourceRows: {},
         };
-        interval.sourceRows![sheetName] = row + 1;
+        interval.sourceRows![safeObjectKey(sheetName)] = row + 1;
         blockColumns.forEach(function (column) {
           const value =
             sheet[XLSX.utils.encode_cell({ r: row, c: column.sourceColumn })]
@@ -1811,7 +1908,9 @@ export async function inspectWorkbookVariants(
   pce: PceMatrix = DEFAULT_PCE,
 ): Promise<ImportPreview[]> {
   const array = await file.arrayBuffer();
-  const workbook = XLSX.read(array, { type: "array", cellDates: true });
+  const fingerprint = prototypeFingerprint();
+  const workbook = XLSX.read(array, SAFE_XLSX_READ_OPTIONS);
+  assertNoPrototypePollution(fingerprint, file.name);
   const daySheets = workbook.SheetNames.filter(function (sheet) {
     return /^(平日|假日)\s*$/.test(sheet.normalize("NFKC"));
   });

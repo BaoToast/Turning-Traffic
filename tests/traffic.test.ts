@@ -15,7 +15,12 @@ import {
   qualityIssues,
   referenceMovementForOd,
   resolveSurveyType,
+  assertNoPrototypePollution,
+  detectPrototypePollution,
+  prototypeFingerprint,
   rollingPeak,
+  SAFE_XLSX_READ_OPTIONS,
+  safeObjectKey,
   stationFromFilename,
 } from "../lib/traffic.ts";
 
@@ -616,4 +621,97 @@ test("組不成一小時的格距（45、120 分鐘）回報資料不足，不�
       `${gap} 分鐘一格不能算成尖峰小時，否則會把 ${gap} 分鐘的量標成 PCU/hr`,
     );
   }
+});
+
+/*
+ * ── 檔案裡來的字串不可以污染 Object.prototype ──
+ *
+ * 工作表名稱直接來自使用者上傳的檔案，而程式有好幾處是
+ * `object[名稱] = 值`。一個工作表如果真的叫 `__proto__`，那一行就會改寫到
+ * Object.prototype，之後全站每一個物件都會多出那個屬性。
+ * 這同時也是對 xlsx（SheetJS 0.18.5）已知原型污染警示的一層自我防禦。
+ */
+test("safeObjectKey 擋掉 __proto__、constructor、prototype", () => {
+  assert.equal(safeObjectKey("平日"), "平日");
+  assert.equal(safeObjectKey("路口A"), "路口A");
+  assert.notEqual(safeObjectKey("__proto__"), "__proto__");
+  assert.notEqual(safeObjectKey("constructor"), "constructor");
+  assert.notEqual(safeObjectKey("prototype"), "prototype");
+});
+
+test("工作表叫 __proto__ 的檔案不會污染 Object.prototype", async () => {
+  const before = Object.keys(Object.prototype).length;
+  const rows: unknown[][] = Array.from({ length: 10 }, () => Array(20).fill(null));
+  rows[1][0] = "站號：11017T15-99";
+  rows[1][4] = "日期：115.05.04 (平日)";
+  rows[2][0] = "站名：測試路/驗證路口";
+  rows[3][0] = "路口編號：路口A";
+  rows[4][0] = "時間";
+  ["機車", "小型車", "大型車", "特種車"].forEach(function (vehicle, index) {
+    rows[4][1 + index * 3] = vehicle;
+    ["左轉", "直進", "右轉"].forEach(function (movement, offset) {
+      rows[5][1 + index * 3 + offset] = movement;
+    });
+  });
+  for (let row = 0; row < 4; row += 1) {
+    rows[6 + row][0] = `07:${String(row * 15).padStart(2, "0")}~07:${String((row + 1) * 15).padStart(2, "0")}`;
+    for (let column = 1; column <= 12; column += 1) rows[6 + row][column] = 1;
+  }
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!merges"] = ["機車", "小型車", "大型車", "特種車"].map(function (_, index) {
+    return { s: { r: 4, c: 1 + index * 3 }, e: { r: 4, c: 3 + index * 3 } };
+  });
+  const workbook = XLSX.utils.book_new();
+  /* 工作表就叫 __proto__ */
+  XLSX.utils.book_append_sheet(workbook, sheet, "__proto__");
+  await inspectWorkbook(
+    new File([XLSX.write(workbook, { type: "array", bookType: "xlsx" })], "T15-99.xlsx"),
+    DEFAULT_PCE,
+  );
+  assert.equal(
+    Object.keys(Object.prototype).length,
+    before,
+    "Object.prototype 被加上了新屬性——原型污染",
+  );
+  assert.equal(({} as Record<string, unknown>).polluted, undefined);
+});
+
+/*
+ * ── xlsx 上游安全警示的防禦措施 ──
+ * npm 上的 xlsx 停在 0.18.5，沒有修好的版本可以升。這三項測試釘住
+ * 我們自己這一層做了什麼：關掉用不到的解析路徑、偵測到污染就中止匯入。
+ */
+test("解析選項關掉了公式、內嵌 HTML 與 VBA", () => {
+  assert.equal(SAFE_XLSX_READ_OPTIONS.cellFormula, false);
+  assert.equal(SAFE_XLSX_READ_OPTIONS.cellHTML, false);
+  assert.equal(SAFE_XLSX_READ_OPTIONS.bookVBA, false);
+  /* 儲存格日期還是要留著，不然時間欄會整批讀成序號 */
+  assert.equal(SAFE_XLSX_READ_OPTIONS.cellDates, true);
+});
+
+test("原型被污染時會被抓出來、清乾淨並中止", () => {
+  const before = prototypeFingerprint();
+  Object.defineProperty(Object.prototype, "__e2eInjected", {
+    value: 1,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  assert.throws(
+    () => assertNoPrototypePollution(before, "惡意檔案.xlsx"),
+    /惡意檔案\.xlsx/,
+    "被污染時必須中止匯入並指出是哪一個檔案",
+  );
+  assert.equal(
+    (Object.prototype as unknown as Record<string, unknown>).__e2eInjected,
+    undefined,
+    "偵測到之後要把多出來的屬性刪掉",
+  );
+  assert.deepEqual(prototypeFingerprint(), before);
+});
+
+test("沒有被污染時什麼都不做", () => {
+  const before = prototypeFingerprint();
+  assert.deepEqual(detectPrototypePollution(before), []);
+  assert.doesNotThrow(() => assertNoPrototypePollution(before, "正常檔案.xlsx"));
 });

@@ -288,9 +288,19 @@ function downloadBlob(blob: Blob, filename: string) {
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = filename;
+  /*
+   * 連結一定要先掛進頁面再按。
+   * 沒掛進頁面的 <a> 在部分瀏覽器（含 Chromium 的部分版本與無頭模式）
+   * 會忽略 download 屬性，檔案就存成沒有副檔名的 "download"——
+   * 使用者一次匯出三個計畫的備份，收到三個都叫 download 的檔案，
+   * 分不出哪個是哪個。實測 Chromium 無頭模式即為此症狀。
+   */
+  link.style.display = "none";
+  document.body.appendChild(link);
   link.click();
   setTimeout(function () {
     URL.revokeObjectURL(link.href);
+    link.remove();
   }, 1500);
 }
 
@@ -2555,6 +2565,9 @@ function AuditWorkbench(props: {
     return (
       <Empty title="尚無可核對資料" text="請先選擇有匯入資料的計畫與季度。" />
     );
+  /** 目前這一筆的鎖定狀況，下面的審核欄位與鎖定狀態卡都要用。 */
+  const recordLock = record.resultLock;
+  const recordConflict = lockConflict(record);
   const approachById = new Map(
     record.approaches.map(function (approach) {
       return [approach.id, approach] as const;
@@ -2687,10 +2700,22 @@ function AuditWorkbench(props: {
       <section className="panel review-panel">
         <div>
           <b>成果審核狀態</b>
-          <p>審核狀態不會改變計算；確認完成後可再鎖定季度。</p>
+          {/*
+            這一段要說清楚這個欄位在做什麼，否則使用者看到「不論選哪一個都
+            鎖得起來」，只會覺得它沒有用途。它管三件事：
+            「需修正」擋住鎖定、「待核對」鎖定前會再問一次、鎖定之後就改不動。
+          */}
+          <p>
+            審核狀態不會改變任何計算，但它決定這一季能不能鎖定：
+            <b>需修正</b>會擋下鎖定，<b>待核對</b>鎖定前會再問一次，
+            <b>已核對／已確認</b>可直接鎖定。
+            {recordLock ? "本筆已鎖定，要改審核狀態請先解除鎖定。" : ""}
+          </p>
         </div>
         <select
           value={record.review?.status || "待核對"}
+          disabled={Boolean(recordLock)}
+          title={recordLock ? "本筆成果已鎖定，請先解除鎖定" : ""}
           onChange={function (event) {
             props.setReview(
               event.target.value as "待核對" | "已核對" | "已確認" | "需修正",
@@ -2706,6 +2731,7 @@ function AuditWorkbench(props: {
         <input
           value={record.review?.note || ""}
           placeholder="審核備註"
+          disabled={Boolean(recordLock)}
           onChange={function (event) {
             props.setReview(
               record.review?.status || "待核對",
@@ -2713,6 +2739,36 @@ function AuditWorkbench(props: {
             );
           }}
         />
+      </section>
+      {/*
+        鎖定到底有沒有作用，要看得見才算數。
+        舊版只有頂端一行「本季已鎖定 N／M 個路口」，使用者無從判斷
+        目前這一筆是不是鎖著的、什麼時候鎖的、鎖了以後資料有沒有被動過。
+      */}
+      <section className={"panel review-panel lock-state" + (recordLock ? "" : " unlocked")}>
+        <div>
+          <b>本筆成果鎖定狀態</b>
+          {recordLock ? (
+            <p>
+              已於 {new Date(recordLock.lockedAt).toLocaleString("zh-TW")} 鎖定
+              （鎖定當時版本 {recordLock.version}）。
+              {recordConflict
+                ? "　⚠ " + recordConflict + "。"
+                : "　鎖定後內容未被更動。"}
+              {" "}
+              鎖定期間修改名稱、角度、流向、批次指定資料別、重新匯入或刪除季度，
+              系統都會先跳出確認並要求解除鎖定才會動手。
+            </p>
+          ) : (
+            <p>
+              尚未鎖定。這一筆目前可以被改名、調整角度與流向，或被重新匯入覆蓋，
+              而且不會有任何確認視窗。
+            </p>
+          )}
+        </div>
+        <span className={recordLock ? "status-dot locked" : "status-dot"}>
+          {recordLock ? "🔒 已鎖定" : "未鎖定"}
+        </span>
       </section>
       {/*
         資料別（平日／假日）。
@@ -3264,7 +3320,24 @@ export default function TrafficApp() {
     const saved =
       localStorage.getItem("turning-traffic-state-v2") ||
       localStorage.getItem("turning-traffic-state-v1");
-    if (!saved) return;
+    /*
+     * 這台電腦還沒有任何資料 —— 一樣要解鎖存檔。
+     *
+     * 舊寫法是直接 return，`loaded` 永遠留在 false，而下面那個存檔 effect
+     * 第一行就是 `if (!loaded) return;`。結果是：**全新的瀏覽器從頭到尾
+     * 不會存下任何東西**。使用者建立計畫、匯入一整季的調查檔、核對、鎖定，
+     * 畫面上一切正常，只要重新整理或關掉分頁，全部消失，而且沒有任何訊息。
+     * 在另一台空白電腦還原備份也一樣——還原完看起來成功了，重開就沒了。
+     * 實測：全新瀏覽器建立計畫後 localStorage 完全沒有寫入，重新整理後
+     * 計畫不見。
+     *
+     * 只有「讀取失敗」才可以不解鎖（那時不寫入是為了保住原始資料）。
+     * 「沒有資料可讀」跟「讀不出來」是兩回事。
+     */
+    if (!saved) {
+      setLoaded(true);
+      return;
+    }
     try {
       const data = JSON.parse(saved);
       const oldDemo =
@@ -4290,6 +4363,50 @@ export default function TrafficApp() {
 
   function lockCurrentQuarter() {
     if (!current.length) return notify("目前季度沒有可鎖定的成果。");
+    /*
+     * ── 審核狀態要真的管到鎖定 ──
+     *
+     * 使用者問得很直接：不論審核狀態是「待核對」「已核對」「已確認」還是
+     * 「需修正」，右上角的「鎖定成果」都按得下去，那這個欄位到底在幹嘛？
+     * 舊版的答案是「什麼都沒幹」——它只是一個備註欄，鎖定完全不看它。
+     *
+     * 現在把兩者接起來：
+     *   ・有任何一筆標成「需修正」→ 直接擋下來。那是使用者自己標的
+     *     「這筆有問題」，鎖定的意思卻是「這批成果定案了」，兩件事互相矛盾。
+     *   ・還有「待核對」→ 問一次，並把是哪幾個路口列出來。
+     *   ・全部「已核對」或「已確認」→ 直接鎖。
+     * 鎖定之後審核狀態就不能再改（見核對工作台），要改得先解除鎖定。
+     */
+    const labelOf = function (record: TrafficRecord) {
+      return record.station + " " + record.name;
+    };
+    const needsFix = current.filter(function (record) {
+      return record.review?.status === "需修正";
+    });
+    if (needsFix.length)
+      return notify(
+        "有 " +
+          needsFix.length +
+          " 筆的成果審核狀態是「需修正」，不能鎖定：" +
+          needsFix.map(labelOf).join("、") +
+          "。請先處理並改成「已核對」或「已確認」。",
+      );
+    const unchecked = current.filter(function (record) {
+      return (record.review?.status || "待核對") === "待核對";
+    });
+    if (
+      unchecked.length &&
+      !confirm(
+        "有 " +
+          unchecked.length +
+          "／" +
+          current.length +
+          " 筆還是「待核對」，尚未有人核對過：\n" +
+          unchecked.map(labelOf).join("\n") +
+          "\n\n鎖定的意思是這一季的成果定案，之後要改名稱、角度、流向或重新匯入都會先跳出確認。\n仍要現在鎖定嗎？",
+      )
+    )
+      return;
     const now = new Date().toISOString();
     setRecords(function (all) {
       return all.map(function (record) {
@@ -6129,14 +6246,60 @@ export default function TrafficApp() {
     }
   }
 
-  const backupPayload = function () {
+  /**
+   * 產生備份內容。
+   *
+   * `scopeProjectId` 給值就是「只備份這一個計畫」，不給就是「全部計畫」。
+   *
+   * 為什麼要分兩種：使用者在 A 電腦做完 A 計畫、按「下載 JSON」帶到 B 電腦，
+   * 結果 B 電腦上出現的是 A 電腦裡的**每一個**計畫——包含別的委託案。
+   * 舊版兩顆按鈕（完整 ZIP、JSON 純資料）內容其實一模一樣，都是整台電腦，
+   * 只是壓不壓縮的差別，畫面上卻沒有講。
+   *
+   * 單一計畫的備份會帶 `scope: "project"`，還原時據此走「併入」而不是
+   * 「整台取代」——否則把 A 計畫搬到 B 電腦就會清掉 B 電腦既有的計畫。
+   */
+  const backupPayload = function (scopeProjectId?: string) {
+    const scoped = Boolean(scopeProjectId);
+    const scopedProjects = scoped
+      ? projects.filter(function (project) {
+          return project.id === scopeProjectId;
+        })
+      : projects;
+    const scopedIds = new Set(
+      scopedProjects.map(function (project) {
+        return project.id;
+      }),
+    );
+    const scopedRecords = scoped
+      ? records.filter(function (record) {
+          return scopedIds.has(record.projectId);
+        })
+      : records;
+    const scopedRecordIds = new Set(
+      scopedRecords.map(function (record) {
+        return record.id;
+      }),
+    );
+    const pick = function <T>(map: Record<string, T>) {
+      return scoped
+        ? Object.fromEntries(
+            Object.entries(map || {}).filter(function ([key]) {
+              return scopedIds.has(key);
+            }),
+          )
+        : map;
+    };
     return {
       kind: "TURNING_TRAFFIC_BACKUP",
       version: VERSION,
+      /** "project"＝只有一個計畫，還原時併入；"all"＝整台電腦，還原時取代。 */
+      scope: scoped ? "project" : "all",
+      scopeProjectIds: Array.from(scopedIds),
       exportedAt: new Date().toISOString(),
-      projects: projects,
-      activeProjectId: activeProjectId,
-      records: records,
+      projects: scopedProjects,
+      activeProjectId: scoped ? scopeProjectId : activeProjectId,
+      records: scopedRecords,
       nameMap: nameMap,
       /*
        * 一定要存**每個計畫各自那一份**。
@@ -6147,34 +6310,76 @@ export default function TrafficApp() {
        * 沒有任何警示。
        * 舊欄位仍然保留，這樣新備份也能被舊版讀。
        */
-      pceByProject: pceByProject,
-      catalogByProject: catalogByProject,
-      mappingsByProject: mappingsByProject,
-      pce: pce,
-      vehicleCatalog: vehicleCatalog,
-      vehicleMappings: vehicleMappings,
+      pceByProject: pick(pceByProject),
+      catalogByProject: pick(catalogByProject),
+      mappingsByProject: pick(mappingsByProject),
+      /*
+       * 舊欄位在「單一計畫備份」時要放**那個計畫**的設定，不能放
+       * 目前開著的那一個——不然從計畫清單直接匯出別的計畫時，
+       * 舊版讀到的當量矩陣會是另一個案子的。
+       */
+      pce: scoped ? pceByProject[scopeProjectId!] || pce : pce,
+      vehicleCatalog: scoped
+        ? catalogByProject[scopeProjectId!] || vehicleCatalog
+        : vehicleCatalog,
+      vehicleMappings: scoped
+        ? mappingsByProject[scopeProjectId!] || vehicleMappings
+        : vehicleMappings,
       formatMemories: formatMemories,
       vehicleSchemes: vehicleSchemes,
       reportTemplates: reportTemplates,
       conclusionTemplates: conclusionTemplates,
-      recordRevisions: recordRevisions,
+      recordRevisions: scoped
+        ? recordRevisions.filter(function (revision) {
+            return scopedRecordIds.has(revision.recordId);
+          })
+        : recordRevisions,
     };
   };
-  async function exportBackupZip() {
+  /** 檔名裡帶得出計畫是哪一個，B 電腦收到三個檔案時才分得清楚。 */
+  const backupFileTag = function (scopeProjectId?: string) {
+    const project = projects.find(function (item) {
+      return item.id === scopeProjectId;
+    });
+    const safe = function (value: string) {
+      return value.replace(/[\\/:*?"<>|]/g, "_").slice(0, 40);
+    };
+    return project
+      ? "計畫_" + safe(project.code || "") + "_" + safe(project.name)
+      : "完整備份";
+  };
+  async function exportBackupZip(scopeProjectId?: string) {
     const zip = new JSZip();
     zip.file(
       "turning-traffic-backup.json",
-      JSON.stringify(backupPayload(), null, 2),
+      JSON.stringify(backupPayload(scopeProjectId), null, 2),
     );
     zip.file(
       "README.txt",
-      "Turning Traffic 完整備份\r\n在另一台電腦開啟系統後，到「備份、還原與版本」匯入本 ZIP。\r\n包含所有計畫、季度路口資料、名稱映射與當量參數。\r\n",
+      (scopeProjectId
+        ? "Turning Traffic 單一計畫備份\r\n只含這一個計畫的季度路口資料、當量參數與車種設定。\r\n在另一台電腦匯入時會「併入」，不會清掉那台電腦上原有的計畫。\r\n"
+        : "Turning Traffic 完整備份\r\n包含所有計畫、季度路口資料、名稱映射與當量參數。\r\n在另一台電腦匯入時會「完整取代」那台電腦上的資料。\r\n") +
+        "匯入位置：開啟同一個網站 →「備份、還原與版本」→ 選擇備份檔。\r\n",
     );
     downloadBlob(
       await zip.generateAsync({ type: "blob" }),
-      "Turning-Traffic_完整備份_" +
+      "Turning-Traffic_" +
+        backupFileTag(scopeProjectId) +
+        "_" +
         new Date().toISOString().slice(0, 10) +
         ".zip",
+    );
+  }
+  function exportBackupJson(scopeProjectId?: string) {
+    downloadBlob(
+      new Blob([JSON.stringify(backupPayload(scopeProjectId), null, 2)], {
+        type: "application/json",
+      }),
+      "Turning-Traffic_" +
+        backupFileTag(scopeProjectId) +
+        "_" +
+        new Date().toISOString().slice(0, 10) +
+        ".json",
     );
   }
   async function restoreBackup(file: File) {
@@ -6233,6 +6438,114 @@ export default function TrafficApp() {
           });
         }),
       );
+      /*
+       * ── 單一計畫備份走「併入」，不清掉這台電腦上原有的計畫 ──
+       *
+       * 使用者的實際情境：A 電腦做完 A 計畫、匯出、拿到 B 電腦匯入。
+       * 若照舊版一律「完整取代」，B 電腦上原本的計畫會全部消失，
+       * 而畫面只會說「還原完成」。
+       *
+       * 判斷方式：備份自己標了 scope="project"（新版單一計畫備份），
+       * 或者是「只含一個計畫、而這台電腦上有別的計畫」的舊備份——
+       * 後者一樣是使用者要搬一個計畫過來，不該連坐清掉其他案子。
+       */
+      const incomingIds = new Set(
+        restoredProjects.map(function (project: Project) {
+          return project.id;
+        }),
+      );
+      const existingOtherProjects = projects.filter(function (project) {
+        return !incomingIds.has(project.id);
+      });
+      const mergeMode =
+        data.scope === "project" ||
+        (restoredProjects.length === 1 && existingOtherProjects.length > 0);
+      if (mergeMode) {
+        const replacing = projects.filter(function (project) {
+          return incomingIds.has(project.id);
+        });
+        if (
+          projects.length &&
+          !window.confirm(
+            "這是一份「單一計畫備份」，會**併入**這台電腦，不會動到其他計畫。\n\n" +
+              `匯入內容：${restoredProjects
+                .map(function (project: Project) {
+                  return project.name;
+                })
+                .join("、")}（${restoredRecords.length} 筆路口季度資料）\n` +
+              (replacing.length
+                ? `這台電腦上同名同編號的「${replacing
+                    .map(function (project) {
+                      return project.name;
+                    })
+                    .join("、")}」會被備份的內容取代。\n`
+                : "這台電腦上目前沒有同一個計畫，會新增進來。\n") +
+              `其餘 ${existingOtherProjects.length} 個計畫不受影響。\n\n確定要匯入嗎？`,
+          )
+        ) {
+          notify("已取消匯入，資料沒有變動。");
+          return;
+        }
+        const keptRecords = records.filter(function (record) {
+          return !incomingIds.has(record.projectId);
+        });
+        const incomingRecordIds = new Set(
+          restoredRecords.map(function (record) {
+            return record.id;
+          }),
+        );
+        /** 依 id 併：備份裡有的覆蓋，這台電腦上多出來的保留。 */
+        const mergeById = function <T extends { id: string }>(
+          mine: T[],
+          theirs: unknown,
+        ) {
+          const list = Array.isArray(theirs) ? (theirs as T[]) : [];
+          const byId = new Map(
+            mine.map(function (item) {
+              return [item.id, item] as const;
+            }),
+          );
+          list.forEach(function (item) {
+            if (item && item.id) byId.set(item.id, item);
+          });
+          return Array.from(byId.values());
+        };
+        setProjects([...existingOtherProjects, ...restoredProjects]);
+        setActiveProjectId(data.activeProjectId || restoredProjects[0].id);
+        setRecords([...keptRecords, ...restoredRecords]);
+        setNameMap({ ...nameMap, ...(data.nameMap || {}) });
+        setPceByProject({ ...pceByProject, ...(data.pceByProject || {}) });
+        setCatalogByProject({
+          ...catalogByProject,
+          ...(data.catalogByProject || {}),
+        });
+        setMappingsByProject({
+          ...mappingsByProject,
+          ...(data.mappingsByProject || {}),
+        });
+        setFormatMemories(mergeById(formatMemories, data.formatMemories));
+        setVehicleSchemes(mergeById(vehicleSchemes, data.vehicleSchemes));
+        setReportTemplates(mergeById(reportTemplates, data.reportTemplates));
+        setConclusionTemplates(
+          mergeById(conclusionTemplates, data.conclusionTemplates),
+        );
+        setRecordRevisions(
+          mergeById(
+            recordRevisions.filter(function (revision) {
+              return !incomingRecordIds.has(revision.recordId);
+            }),
+            data.recordRevisions,
+          ),
+        );
+        notify(
+          "已併入 " +
+            restoredProjects.length +
+            " 個計畫、" +
+            restoredRecords.length +
+            " 筆資料；其他計畫沒有變動。",
+        );
+        return;
+      }
       /*
        * 還原是全站唯一一個會整批覆蓋的動作，一定要先問過。
        * 刪計畫、刪季度、全部清除、甚至取消預覽都有確認視窗，只有這裡沒有。
@@ -10697,42 +11010,74 @@ export default function TrafficApp() {
                   <span className="eyebrow">BACKUP & RESTORE</span>
                   <h1>跨電腦備份、還原與版本</h1>
                   <p>
-                    A 電腦下載 ZIP／JSON，B
-                    電腦開啟同網站匯入，即可接續全部計畫與設定。
+                    A 電腦下載備份檔，B 電腦開啟同一個網站匯入即可接續。
+                    <b>單一計畫</b>的備份匯入時是「併入」，
+                    <b>全部計畫</b>的備份匯入時是「完整取代」。
                   </p>
                 </div>
               </section>
               <section className="backup-grid">
                 <article className="panel">
                   <span>01</span>
-                  <h2>完整 ZIP</h2>
-                  <p>所有計畫、季度、名稱映射與當量參數。</p>
-                  <button className="primary full" onClick={exportBackupZip}>
-                    下載 ZIP
+                  <h2>只備份目前這個計畫</h2>
+                  <p>
+                    {activeProject
+                      ? "只含「" +
+                        activeProject.name +
+                        "」的季度資料、當量參數與車種設定，不會帶走其他計畫。到 B 電腦匯入時會併入，B 電腦原有的計畫不受影響。"
+                      : "請先在「多計畫管理」選一個計畫。"}
+                  </p>
+                  <button
+                    className="primary full"
+                    disabled={!activeProject}
+                    onClick={function () {
+                      exportBackupJson(activeProjectId);
+                    }}
+                  >
+                    下載本計畫 JSON
+                  </button>
+                  <button
+                    className="secondary full"
+                    disabled={!activeProject}
+                    onClick={function () {
+                      exportBackupZip(activeProjectId);
+                    }}
+                  >
+                    下載本計畫 ZIP
                   </button>
                 </article>
                 <article className="panel">
                   <span>02</span>
-                  <h2>JSON 純資料</h2>
-                  <p>適合版本比較與長期封存。</p>
+                  <h2>備份全部計畫</h2>
+                  <p>
+                    這台電腦上的 {projects.length}{" "}
+                    個計畫全部帶走，含名稱映射與各計畫的當量參數。
+                    到 B 電腦匯入時會<b>完整取代</b>那台電腦上的資料。
+                  </p>
+                  <button
+                    className="primary full"
+                    onClick={function () {
+                      exportBackupZip();
+                    }}
+                  >
+                    下載 ZIP（全部計畫）
+                  </button>
                   <button
                     className="secondary full"
                     onClick={function () {
-                      downloadBlob(
-                        new Blob([JSON.stringify(backupPayload(), null, 2)], {
-                          type: "application/json",
-                        }),
-                        "turning-traffic-backup.json",
-                      );
+                      exportBackupJson();
                     }}
                   >
-                    下載 JSON
+                    下載 JSON（全部計畫）
                   </button>
                 </article>
                 <article className="panel">
                   <span>03</span>
-                  <h2>在另一台電腦還原</h2>
-                  <p>匯入 ZIP 或 JSON 後會恢復完整狀態。</p>
+                  <h2>在另一台電腦匯入</h2>
+                  <p>
+                    ZIP 或 JSON 都可以。系統會自己判斷這是單一計畫還是全部計畫的
+                    備份，並在動手前把「會併入」還是「會取代」寫清楚給您確認。
+                  </p>
                   <label className="secondary full upload-label">
                     選擇備份檔
                     <input
@@ -10825,14 +11170,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.21-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.22-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.21-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.22-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >

@@ -61,5 +61,15 @@ export function launchOptions(extra = {}) {
     ...extra,
     ...(executablePath ? { executablePath } : {}),
     args: [...(extra.args || []), "--no-sandbox"],
+    /*
+     * 一定要給瀏覽器一個 UTF-8 的地區設定。
+     *
+     * 精簡型容器的 LANG 是空的，Chromium 會依此把下載檔名裡的非 ASCII
+     * 字元全部濾掉；中文檔名濾完就變成空字串，檔案一律存成 "download"。
+     * 這是**測試環境**的假象（使用者自己電腦上的 Chrome／Edge 沒這問題），
+     * 但若不設定，端對端測試會誤報「程式的檔名壞掉」，或反過來讓真的
+     * 壞掉的檔名被當成環境問題忽略掉。
+     */
+    env: { ...process.env, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", ...(extra.env || {}) },
   };
 }
