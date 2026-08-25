@@ -120,6 +120,21 @@ function makeRecord(over: Partial<ConclusionRecord> = {}): ConclusionRecord {
   } as ConclusionRecord;
 }
 
+/*
+ * v2.1.23 以前的那一個鍵。
+ *
+ * v2.1.24 把它拆成 branchCompositionIn／branchCompositionOut 兩項，
+ * normalizeCondition 會把舊鍵原地展開成兩項。下面幾支測試**刻意繼續用舊鍵**
+ * ——它們原本就是釘住那段輸出的，現在同時變成「舊範本套用之後輸出不變」
+ * 的迴歸保證。改成新鍵的話，這層保證就沒有了。
+ *
+ * 型別上舊鍵已經不在 ConclusionMetricKey 裡了，所以這裡明確轉型一次，
+ * 而不是把它加回型別（加回去等於承認它還是個有效的選項）。
+ */
+const LEGACY_BRANCH_COMPOSITION = [
+  "branchComposition",
+] as unknown as ConclusionMetricKey[];
+
 function cond(over: Partial<ConclusionCondition> = {}): ConclusionCondition {
   return { ...DEFAULT_CONDITION, ...over };
 }
@@ -240,7 +255,7 @@ test("車種組成會寫出輛數與百分比，百分比加起來是 100", () =
 test("各支線各車種駛入／駛出：單位是輛/調查時段，且百分比以該側合計為分母", () => {
   const text = buildConclusion(
     [makeRecord()],
-    cond({ peaks: ["AM"], metrics: ["branchComposition"] }),
+    cond({ peaks: ["AM"], metrics: LEGACY_BRANCH_COMPOSITION }),
     META,
   );
   // 路口A：駛入 機車 3400、小型車 1100，合計 4500 → 機車 75.6%
@@ -256,7 +271,7 @@ test("呈現方式選「一律雙向合計」時，寫的是雙向合計那一�
     [makeRecord()],
     cond({
       peaks: ["AM"],
-      metrics: ["branchComposition"],
+      metrics: LEGACY_BRANCH_COMPOSITION,
       branchCompositionMode: "two-way",
     }),
     META,
@@ -274,7 +289,7 @@ test("呈現方式選「一律雙向合計」時，寫的是雙向合計那一�
 test("呈現方式選「跟著車種組成分析頁」時，用該支線自己的設定", () => {
   const followSplit = buildConclusion(
     [makeRecord()],
-    cond({ peaks: ["AM"], metrics: ["branchComposition"] }),
+    cond({ peaks: ["AM"], metrics: LEGACY_BRANCH_COMPOSITION }),
     META,
   );
   assert.match(followSplit, /駛入各車種：機車 3,400/);
@@ -284,11 +299,121 @@ test("呈現方式選「跟著車種組成分析頁」時，用該支線自己�
   record.peaks.AM!.branches[0].directionDisplay = "two-way";
   const followTwoWay = buildConclusion(
     [record],
-    cond({ peaks: ["AM"], metrics: ["branchComposition"] }),
+    cond({ peaks: ["AM"], metrics: LEGACY_BRANCH_COMPOSITION }),
     META,
   );
   assert.match(followTwoWay, /雙向合計各車種：機車 6,400/);
   assert.doesNotMatch(followTwoWay, /駛入各車種：機車/);
+});
+
+/*
+ * ── 駛入／駛出拆成兩個勾選項（v2.1.24）──────────────────────────
+ *
+ * 上面幾支測試用的是舊鍵 LEGACY_BRANCH_COMPOSITION，它們釘住的是
+ * 「兩個方向都要寫」時的輸出，也就是拆分前後必須完全一致的那一份。
+ * 下面這幾支釘的是拆分後才有的新行為：各自單選。
+ */
+
+test("舊的 branchComposition 會展開成拆分後的兩項", () => {
+  const migrated = normalizeCondition(
+    cond({ metrics: LEGACY_BRANCH_COMPOSITION }),
+  );
+  assert.deepEqual(migrated.metrics, [
+    "branchCompositionIn",
+    "branchCompositionOut",
+  ]);
+  /* 展開之後就不該再留著舊鍵，否則每一處 wants() 都得記得認兩個鍵。 */
+  assert.ok(!(migrated.metrics as string[]).includes("branchComposition"));
+});
+
+test("舊範本套用後的草稿，與拆分前的輸出逐字相同", () => {
+  /*
+   * 這一支是這次改動的核心保證：使用者既有的範本產生的文字不能有任何變化。
+   * 比對整份草稿字串，不是只比對幾個 match——只比 match 的話，
+   * 多寫了一段或少寫了一段都驗不出來。
+   */
+  const viaLegacy = buildConclusion(
+    [makeRecord()],
+    cond({ peaks: ["AM"], metrics: LEGACY_BRANCH_COMPOSITION }),
+    META,
+  );
+  const viaSplit = buildConclusion(
+    [makeRecord()],
+    cond({
+      peaks: ["AM"],
+      metrics: ["branchCompositionIn", "branchCompositionOut"],
+    }),
+    META,
+  );
+  assert.equal(viaLegacy, viaSplit);
+});
+
+test("只勾駛入時，草稿裡只有駛入那一段", () => {
+  const text = buildConclusion(
+    [makeRecord()],
+    cond({ peaks: ["AM"], metrics: ["branchCompositionIn"] }),
+    META,
+  );
+  assert.match(text, /駛入各車種：機車 3,400（75\.6%）/);
+  assert.doesNotMatch(text, /駛出各車種：/);
+  assert.doesNotMatch(text, /雙向合計各車種：/);
+});
+
+test("只勾駛出時，草稿裡只有駛出那一段", () => {
+  const text = buildConclusion(
+    [makeRecord()],
+    cond({ peaks: ["AM"], metrics: ["branchCompositionOut"] }),
+    META,
+  );
+  assert.match(text, /駛出各車種：機車 3,000（71\.4%）/);
+  assert.doesNotMatch(text, /駛入各車種：/);
+  assert.doesNotMatch(text, /雙向合計各車種：/);
+});
+
+test("只勾一個方向時，「雙向合計」不可以生效", () => {
+  /*
+   * 雙向合計是駛入＋駛出。使用者只要駛入，卻拿到把駛出也算進去的數字，
+   * 那是**錯的數字**，比少寫一段嚴重得多——而且畫面上看不出來，
+   * 因為它一樣會印出一行合理的文字。
+   */
+  for (const [key, wrong] of [
+    ["branchCompositionIn", /駛出各車種：/],
+    ["branchCompositionOut", /駛入各車種：/],
+  ] as const) {
+    const text = buildConclusion(
+      [makeRecord()],
+      cond({
+        peaks: ["AM"],
+        metrics: [key],
+        branchCompositionMode: "two-way",
+      }),
+      META,
+    );
+    assert.doesNotMatch(text, /雙向合計各車種：/);
+    assert.doesNotMatch(text, wrong);
+  }
+});
+
+test("只勾一個方向時，標頭寫的是方向，不是沒生效的呈現方式", () => {
+  const inOnly = buildConclusion(
+    [makeRecord()],
+    cond({
+      peaks: ["AM"],
+      metrics: ["branchCompositionIn"],
+      branchCompositionMode: "two-way",
+    }),
+    META,
+  );
+  assert.match(inOnly, /只敘述駛入方向/);
+  /* 那個設定沒有生效，就不可以照抄它的名稱，否則使用者會以為它生效了。 */
+  assert.doesNotMatch(inOnly, /呈現方式：一律雙向合計/);
+
+  const outOnly = buildConclusion(
+    [makeRecord()],
+    cond({ peaks: ["AM"], metrics: ["branchCompositionOut"] }),
+    META,
+  );
+  assert.match(outOnly, /只敘述駛出方向/);
 });
 
 test("呈現方式選「一律分行車方向」時，不理會分析頁的雙向合計設定", () => {
@@ -298,7 +423,7 @@ test("呈現方式選「一律分行車方向」時，不理會分析頁的雙�
     [record],
     cond({
       peaks: ["AM"],
-      metrics: ["branchComposition"],
+      metrics: LEGACY_BRANCH_COMPOSITION,
       branchCompositionMode: "split",
     }),
     META,
@@ -313,7 +438,7 @@ test("勾了各支線各車種時，標頭會寫明目前用的呈現方式", ()
     [makeRecord()],
     cond({
       peaks: ["AM"],
-      metrics: ["branchComposition"],
+      metrics: LEGACY_BRANCH_COMPOSITION,
       branchCompositionMode: "two-way",
     }),
     META,
@@ -331,7 +456,7 @@ test("勾了各支線各車種時，標頭會寫明目前用的呈現方式", ()
 test("各支線各車種的單位不會被寫成 輛/hr", () => {
   const text = buildConclusion(
     [makeRecord()],
-    cond({ peaks: ["AM"], metrics: ["branchComposition"] }),
+    cond({ peaks: ["AM"], metrics: LEGACY_BRANCH_COMPOSITION }),
     META,
   );
   const line = text.split("\n").find((l) => /駛入各車種/.test(l)) || "";

@@ -225,6 +225,82 @@ const scopeChecked = await page
   .isChecked();
 ok("套用範本會還原當時的條件（年度）", scopeChecked);
 
+/*
+ * ── 範本專屬於自己的計畫（v2.1.24）──────────────────────────────
+ *
+ * 舊版所有計畫共用同一份清單：在甲計畫存的範本，切到乙計畫照樣列出來。
+ * 這不只是看了礙眼——條件裡存著 intersectionKeys 與 branchNames，
+ * 那是該計畫專屬的識別字，套到別的計畫會篩出 0 筆而找不出原因。
+ *
+ * 這裡直接改儲存的 activeProjectId 再重新整理，而不是走畫面上的切換元件：
+ * 要驗的是「換了計畫之後範本清單長什麼樣」，不是切換元件本身。
+ */
+const switchTo = async (projectId) => {
+  await page.evaluate((id) => {
+    const state = JSON.parse(
+      localStorage.getItem("turning-traffic-state-v2") || "{}",
+    );
+    state.activeProjectId = id;
+    localStorage.setItem("turning-traffic-state-v2", JSON.stringify(state));
+  }, projectId);
+  await page.reload();
+  await page.waitForTimeout(1500);
+  await go("結論草稿產生器");
+};
+
+const firstProjectId = await page.evaluate(() => {
+  const state = JSON.parse(
+    localStorage.getItem("turning-traffic-state-v2") || "{}",
+  );
+  return state.activeProjectId;
+});
+/* 種一個第二計畫，並把第一計畫的紀錄複製一份給它，讓它也產得出草稿。 */
+const secondProjectId = await page.evaluate(() => {
+  const key = "turning-traffic-state-v2";
+  const state = JSON.parse(localStorage.getItem(key) || "{}");
+  const id = "P-e2e-second";
+  if (!state.projects.some((p) => p.id === id)) {
+    state.projects.push({
+      id,
+      code: "99999",
+      name: "第二計畫（e2e）",
+      client: "測試",
+      note: "",
+      createdAt: "2026-01-04T00:00:00.000Z",
+    });
+    state.records = state.records.concat(
+      state.records.map((r, i) => ({ ...r, id: `${r.id}-2nd${i}`, projectId: id })),
+    );
+    localStorage.setItem(key, JSON.stringify(state));
+  }
+  return id;
+});
+
+await switchTo(secondProjectId);
+ok(
+  "切到第二計畫時，看不到第一計畫存的範本",
+  (await page.locator(".conclusion-template:has-text('年報用')").count()) === 0,
+);
+
+/* 在第二計畫存一個同名以外的範本，回到第一計畫時也不能看到它 */
+await page.locator(".conclusion-templates input").fill("第二計畫專用");
+await page.locator('button:has-text("存成範本")').click();
+await page.waitForTimeout(400);
+ok(
+  "第二計畫自己存的範本看得到",
+  (await page.locator(".conclusion-template:has-text('第二計畫專用')").count()) === 1,
+);
+
+await switchTo(firstProjectId);
+ok(
+  "回到第一計畫時，看不到第二計畫存的範本",
+  (await page.locator(".conclusion-template:has-text('第二計畫專用')").count()) === 0,
+);
+ok(
+  "回到第一計畫時，自己的範本還在",
+  (await page.locator(".conclusion-template:has-text('年報用')").count()) === 1,
+);
+
 /* ── 沒有資料的條件不會給空白 ── */
 await page.locator('.conclusion-field:has-text("統計範圍") input[type=radio]').first().check();
 await page.waitForTimeout(300);
@@ -589,13 +665,48 @@ for (const label of await page.locator(".conclusion-metrics label").all()) {
   const box = label.locator("input");
   if (await box.isChecked()) await box.uncheck();
 }
-await page
-  .locator('.conclusion-metrics label:has-text("各支線各車種駛入／駛出車輛數") input')
-  .check();
-await page.waitForTimeout(400);
-/* 呈現方式的子選項只在勾了這個指標之後才會出現 */
+/*
+ * v2.1.24 起駛入與駛出是兩個獨立的勾選項。先各自單勾驗一次，
+ * 再兩個都勾回來做後面的交叉比對。
+ */
+const branchIn = page.locator(
+  '.conclusion-metrics label:has-text("各支線各車種駛入車輛數") input',
+);
+const branchOut = page.locator(
+  '.conclusion-metrics label:has-text("各支線各車種駛出車輛數") input',
+);
+await branchIn.check();
+await page.waitForTimeout(300);
 ok(
-  "勾了各支線各車種之後才出現呈現方式選項",
+  "只勾一個方向時，呈現方式選項不出現（雙向合計對單一方向沒有意義）",
+  (await page.locator(".conclusion-submode").count()) === 0,
+);
+await page.locator('button:has-text("重新產生")').first().click();
+await page.waitForTimeout(900);
+const inOnlyDraft = await draft.inputValue();
+ok(
+  "只勾駛入時，草稿裡只有駛入那一段",
+  /駛入各車種：/.test(inOnlyDraft) && !/駛出各車種：/.test(inOnlyDraft),
+  (inOnlyDraft.split("\n").find((l) => /各車種：/.test(l)) || "").slice(0, 90),
+);
+
+await branchIn.uncheck();
+await branchOut.check();
+await page.waitForTimeout(300);
+await page.locator('button:has-text("重新產生")').first().click();
+await page.waitForTimeout(900);
+const outOnlyDraft = await draft.inputValue();
+ok(
+  "只勾駛出時，草稿裡只有駛出那一段",
+  /駛出各車種：/.test(outOnlyDraft) && !/駛入各車種：/.test(outOnlyDraft),
+  (outOnlyDraft.split("\n").find((l) => /各車種：/.test(l)) || "").slice(0, 90),
+);
+
+await branchIn.check();
+await page.waitForTimeout(400);
+/* 呈現方式的子選項只在兩個方向都勾了之後才會出現 */
+ok(
+  "兩個方向都勾之後才出現呈現方式選項",
   (await page.locator(".conclusion-submode").count()) === 1,
 );
 await page

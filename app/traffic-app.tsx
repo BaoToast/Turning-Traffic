@@ -3239,11 +3239,35 @@ export default function TrafficApp() {
   const [importRows, setImportRows] = useState<ImportPreview[]>([]);
   const [formatMemories, setFormatMemories] = useState<FormatMemory[]>([]);
   const [vehicleSchemes, setVehicleSchemes] = useState<VehicleScheme[]>([]);
-  // 報表匯出項目：每個計畫記住自己要的組合，另可存成可重複套用的範本
-  const [reportTemplates, setReportTemplates] = useState<ReportTemplate[]>([]);
-  const [conclusionTemplates, setConclusionTemplates] = useState<
-    ConclusionTemplate[]
-  >([]);
+  /*
+   * 兩種範本都是**每個計畫各自一份**（v2.1.24）。
+   *
+   * 舊版兩者都存成一個扁平陣列，所有計畫共用同一份清單：在甲計畫存的範本，
+   * 切到乙計畫照樣列在畫面上。這不只是看了礙眼——結論條件裡存著
+   * intersectionKeys 與 branchNames，那是該計畫專屬的識別字，套到別的計畫
+   * 會篩出 0 筆而找不出原因。這支程式其實已經知道這件事：換計畫時它**會**
+   * 重設「正在編的條件」與草稿，理由就寫在下面那段註解裡；漏掉的只有
+   * 「已存起來的範本清單」這一項。
+   *
+   * 作法與 pceByProject／catalogByProject／mappingsByProject 完全一致，
+   * 連 setter 都沿用同一個 scopedSetter，呼叫端不必改。
+   */
+  const [reportTemplatesByProject, setReportTemplatesByProject] = useState<
+    Record<string, ReportTemplate[]>
+  >({});
+  const [conclusionTemplatesByProject, setConclusionTemplatesByProject] =
+    useState<Record<string, ConclusionTemplate[]>>({});
+  const reportTemplates = reportTemplatesByProject[activeProjectId] || [];
+  const conclusionTemplates =
+    conclusionTemplatesByProject[activeProjectId] || [];
+  const setReportTemplates = scopedSetter<ReportTemplate[]>(
+    setReportTemplatesByProject,
+    [],
+  );
+  const setConclusionTemplates = scopedSetter<ConclusionTemplate[]>(
+    setConclusionTemplatesByProject,
+    [],
+  );
   /*
    * 結論草稿的條件與內容放在這一層，切換分頁才不會被卸載清空。
    * 換計畫時才重設——換了計畫，原本挑的路口與支線都不存在了。
@@ -3436,10 +3460,33 @@ export default function TrafficApp() {
         setFormatMemories(data.formatMemories);
       if (Array.isArray(data.vehicleSchemes))
         setVehicleSchemes(data.vehicleSchemes);
-      if (Array.isArray(data.reportTemplates))
-        setReportTemplates(data.reportTemplates);
-      if (Array.isArray(data.conclusionTemplates))
-        setConclusionTemplates(data.conclusionTemplates);
+      /*
+       * 範本改成依計畫分開存之後，舊資料（扁平陣列）**每個計畫各給一份**。
+       *
+       * 選這個作法是因為它不會讓任何東西看起來像是消失了：使用者過去存的
+       * 範本可能是在任何一個計畫底下存的，全部歸給某一個計畫的話，其他計畫
+       * 就再也找不到它們。各給一份之後，使用者只要把各計畫用不到的刪掉一次
+       * 即可，之後新存的範本就只屬於當下那個計畫。
+       * pce／catalog／mappings 三項當初也是這樣遷移的。
+       */
+      setReportTemplatesByProject(
+        data.reportTemplatesByProject &&
+          typeof data.reportTemplatesByProject === "object"
+          ? data.reportTemplatesByProject
+          : spread(
+              Array.isArray(data.reportTemplates) ? data.reportTemplates : [],
+            ),
+      );
+      setConclusionTemplatesByProject(
+        data.conclusionTemplatesByProject &&
+          typeof data.conclusionTemplatesByProject === "object"
+          ? data.conclusionTemplatesByProject
+          : spread(
+              Array.isArray(data.conclusionTemplates)
+                ? data.conclusionTemplates
+                : [],
+            ),
+      );
       if (Array.isArray(data.recordRevisions))
         setRecordRevisions(data.recordRevisions);
     } catch (error) {
@@ -3486,6 +3533,9 @@ export default function TrafficApp() {
         vehicleMappings: vehicleMappings,
         formatMemories: formatMemories,
         vehicleSchemes: vehicleSchemes,
+        reportTemplatesByProject: reportTemplatesByProject,
+        conclusionTemplatesByProject: conclusionTemplatesByProject,
+        /* 舊欄位仍然寫出目前計畫的那一份，萬一退版也還讀得到東西。 */
         reportTemplates: reportTemplates,
         conclusionTemplates: conclusionTemplates,
       };
@@ -3541,8 +3591,8 @@ export default function TrafficApp() {
       vehicleMappings,
       formatMemories,
       vehicleSchemes,
-      reportTemplates,
-      conclusionTemplates,
+      reportTemplatesByProject,
+      conclusionTemplatesByProject,
       recordRevisions,
       loaded,
     ],
@@ -6327,8 +6377,23 @@ export default function TrafficApp() {
         : vehicleMappings,
       formatMemories: formatMemories,
       vehicleSchemes: vehicleSchemes,
-      reportTemplates: reportTemplates,
-      conclusionTemplates: conclusionTemplates,
+      /*
+       * 範本也要存每個計畫各自那一份，理由與上面的當量矩陣相同：
+       * 只存「匯出當下開著的那個計畫」的話，換一台電腦還原之後其他計畫的
+       * 範本會全部不見，而畫面只會說「還原完成」。
+       */
+      reportTemplatesByProject: pick(reportTemplatesByProject),
+      conclusionTemplatesByProject: pick(conclusionTemplatesByProject),
+      /*
+       * 舊欄位在「單一計畫備份」時要放**那個計畫**的範本，
+       * 不能放目前開著的那一個。
+       */
+      reportTemplates: scoped
+        ? reportTemplatesByProject[scopeProjectId!] || []
+        : reportTemplates,
+      conclusionTemplates: scoped
+        ? conclusionTemplatesByProject[scopeProjectId!] || []
+        : conclusionTemplates,
       recordRevisions: scoped
         ? recordRevisions.filter(function (revision) {
             return scopedRecordIds.has(revision.recordId);
@@ -6525,9 +6590,49 @@ export default function TrafficApp() {
         });
         setFormatMemories(mergeById(formatMemories, data.formatMemories));
         setVehicleSchemes(mergeById(vehicleSchemes, data.vehicleSchemes));
-        setReportTemplates(mergeById(reportTemplates, data.reportTemplates));
-        setConclusionTemplates(
-          mergeById(conclusionTemplates, data.conclusionTemplates),
+        /*
+         * 併入時範本要落在**備份檔自己那些計畫**底下，不是目前開著的計畫。
+         *
+         * 新版備份帶著 ...ByProject，逐個計畫併；舊版備份只有一個扁平陣列，
+         * 那時候範本本來就是全機共用的，所以併給這次還原進來的每一個計畫。
+         * 兩種都只動被還原的那些計畫，其他計畫的範本不受影響——這是「併入」
+         * 這個動作的承諾。
+         */
+        const mergeTemplateMap = function <T extends { id: string }>(
+          existing: Record<string, T[]>,
+          incomingMap: unknown,
+          incomingFlat: unknown,
+        ) {
+          const next = { ...existing };
+          const flat = Array.isArray(incomingFlat) ? (incomingFlat as T[]) : [];
+          const map =
+            incomingMap && typeof incomingMap === "object"
+              ? (incomingMap as Record<string, T[]>)
+              : null;
+          for (const project of restoredProjects) {
+            const incoming = map
+              ? Array.isArray(map[project.id])
+                ? map[project.id]
+                : []
+              : flat;
+            if (!incoming.length && !next[project.id]) continue;
+            next[project.id] = mergeById(next[project.id] || [], incoming);
+          }
+          return next;
+        };
+        setReportTemplatesByProject(
+          mergeTemplateMap(
+            reportTemplatesByProject,
+            data.reportTemplatesByProject,
+            data.reportTemplates,
+          ),
+        );
+        setConclusionTemplatesByProject(
+          mergeTemplateMap(
+            conclusionTemplatesByProject,
+            data.conclusionTemplatesByProject,
+            data.conclusionTemplates,
+          ),
         );
         setRecordRevisions(
           mergeById(
@@ -6613,11 +6718,24 @@ export default function TrafficApp() {
       setVehicleSchemes(
         Array.isArray(data.vehicleSchemes) ? data.vehicleSchemes : [],
       );
-      setReportTemplates(
-        Array.isArray(data.reportTemplates) ? data.reportTemplates : [],
+      /* 舊備份的扁平清單，每個計畫各給一份（同載入時的遷移作法）。 */
+      setReportTemplatesByProject(
+        data.reportTemplatesByProject &&
+          typeof data.reportTemplatesByProject === "object"
+          ? data.reportTemplatesByProject
+          : spreadToAll(
+              Array.isArray(data.reportTemplates) ? data.reportTemplates : [],
+            ),
       );
-      setConclusionTemplates(
-        Array.isArray(data.conclusionTemplates) ? data.conclusionTemplates : [],
+      setConclusionTemplatesByProject(
+        data.conclusionTemplatesByProject &&
+          typeof data.conclusionTemplatesByProject === "object"
+          ? data.conclusionTemplatesByProject
+          : spreadToAll(
+              Array.isArray(data.conclusionTemplates)
+                ? data.conclusionTemplates
+                : [],
+            ),
       );
       setRecordRevisions(
         Array.isArray(data.recordRevisions) ? data.recordRevisions : [],
@@ -10557,7 +10675,8 @@ export default function TrafficApp() {
                       勾到的項目才會出現在 Excel 裡，一個項目一張工作表。
                       例如只要各路口駛出的尖峰流量，就只勾第一項；要車種分析加駛出流量，就勾兩項。
                       勾選會自動記在「{activeProject?.name || "目前計畫"}
-                      」上，也可以另存成範本套用到其他計畫。
+                      」上，也可以另存成範本重複套用。範本專屬於這個計畫，
+                      不會出現在其他計畫裡。
                     </p>
                   </div>
                   <div className="report-items-actions">
@@ -11170,14 +11289,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.23-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.24-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.23-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.24-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
@@ -11848,7 +11967,14 @@ function ConclusionStudio(props: {
                     );
                   })}
                 </div>
-                {condition.metrics.includes("branchComposition") ? (
+                {/*
+                  * 「呈現方式」只有在駛入與駛出都要寫的時候才有意義——
+                  * 雙向合計是把兩個方向加起來，只寫一個方向時那個數字
+                  * 是錯的。所以只勾一邊時整區收起來，不讓使用者選一個
+                  * 其實不會生效的設定。
+                  */}
+                {condition.metrics.includes("branchCompositionIn") &&
+                condition.metrics.includes("branchCompositionOut") ? (
                   <div className="conclusion-submode">
                     <span className="conclusion-sublabel">
                       各支線各車種要怎麼呈現

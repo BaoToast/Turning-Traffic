@@ -29,9 +29,22 @@ export const CONCLUSION_METRICS = [
   { key: "total", label: "路口總流量與總車輛數" },
   { key: "peakHour", label: "尖峰時段（起訖時間）" },
   { key: "composition", label: "車種組成（輛數與百分比）" },
+  /*
+   * 駛入與駛出拆成兩個勾選項（v2.1.24）。
+   *
+   * 舊版是一項 branchComposition，一勾就是兩個方向都寫。使用者常常只需要
+   * 其中一個方向，只能產生完再自己刪掉另一半。拆開之後兩個方向各自獨立。
+   *
+   * 舊的 branchComposition 仍然讀得懂：normalizeCondition 會把它展開成
+   * 這兩項，所以既有的範本與備份套用之後輸出和以前完全一樣。
+   */
   {
-    key: "branchComposition",
-    label: "各支線各車種駛入／駛出車輛數（輛/調查時段）",
+    key: "branchCompositionIn",
+    label: "各支線各車種駛入車輛數（輛/調查時段）",
+  },
+  {
+    key: "branchCompositionOut",
+    label: "各支線各車種駛出車輛數（輛/調查時段）",
   },
   { key: "balance", label: "駛入／駛出平衡差值" },
   { key: "fullDay", label: "全日流量（輛／調查日）" },
@@ -210,6 +223,31 @@ export function quarterYear(quarter: string): string {
 }
 
 /**
+ * 舊的 `branchComposition` 展開成拆分後的兩個方向。
+ *
+ * v2.1.24 把「各支線各車種駛入／駛出車輛數」拆成駛入、駛出兩個獨立勾選項。
+ * 使用者既有的條件範本、備份檔與正在編輯的條件裡都還存著舊的那一個鍵；
+ * 舊鍵的意思本來就是「兩個方向都寫」，所以在這裡原地展開成兩項，
+ * **套用舊範本產生的草稿與 v2.1.23 完全相同**。
+ *
+ * 展開而不是保留舊鍵，是為了讓後面的判斷只需要認得新的兩個鍵；
+ * 否則每一處 wants() 都要記得同時檢查舊鍵，遲早會漏掉一處。
+ */
+function migrateMetrics(metrics: string[]): ConclusionMetricKey[] {
+  const out: ConclusionMetricKey[] = [];
+  const push = (key: ConclusionMetricKey) => {
+    if (!out.includes(key)) out.push(key);
+  };
+  for (const key of metrics) {
+    if (key === "branchComposition") {
+      push("branchCompositionIn");
+      push("branchCompositionOut");
+    } else push(key as ConclusionMetricKey);
+  }
+  return out;
+}
+
+/**
  * 把外來的條件補成完整的形狀。
  *
  * 為什麼需要：條件範本是存進瀏覽器（也會隨備份檔帶到別台電腦）的，
@@ -251,7 +289,7 @@ export function normalizeCondition(
     intersectionKeys: list(source.intersectionKeys) as string[],
     branchNames: list(source.branchNames) as string[],
     surveyTypes: list(source.surveyTypes) as string[],
-    metrics: list(source.metrics) as ConclusionMetricKey[],
+    metrics: migrateMetrics(list(source.metrics) as string[]),
     grouping: ["byIntersection", "byQuarter", "overall"].includes(
       String(source.grouping),
     )
@@ -385,7 +423,8 @@ function describePeak(
     wants("share") ||
     wants("balance") ||
     wants("fullDay") ||
-    wants("branchComposition");
+    wants("branchCompositionIn") ||
+    wants("branchCompositionOut");
 
   if (showsBranchMetric)
     for (const branch of branches) {
@@ -417,7 +456,7 @@ function describePeak(
           );
         } else parts.push("駛入減駛出 無法計算（缺少其中一側）");
       }
-      if (wants("branchComposition")) {
+      if (wants("branchCompositionIn") || wants("branchCompositionOut")) {
         /*
          * 各車種的駛出／駛入輛數，單位是「輛／調查時段」——整個調查期間的
          * 累計，不是尖峰小時的率。所以每一行都把單位寫出來，避免有人拿它
@@ -454,11 +493,19 @@ function describePeak(
           condition.branchCompositionMode === "follow"
             ? branch.directionDisplay || "split"
             : condition.branchCompositionMode;
-        if (mode === "two-way") {
+        /*
+         * 「雙向合計」是把駛入與駛出加在一起寫成一段，只有兩個方向都要寫的
+         * 時候才成立。使用者只勾其中一個方向時，合計那一段不是他要的數字
+         * ——那會把另一個方向的車也算進去。所以只勾一邊時一律照該方向寫。
+         */
+        const bothSides = wants("branchCompositionIn") && wants("branchCompositionOut");
+        if (mode === "two-way" && bothSides) {
           parts.push(side(branch.twoWayByVehicleSafe, "雙向合計"));
         } else {
-          parts.push(side(branch.inflowByVehicleSafe, "駛入"));
-          parts.push(side(branch.outboundByVehicleSafe, "駛出"));
+          if (wants("branchCompositionIn"))
+            parts.push(side(branch.inflowByVehicleSafe, "駛入"));
+          if (wants("branchCompositionOut"))
+            parts.push(side(branch.outboundByVehicleSafe, "駛出"));
         }
       }
       if (wants("fullDay")) {
@@ -707,14 +754,24 @@ export function buildConclusion(
    * 各支線的車種輛數是寫在「某一個尖峰」底下的，一個尖峰都沒選時根本不會
    * 出現，這句說明也就不必印——印了會讓人以為下面有東西卻找不到。
    */
-  if (wants("branchComposition") && peaks.length)
+  const wantsBranchIn = wants("branchCompositionIn");
+  const wantsBranchOut = wants("branchCompositionOut");
+  if ((wantsBranchIn || wantsBranchOut) && peaks.length)
     out.push(
       "說明：各支線各車種輛數取自「車種組成分析」的『全調查時段道路方向車種數量』，" +
         "單位是 輛／調查時段（整個調查期間的累計），不能和上面的 輛/hr 相比或相加；" +
-        "呈現方式：" +
-        (BRANCH_COMPOSITION_MODES.find(
-          (mode) => mode.key === (condition.branchCompositionMode || "follow"),
-        )?.label || "跟著車種組成分析頁的設定") +
+        /*
+         * 只勾一個方向時，「呈現方式」那一項不會生效（雙向合計會把另一個
+         * 方向的車也算進去，不是使用者要的）。這裡就照實寫出方向，
+         * 不要照抄一個其實沒有套用的設定名稱。
+         */
+        (wantsBranchIn && wantsBranchOut
+          ? "呈現方式：" +
+            (BRANCH_COMPOSITION_MODES.find(
+              (mode) =>
+                mode.key === (condition.branchCompositionMode || "follow"),
+            )?.label || "跟著車種組成分析頁的設定")
+          : `只敘述${wantsBranchIn ? "駛入" : "駛出"}方向`) +
         "。",
     );
   /*
