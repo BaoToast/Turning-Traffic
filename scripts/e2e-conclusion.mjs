@@ -97,7 +97,7 @@ for (const label of await page.locator(".conclusion-metrics label").all()) {
 for (const want of [
   "各支線駛入流量（PCU/hr）",
   "各支線駛入車輛數（輛/hr）",
-  "各支線佔路口總量百分比",
+  "各支線佔駛入路口總量百分比",
   "路口總流量與總車輛數",
 ]) {
   await page.locator(`.conclusion-metrics label:has-text("${want}") input`).check();
@@ -120,6 +120,11 @@ ok("有寫駛入 PCU/hr", /駛入 [\d,.]+ PCU\/hr/.test(text1));
 ok("有寫駛入輛/hr", /駛入 [\d,]+ 輛\/hr/.test(text1));
 ok("有寫百分比", /佔駛入 [\d.]+%/.test(text1));
 ok("沒有寫沒勾的駛出", !/駛出 [\d,.]+ PCU/.test(text1));
+ok(
+  "只勾駛入佔比時不會寫出駛出佔比",
+  !/佔駛出 /.test(text1),
+  (text1.split("\n").find((l) => /佔駛/.test(l)) || "").slice(0, 90),
+);
 ok("沒有寫沒勾的車種組成", !/車種組成/.test(text1));
 ok("有寫明單位不可相加的規則", /僅在同一筆紀錄內可相加/.test(text1));
 ok("沒有 NaN 或 undefined", !/NaN|undefined|Infinity/.test(text1), text1.match(/NaN|undefined|Infinity/)?.[0] || "");
@@ -155,6 +160,47 @@ ok(
 );
 
 /* ── 換條件，草稿要跟著變 ── */
+/*
+ * ── 佔駛出百分比（v2.1.25 起才寫得出來）────────────────────────
+ *
+ * 舊版只有一個「各支線佔路口總量百分比」，而且輸出是 if / else if，
+ * 有駛入資料就永遠寫駛入——「佔駛出」那一支是死碼，一次都沒被寫出來過。
+ */
+const shareIn = page.locator(
+  '.conclusion-metrics label:has-text("各支線佔駛入路口總量百分比") input',
+);
+const shareOut = page.locator(
+  '.conclusion-metrics label:has-text("各支線佔駛出路口總量百分比") input',
+);
+await shareIn.uncheck();
+await shareOut.check();
+await page.waitForTimeout(200);
+await page.locator('button:has-text("重新產生")').first().click();
+await page.waitForTimeout(800);
+const outShareDraft = await draft.inputValue();
+ok(
+  "只勾駛出佔比時，草稿寫的是佔駛出",
+  /佔駛出 [\d.]+%/.test(outShareDraft) && !/佔駛入 /.test(outShareDraft),
+  (outShareDraft.split("\n").find((l) => /佔駛/.test(l)) || "").slice(0, 90),
+);
+
+await shareIn.check();
+await page.waitForTimeout(200);
+await page.locator('button:has-text("重新產生")').first().click();
+await page.waitForTimeout(800);
+const bothShareDraft = await draft.inputValue();
+const bothLine = bothShareDraft.split("\n").find((l) => /佔駛入 /.test(l)) || "";
+ok(
+  "兩個佔比都勾時兩行都寫，駛入排在駛出前面",
+  /佔駛入 /.test(bothLine) &&
+    /佔駛出 /.test(bothLine) &&
+    bothLine.indexOf("佔駛入") < bothLine.indexOf("佔駛出"),
+  bothLine.slice(0, 110),
+);
+/* 還原成後面幾段檢查預期的狀態 */
+await shareOut.uncheck();
+await page.waitForTimeout(200);
+
 await page.locator('.conclusion-metrics label:has-text("車種組成（輛數與百分比）") input').check();
 await page.locator('button:has-text("重新產生")').first().click();
 await page.waitForTimeout(700);

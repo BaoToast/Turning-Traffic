@@ -25,7 +25,22 @@ export const CONCLUSION_METRICS = [
   { key: "outflowPcu", label: "各支線駛出流量（PCU/hr）" },
   { key: "inflowVehicles", label: "各支線駛入車輛數（輛/hr）" },
   { key: "outflowVehicles", label: "各支線駛出車輛數（輛/hr）" },
-  { key: "share", label: "各支線佔路口總量百分比" },
+  /*
+   * 佔比也拆成兩個方向（v2.1.25）。
+   *
+   * 舊版是一項 share，但輸出是 if / else if：有駛入資料就寫「佔駛入」，
+   * 只有整筆沒有駛入時才改寫「佔駛出」。所以使用者**永遠拿不到駛出的佔比**，
+   * 而且選項名稱只寫「佔路口總量百分比」，沒說是哪一個方向。
+   *
+   * 兩個方向的分母相同（都是路口總量，駛入合計＝駛出合計），
+   * 但分子不同，數字差很多：實測某一筆 路口B 駛入 10.4%／駛出 27.6%。
+   *
+   * 舊的 share 仍然讀得懂：normalizeCondition 會把它換成 shareIn
+   * （只換成駛入那一項，理由見 migrateMetrics 裡的註解），
+   * 所以既有範本的草稿逐字不變。
+   */
+  { key: "shareIn", label: "各支線佔駛入路口總量百分比" },
+  { key: "shareOut", label: "各支線佔駛出路口總量百分比" },
   { key: "total", label: "路口總流量與總車輛數" },
   { key: "peakHour", label: "尖峰時段（起訖時間）" },
   { key: "composition", label: "車種組成（輛數與百分比）" },
@@ -57,7 +72,7 @@ export type ConclusionMetricKey = (typeof CONCLUSION_METRICS)[number]["key"];
 export const DEFAULT_CONCLUSION_METRICS: ConclusionMetricKey[] = [
   "total",
   "inflowPcu",
-  "share",
+  "shareIn",
   "peakHour",
 ];
 
@@ -242,6 +257,18 @@ function migrateMetrics(metrics: string[]): ConclusionMetricKey[] {
     if (key === "branchComposition") {
       push("branchCompositionIn");
       push("branchCompositionOut");
+    } else if (key === "share") {
+      /*
+       * 舊的 share 只展開成**駛入**那一項，不是兩項。
+       *
+       * 因為舊版的輸出是 if / else if：有駛入就寫「佔駛入」，
+       * 只有整筆沒有駛入時才寫「佔駛出」。而 inflowPcu 是由
+       * destinationFlowTotal() 算出來的，那支函式永遠回傳數字，
+       * 所以「佔駛出」那一支其實是執行不到的死碼——一次都沒有被寫出來過。
+       * 展開成兩項的話，既有範本的草稿會多出一段從來沒有過的「佔駛出」，
+       * 那就不是「輸出不變」了。
+       */
+      push("shareIn");
     } else push(key as ConclusionMetricKey);
   }
   return out;
@@ -420,7 +447,8 @@ function describePeak(
     wants("outflowPcu") ||
     wants("inflowVehicles") ||
     wants("outflowVehicles") ||
-    wants("share") ||
+    wants("shareIn") ||
+    wants("shareOut") ||
     wants("balance") ||
     wants("fullDay") ||
     wants("branchCompositionIn") ||
@@ -437,16 +465,24 @@ function describePeak(
         parts.push(`駛入 ${whole(branch.inflowVehicles)} 輛/hr`);
       if (wants("outflowVehicles"))
         parts.push(`駛出 ${whole(branch.outflowVehicles)} 輛/hr`);
-      if (wants("share")) {
+      /*
+       * 佔比：兩個方向各自獨立，分母都是路口總量。
+       *
+       * 分母相同是對的——駛入合計與駛出合計必然相等（同一批車依終點重新
+       * 分組，總量不變），所以兩者用同一個 totalPcu 當分母，加起來各自都是
+       * 100%。差異全部來自分子：駛入多的支線不一定駛出也多，實測某一筆
+       * 路口B 駛入 10.4%、駛出 27.6%。
+       */
+      if (wants("shareIn") || wants("shareOut")) {
         const total = data.totalPcu;
-        const inShare =
-          total && branch.inflowPcu !== null ? (branch.inflowPcu / total) * 100 : null;
-        const outShare =
-          total && branch.outflowPcu !== null
-            ? (branch.outflowPcu / total) * 100
-            : null;
-        if (inShare !== null) parts.push(`佔駛入 ${pct(inShare)}`);
-        else if (outShare !== null) parts.push(`佔駛出 ${pct(outShare)}`);
+        const shareOf = (value: number | null) =>
+          total && value !== null ? (value / total) * 100 : null;
+        const inShare = shareOf(branch.inflowPcu);
+        const outShare = shareOf(branch.outflowPcu);
+        if (wants("shareIn") && inShare !== null)
+          parts.push(`佔駛入 ${pct(inShare)}`);
+        if (wants("shareOut") && outShare !== null)
+          parts.push(`佔駛出 ${pct(outShare)}`);
       }
       if (wants("balance")) {
         if (branch.inflowPcu !== null && branch.outflowPcu !== null) {

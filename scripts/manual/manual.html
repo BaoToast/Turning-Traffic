@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8" />
-<title>Turning Traffic 新手操作手冊 v2.1.24</title>
+<title>Turning Traffic 新手操作手冊 v2.1.25</title>
 <style>
   :root{
     --navy:#17353E; --teal:#087F75; --orange:#C77A18; --ink:#17353E;
@@ -98,7 +98,7 @@
     </tbody>
   </table>
 
-  <p class="stamp">系統版本：v2.1.24　更新日期：2026-08-25</p>
+  <p class="stamp">系統版本：v2.1.25　更新日期：2026-08-25</p>
 </section>
 
 <!-- ══════════ 1 ══════════ -->
@@ -601,7 +601,8 @@
     <tr><td class="k">各支線駛出流量（PCU/hr）</td><td>路口A：駛出 3,417.8 PCU/hr</td></tr>
     <tr><td class="k">各支線駛入車輛數（輛/hr）</td><td>路口A：駛入 741 輛/hr</td></tr>
     <tr><td class="k">各支線駛出車輛數（輛/hr）</td><td>路口A：駛出 556 輛/hr</td></tr>
-    <tr><td class="k">各支線佔路口總量百分比</td><td>佔駛入 19.6%</td></tr>
+    <tr><td class="k">各支線佔駛入路口總量百分比</td><td>佔駛入 19.6%</td></tr>
+    <tr><td class="k">各支線佔駛出路口總量百分比</td><td>佔駛出 16.6%</td></tr>
     <tr><td class="k">路口總流量與總車輛數</td><td>上午尖峰：總流量 4,795.8 PCU/hr、總車輛數 5,456 輛/hr</td></tr>
     <tr><td class="k">尖峰時段（起訖時間）</td><td>上午尖峰 07:15–08:15</td></tr>
     <tr><td class="k">車種組成（輛數與百分比）</td><td>機車 4,131 輛/調查時段（68.7%）、小型車 1,766（29.4%）⋯</td></tr>
@@ -613,6 +614,25 @@
     <tr><td class="k">範圍內的最大／最小路口</td><td>最高為 T15-02⋯，最低為 T15-01⋯，5 筆平均⋯</td></tr>
   </tbody>
 </table>
+
+<div class="box info">
+  <span class="t">兩個「佔路口總量百分比」差在哪裡？</span>
+  <p><strong>分母是同一個</strong>——都是該路口該尖峰的總流量。
+  這是對的：駛入合計與駛出合計必然相等（同一批車只是依終點重新分組，總量不變），
+  所以兩組百分比各自加起來都是 100%。</p>
+  <p><strong>差別全在分子，而且可以差很多。</strong>
+  駛入多的支線不一定駛出也多。實際的例子：</p>
+  <table>
+    <thead><tr><th style="width:34%">支線</th><th>佔駛入</th><th>佔駛出</th></tr></thead>
+    <tbody>
+      <tr><td class="k">路口A</td><td>10.6%</td><td>10.5%</td></tr>
+      <tr><td class="k">路口B</td><td>10.4%</td><td><strong>27.6%</strong></td></tr>
+      <tr><td class="k">路口F</td><td><strong>42.8%</strong></td><td>14.7%</td></tr>
+    </tbody>
+  </table>
+  <p>所以寫報告時<strong>務必寫清楚是哪一個方向</strong>——草稿會自動寫成
+  「佔駛入 10.6%」或「佔駛出 27.6%」，不會只寫一個沒有方向的百分比。</p>
+</div>
 
 <div class="box info">
   <span class="t">「各支線各車種駛入／駛出車輛數」是從哪裡來的？可以怎麼呈現？</span>
@@ -655,7 +675,7 @@
   <p>「我只想知道 115Q2 每個路口的駛入車流量、車輛數及百分比」——</p>
   <p>統計範圍選<strong>單一季度 → 115Q2</strong>；時段只留<strong>上午尖峰</strong>（或兩個都留）；
   路口<strong>一個都不勾</strong>（＝全部）；支線<strong>一個都不勾</strong>（＝全部）；
-  數字只勾<strong>各支線駛入流量、各支線駛入車輛數、各支線佔路口總量百分比、路口總流量與總車輛數</strong>；
+  數字只勾<strong>各支線駛入流量、各支線駛入車輛數、各支線佔駛入路口總量百分比、路口總流量與總車輛數</strong>；
   敘述方式選<strong>依路口分段</strong>。按 <span class="btn">產生草稿</span>，
   每個路口就會各成一段，只寫你要的那幾個數字，沒勾的一律不出現。</p>
 </div>
@@ -816,7 +836,45 @@
 </div>
 
 <div class="box new">
-  <span class="t">本版（v2.1.24）更新內容</span>
+  <span class="t">本版（v2.1.25）更新內容</span>
+
+  <p><strong>「各支線佔路口總量百分比」拆成駛入、駛出兩個選項。</strong></p>
+
+  <p>先講清楚舊版那個數字是什麼：草稿寫的
+  <span style="white-space:nowrap">「路口A：駛入 422.4 PCU/hr；駛出 417.8 PCU/hr；<strong>佔駛入 10.6%</strong>」</span>
+  裡的 10.6%，是<strong>駛入專屬</strong>的比例（422.4 ÷ 路口總量），
+  <strong>不是</strong>一個方向無關的值。</p>
+
+  <p><strong>而舊版永遠只寫得出駛入那一組。</strong>兩個方向的百分比其實都算了，
+  但只有在「這一筆完全沒有駛入資料」時才會改寫駛出——實際上不會發生，
+  所以「佔駛出」一次都沒有真正出現過。選項名稱又只寫「佔路口總量百分比」，
+  沒告訴您它是駛入的。</p>
+
+  <p><strong>兩個方向的數字差很多，不能互相代替。</strong>
+  分母是同一個（都是路口總量，因為駛入合計必然等於駛出合計），
+  差別全在分子——駛入多的支線不一定駛出也多：</p>
+
+  <table style="width:100%;border-collapse:collapse;margin:2mm 0;font-size:9.5pt">
+    <tr>
+      <th style="text-align:left;padding:1mm 2mm;border-bottom:1px solid #ccc">支線</th>
+      <th style="text-align:right;padding:1mm 2mm;border-bottom:1px solid #ccc">佔駛入</th>
+      <th style="text-align:right;padding:1mm 2mm;border-bottom:1px solid #ccc">佔駛出</th>
+    </tr>
+    <tr><td style="padding:1mm 2mm">路口A</td><td style="text-align:right;padding:1mm 2mm">10.6%</td><td style="text-align:right;padding:1mm 2mm">10.5%</td></tr>
+    <tr><td style="padding:1mm 2mm">路口B</td><td style="text-align:right;padding:1mm 2mm">10.4%</td><td style="text-align:right;padding:1mm 2mm"><strong>27.6%</strong></td></tr>
+    <tr><td style="padding:1mm 2mm">路口F</td><td style="text-align:right;padding:1mm 2mm"><strong>42.8%</strong></td><td style="text-align:right;padding:1mm 2mm">14.7%</td></tr>
+  </table>
+
+  <p><strong>本版拆成兩個勾選項</strong>：「各支線佔駛入路口總量百分比」與
+  「各支線佔駛出路口總量百分比」，各勾各的。兩個都勾時，草稿會寫成
+  <span style="white-space:nowrap">「⋯；佔駛入 10.6%；佔駛出 10.5%」</span>，駛入排在駛出前面。</p>
+
+  <p><strong>沒有動任何計算。</strong>您<strong>既有的條件範本照樣可以用</strong>——
+  舊範本裡的那一項會自動換成「佔駛入」，產生的草稿與 v2.1.24 逐字相同。</p>
+</div>
+
+<div class="box info">
+  <span class="t">v2.1.24：範本改為各計畫獨立，駛入／駛出拆成兩個選項</span>
 
   <p><strong>一、範本現在專屬於各自的計畫。</strong>
   結論草稿的「條件範本」與報表的「匯出項目範本」，舊版是<strong>所有計畫共用同一份清單</strong>

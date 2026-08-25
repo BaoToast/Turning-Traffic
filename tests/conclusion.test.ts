@@ -135,6 +135,17 @@ const LEGACY_BRANCH_COMPOSITION = [
   "branchComposition",
 ] as unknown as ConclusionMetricKey[];
 
+/*
+ * 同理，v2.1.25 以前的 "share"（各支線佔路口總量百分比）。
+ * 它只會展開成 shareIn，不是兩項——舊版的「佔駛出」那一支是死碼，
+ * 從來沒有被寫出來過，展開成兩項反而會多出一段從沒有過的文字。
+ * 下面那支測試斷言「沒有勾駛出就不該出現駛出」，正好把這件事釘住。
+ */
+const LEGACY_INFLOW_AND_SHARE = [
+  "inflowPcu",
+  "share",
+] as unknown as ConclusionMetricKey[];
+
 function cond(over: Partial<ConclusionCondition> = {}): ConclusionCondition {
   return { ...DEFAULT_CONDITION, ...over };
 }
@@ -220,7 +231,7 @@ test("使用者只勾「駛入流量＋百分比」時，草稿就只寫這兩�
     cond({
       scope: { kind: "quarter", quarter: "115Q2" },
       peaks: ["AM"],
-      metrics: ["inflowPcu", "share"],
+      metrics: LEGACY_INFLOW_AND_SHARE,
       grouping: "byIntersection",
     }),
     META,
@@ -304,6 +315,69 @@ test("呈現方式選「跟著車種組成分析頁」時，用該支線自己�
   );
   assert.match(followTwoWay, /雙向合計各車種：機車 6,400/);
   assert.doesNotMatch(followTwoWay, /駛入各車種：機車/);
+});
+
+/*
+ * ── 佔比拆成兩個方向（v2.1.25）─────────────────────────────────
+ */
+
+test("舊的 share 只換成 shareIn，不會多出一段從沒有過的「佔駛出」", () => {
+  const migrated = normalizeCondition(cond({ metrics: LEGACY_INFLOW_AND_SHARE }));
+  assert.deepEqual(migrated.metrics, ["inflowPcu", "shareIn"]);
+});
+
+test("舊範本的佔比輸出，與拆分前逐字相同", () => {
+  const viaLegacy = buildConclusion(
+    [makeRecord()],
+    cond({ peaks: ["AM"], metrics: LEGACY_INFLOW_AND_SHARE }),
+    META,
+  );
+  const viaSplit = buildConclusion(
+    [makeRecord()],
+    cond({ peaks: ["AM"], metrics: ["inflowPcu", "shareIn"] }),
+    META,
+  );
+  assert.equal(viaLegacy, viaSplit);
+});
+
+test("只勾駛出佔比時，寫的是佔駛出（舊版永遠寫不出這一行）", () => {
+  const text = buildConclusion(
+    [makeRecord()],
+    cond({ peaks: ["AM"], metrics: ["shareOut"] }),
+    META,
+  );
+  assert.match(text, /佔駛出 /);
+  assert.doesNotMatch(text, /佔駛入 /);
+});
+
+test("兩個佔比都勾時，兩行都寫，而且駛入排在駛出前面", () => {
+  const text = buildConclusion(
+    [makeRecord()],
+    cond({ peaks: ["AM"], metrics: ["shareIn", "shareOut"] }),
+    META,
+  );
+  const line = text.split("\n").find((l) => /佔駛入 /.test(l)) || "";
+  assert.match(line, /佔駛入 /);
+  assert.match(line, /佔駛出 /);
+  assert.ok(
+    line.indexOf("佔駛入") < line.indexOf("佔駛出"),
+    "駛入要排在駛出前面，順序才和其他成對的指標一致",
+  );
+});
+
+test("兩個方向的佔比用同一個分母（路口總量），所以各自加總都是 100%", () => {
+  /*
+   * 分母相同是對的：駛入合計與駛出合計必然相等（同一批車依終點重新分組）。
+   * 這一支釘住的是「不可以有人把駛出的分母偷偷換成別的東西」——
+   * 換了之後每一格看起來都還是個合理的百分比，從畫面上看不出來。
+   */
+  const record = makeRecord();
+  const peak = record.peaks.AM!;
+  const total = peak.totalPcu!;
+  const sumIn = peak.branches.reduce((s, b) => s + (b.inflowPcu || 0), 0);
+  const sumOut = peak.branches.reduce((s, b) => s + (b.outflowPcu || 0), 0);
+  assert.ok(Math.abs(sumIn - total) < 0.01, `駛入合計 ${sumIn} 應等於總量 ${total}`);
+  assert.ok(Math.abs(sumOut - total) < 0.01, `駛出合計 ${sumOut} 應等於總量 ${total}`);
 });
 
 /*
