@@ -11170,14 +11170,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.22-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.23-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.22-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.23-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
@@ -11716,8 +11716,14 @@ function ConclusionStudio(props: {
                           type="checkbox"
                           checked={condition.peaks.includes(entry[0])}
                           onChange={function () {
-                            const next = toggle(condition.peaks, entry[0]);
-                            patch({ peaks: next.length ? next : condition.peaks });
+                            /*
+                             * 兩個都不勾是有效的選擇 ＝「不敘述尖峰時段」，
+                             * 只寫全調查時段的數值（例如只要各路口的車種組成
+                             * 那一行）。舊寫法在取消最後一個時把它加回去，
+                             * 使用者永遠取消不掉，只能連同不想要的尖峰段落
+                             * 一起產生再自己刪。
+                             */
+                            patch({ peaks: toggle(condition.peaks, entry[0]) });
                           }}
                         />
                         {entry[1]}
@@ -11743,7 +11749,8 @@ function ConclusionStudio(props: {
                   })}
                 </div>
                 <p className="conclusion-hint">
-                  資料別一個都不勾＝全部都寫。時段至少要留一個。
+                  資料別一個都不勾＝全部都寫。
+                  <b>時段兩個都不勾＝只寫全調查時段的數值</b>（記得勾「車種組成」）。
                   {surveyTypes.includes("待設定") ? (
                     <>
                       <br />

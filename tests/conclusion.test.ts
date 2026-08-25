@@ -597,7 +597,11 @@ test("normalizeCondition 會補齊欄位並擋掉壞值", () => {
     branchCompositionMode: "亂寫" as never,
   });
   assert.deepEqual(fixed.scope, { kind: "project" });
-  assert.deepEqual(fixed.peaks, ["AM", "PM"]);
+  /*
+   * 空的時段陣列**不是**壞值，是「不敘述尖峰時段」這個有效選擇，
+   * 必須原樣保留。（缺欄位才補預設，另有一支測試涵蓋。）
+   */
+  assert.deepEqual(fixed.peaks, []);
   assert.equal(fixed.grouping, "byIntersection");
   assert.equal(fixed.digits, 1);
   assert.equal(fixed.branchCompositionMode, "follow");
@@ -630,4 +634,62 @@ test("三種敘述方式下，growth 與 extremes 寫不出來時都會說明", 
       `${grouping} 下勾了 growth／extremes 卻一個字都沒寫`,
     );
   }
+});
+
+/*
+ * ── 時段可以一個都不選 ──
+ *
+ * 使用者的實際需求：只想要「車種組成（全調查時段）」那一行。
+ * 但舊版強制「時段至少要留一個」，取消最後一個尖峰時會被自動加回去，
+ * 於是草稿一定夾帶不要的尖峰段落，只能產生完再自己刪。
+ *
+ * 空陣列是有效的選擇，而且**不可以**在任何一層被偷偷補回預設值。
+ */
+test("兩個尖峰都不勾時，只寫車種組成，不寫任何尖峰段落", () => {
+  const record = makeRecord({ station: "T15-01", quarter: "115Q2" });
+  const text = buildConclusion([record], {
+    ...DEFAULT_CONDITION,
+    peaks: [],
+    metrics: ["composition"],
+  }, META);
+  assert.match(text, /車種組成（全調查時段）/);
+  assert.match(text, /敘述時段：不敘述尖峰時段/);
+  assert.doesNotMatch(text, /上午尖峰/);
+  assert.doesNotMatch(text, /下午尖峰/);
+  /* 沒有尖峰就不會出現 PCU/hr，那句說明也不該印 */
+  assert.doesNotMatch(text, /PCU\/hr 與 輛\/hr 是該尖峰/);
+});
+
+test("normalizeCondition 不可以把「刻意的空時段」補回預設", () => {
+  const normalized = normalizeCondition({ ...DEFAULT_CONDITION, peaks: [] });
+  assert.deepEqual(normalized.peaks, [], "空陣列要原樣保留");
+});
+
+test("舊範本缺 peaks 欄位時，仍然補上預設的上午＋下午", () => {
+  const partial = { ...DEFAULT_CONDITION } as Partial<ConclusionCondition>;
+  delete partial.peaks;
+  const normalized = normalizeCondition(partial as ConclusionCondition);
+  assert.deepEqual(normalized.peaks, DEFAULT_CONDITION.peaks);
+});
+
+test("不勾時段又只選了尖峰底下的項目時，明講產生不出東西", () => {
+  const record = makeRecord({ station: "T15-01", quarter: "115Q2" });
+  const text = buildConclusion([record], {
+    ...DEFAULT_CONDITION,
+    peaks: [],
+    metrics: ["total", "inflowPcu"],
+  }, META);
+  assert.match(text, /沒有勾選任何時段/);
+  assert.match(text, /車種組成/);
+});
+
+test("有勾時段時，行為與原本完全相同", () => {
+  const record = makeRecord({ station: "T15-01", quarter: "115Q2" });
+  const before = buildConclusion([record], {
+    ...DEFAULT_CONDITION,
+    peaks: ["AM", "PM"],
+  }, META);
+  assert.match(before, /上午尖峰/);
+  assert.match(before, /下午尖峰/);
+  assert.match(before, /敘述時段：上午尖峰、下午尖峰。/);
 });

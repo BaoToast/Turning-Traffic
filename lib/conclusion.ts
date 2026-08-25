@@ -235,7 +235,17 @@ export function normalizeCondition(
     ...DEFAULT_CONDITION,
     ...source,
     scope: validScope ? (scope as ConclusionScope) : DEFAULT_CONDITION.scope,
-    peaks: list(source.peaks).length
+    /*
+     * 時段可以一個都不選 ＝「不敘述尖峰時段」，只寫全調查時段的數值
+     * （例如只要各路口的車種組成那一行）。
+     *
+     * 所以這裡必須分清楚兩件事：
+     *   ・欄位**根本沒有**（舊範本缺欄位）→ 補上預設的上午＋下午。
+     *   ・欄位**有、但是空陣列**（使用者刻意兩個都不勾）→ 就是空的，
+     *     不可以自作主張補回預設，否則使用者永遠取消不掉。
+     * 舊寫法只看長度，兩種情況被當成同一件事。
+     */
+    peaks: Array.isArray(source.peaks)
       ? (list(source.peaks) as PeakKey[])
       : DEFAULT_CONDITION.peaks,
     intersectionKeys: list(source.intersectionKeys) as string[],
@@ -635,7 +645,8 @@ export function buildConclusion(
   /* 舊版範本可能缺欄位，一律先補成完整形狀再用（見 normalizeCondition）。 */
   const condition = normalizeCondition(rawCondition);
   const chosen = selectRecords(records, condition);
-  const peaks = condition.peaks.length ? condition.peaks : (["AM", "PM"] as PeakKey[]);
+  /* 空陣列是有效的選擇（不敘述尖峰時段），不要在這裡又補回預設。 */
+  const peaks = condition.peaks;
   const digits = condition.digits;
   const out: string[] = [];
 
@@ -678,17 +689,25 @@ export function buildConclusion(
     `統計範圍：${quarters.length} 個季度（${quarters.join("、")}）、` +
       `${intersections.length} 個路口、共 ${chosen.length} 筆調查紀錄；` +
       `資料別：${surveyTypeText2}；` +
-      `敘述時段：${peaks.map((p) => PEAK_LABEL[p]).join("、")}。`,
+      (peaks.length
+        ? `敘述時段：${peaks.map((p) => PEAK_LABEL[p]).join("、")}。`
+        : "敘述時段：不敘述尖峰時段，只寫全調查時段的數值。"),
   );
   if (condition.branchNames.length)
     out.push(`只敘述指定支線：${condition.branchNames.join("、")}。`);
-  out.push(
-    "說明：PCU/hr 與 輛/hr 是該尖峰「一小時」的流率，僅在同一筆紀錄內可相加；" +
-      "不同路口、不同季度之間只做比較，不做加總。",
-  );
+  /* 沒有寫任何尖峰時，草稿裡不會出現 PCU/hr，這句說明反而讓人困惑。 */
+  if (peaks.length)
+    out.push(
+      "說明：PCU/hr 與 輛/hr 是該尖峰「一小時」的流率，僅在同一筆紀錄內可相加；" +
+        "不同路口、不同季度之間只做比較，不做加總。",
+    );
 
   const wants = (key: ConclusionMetricKey) => condition.metrics.includes(key);
-  if (wants("branchComposition"))
+  /*
+   * 各支線的車種輛數是寫在「某一個尖峰」底下的，一個尖峰都沒選時根本不會
+   * 出現，這句說明也就不必印——印了會讓人以為下面有東西卻找不到。
+   */
+  if (wants("branchComposition") && peaks.length)
     out.push(
       "說明：各支線各車種輛數取自「車種組成分析」的『全調查時段道路方向車種數量』，" +
         "單位是 輛／調查時段（整個調查期間的累計），不能和上面的 輛/hr 相比或相加；" +
@@ -698,6 +717,22 @@ export function buildConclusion(
         )?.label || "跟著車種組成分析頁的設定") +
         "。",
     );
+  /*
+   * 一個尖峰都不選是允許的（例如只要各路口的車種組成那一行），但這時
+   * 「要寫哪些數字」裡至少得有一項是跟尖峰無關的，否則草稿只會剩下標題。
+   * 與其交出一份空的草稿，不如直接說清楚差在哪裡。
+   */
+  const PEAK_FREE_METRICS: ConclusionMetricKey[] = ["composition"];
+  if (!peaks.length && !PEAK_FREE_METRICS.some((key) => wants(key))) {
+    out.push("");
+    out.push(
+      "目前沒有勾選任何時段，而「要寫哪些數字」裡選的項目都是寫在尖峰時段底下的，" +
+        "因此沒有內容可以產生。請勾選「車種組成」（那一項寫的是全調查時段的累計量，" +
+        "不需要尖峰），或者回去勾一個尖峰時段。",
+    );
+    return out.join("\n");
+  }
+
   let section = 0;
   const heading = (text: string) => {
     section += 1;

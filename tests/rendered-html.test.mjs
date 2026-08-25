@@ -92,3 +92,24 @@ test("ships the rewritten beginner manual in PDF and editable Word", async () =>
   ])
     assert.ok(manual.includes(text), "手冊缺少段落：" + text);
 });
+
+/*
+ * 手冊裡一定要有「本版」的更新說明。
+ *
+ * 姊妹專案踩過的坑：升版時用字串取代把新的更新說明插進 manual.html，
+ * 但比對的字串對不上，replace 靜靜地什麼都沒做，連續三版的更新說明
+ * 完全沒進到手冊裡，而手冊照樣產生、版號也照樣對得上。
+ * 只檢查「手冊裡有這個版號」等於沒檢查（標題與版本戳記本來就有），
+ * 所以這裡檢查的是**更新說明區塊的標題**帶著目前版號。
+ */
+test("手冊裡有本版的更新說明區塊", async () => {
+  const manual = await readFile(
+    new URL("../scripts/manual/manual.html", import.meta.url),
+    "utf8",
+  );
+  assert.ok(
+    manual.includes(`本版（${VERSION}）`),
+    `manual.html 裡找不到「本版（${VERSION}）」——升版時可能只改了版號、` +
+      `忘了寫這一版做了什麼，或是字串取代沒有生效。`,
+  );
+});
