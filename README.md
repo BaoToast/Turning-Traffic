@@ -39,6 +39,11 @@ npm ci
 npm run dev
 ```
 
+`npm ci` 會連到 **`cdn.sheetjs.com`** 取得 `xlsx`（SheetJS 官方 0.20.3 發布包，
+不在 npm registry 上）。在受限網路或離線環境會出現
+`403 Forbidden - GET https://cdn.sheetjs.com/...`——**那是網路問題，不是程式問題**，
+詳見 `DEPLOYMENT.md`。
+
 正式檢查：
 
 ```bash

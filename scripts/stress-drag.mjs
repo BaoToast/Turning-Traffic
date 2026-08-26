@@ -1,16 +1,20 @@
 import { chromium } from "playwright";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import http from "node:http";
-import { join, extname } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { launchOptions } from "./chrome-path.mjs";
-const ROOT = process.argv[2];
-const LABEL = process.argv[3];
+const here = dirname(fileURLToPath(import.meta.url));
+const ROOT = resolve(process.argv[2] ?? join(here, "..", "github-pages-dist"));
+const LABEL = process.argv[3] ?? "七叉路口拖曳壓力測試";
 const MIME = {".html":"text/html",".js":"text/javascript",".css":"text/css",".json":"application/json",".svg":"image/svg+xml",".png":"image/png"};
 const server = http.createServer((req,res)=>{ let p=decodeURIComponent(req.url.split("?")[0]); if(p==="/")p="/index.html";
   const f=join(ROOT,p); if(!existsSync(f)||statSync(f).isDirectory()){res.writeHead(404);res.end();return;}
   res.writeHead(200,{"content-type":MIME[extname(f)]??"application/octet-stream"}); res.end(readFileSync(f)); });
 await new Promise(r=>server.listen(8112,r));
-const seed = readFileSync("/home/claude/work/turning/scripts/seed-state.json","utf8");
+/* 種子檔以本檔位置為基準；舊版寫死了某一台機器上的絕對路徑，
+   在別台電腦上會直接丟出 ENOENT。 */
+const seed = readFileSync(new URL("./seed-state.json", import.meta.url), "utf8");
 const b = await chromium.launch(launchOptions());
 const page = await (await b.newContext({viewport:{width:1680,height:1050},locale:"zh-TW"})).newPage();
 let crashed=false, errs=0;

@@ -379,8 +379,13 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.26";
+export const VERSION = "v2.1.27";
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.27",
+    date: "2026-08-26",
+    note: "把上一版修好的發布結構釘進自動檢查，沒有變更任何計算規則或操作方式。新增 tests/release-structure.test.mjs（9 項）：只能有一條 GitHub Pages 發布路徑、點號開頭檔案（.nojekyll／.gitignore／.github／.openai/hosting.json）不得遺失、不得出現第二套套件鎖定檔、根目錄不得殘留上一版的雜湊資產、手冊必須跟著版號重新產生且舊版手冊要刪除、手冊封面戳記與每一頁頁尾的版號與日期必須一致、更新紀錄的最新版號必須等於程式版號。前 8 項已逐一實測會在對應的錯誤狀態下失敗（共 11 種情境），不是只加會通過的檢查。另修正 DEPLOYMENT.md（仍寫著已退役的 GPT Site、已移除的 pnpm 指令與兩條部署路徑），並將 CHANGELOG.md 改為指向本清單這個唯一來源；scripts/stress-drag.mjs 原本寫死某一台機器上的種子檔絕對路徑且沒有正式建置目錄預設值，現已改為可直接執行；第 9 項守門檢查會防止無參數啟動錯誤再次出現。",
+  },
   {
     version: "v2.1.26",
     date: "2026-08-26",
