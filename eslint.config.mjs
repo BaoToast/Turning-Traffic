@@ -39,6 +39,15 @@ const eslintConfig = defineConfig([
     },
     rules: {
       "react-hooks/set-state-in-effect": "off",
+      "no-irregular-whitespace": [
+        "error",
+        {
+          skipStrings: true,
+          skipComments: true,
+          skipRegExps: true,
+          skipTemplates: true,
+        },
+      ],
     },
   },
 ]);

@@ -240,7 +240,6 @@ const firstLabelX = async () =>
   });
 
 await setMode("駛入＋駛出");
-const bothCardStart = await firstCardX();
 await dragBy(".diagram-canvas [data-card-id]", 150, 0);
 const bothCardAfter = await firstCardX();
 await setMode("只顯示駛入");

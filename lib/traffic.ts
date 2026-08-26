@@ -379,8 +379,13 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.25";
+export const VERSION = "v2.1.26";
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.26",
+    date: "2026-08-26",
+    note: "發布與維護健檢版，沒有變更任何交通量計算規則。(1) GitHub Actions 改為只執行建置與測試，正式網站統一由 GitHub Pages 的 main／root 分支發布，避免自訂 workflow 與分支發布互相覆蓋。(2) 補入 .nojekyll，清除根目錄過期雜湊資產與 v2.1.21～v2.1.25 舊手冊，避免快取或人工上傳留下多版本檔案。(3) 套件管理統一為 npm，移除失同步的 pnpm 鎖定檔；SheetJS 改用官方 0.20.3 發布包，正式相依套件安全掃描為 0 項弱點。(4) 修正全部 ESLint 錯誤與警告，並補齊 React 儲存 effect 的相依項；舊版備份相容欄位與目前畫面行為不變。(5) 線上版本只用帶版號手冊、?v= 參數及新版專屬雜湊資產驗證，不用容易受 CDN 快取影響的固定路徑判斷。",
+  },
   {
     version: "v2.1.25",
     date: "2026-08-25",

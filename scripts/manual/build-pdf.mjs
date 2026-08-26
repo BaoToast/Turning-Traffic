@@ -5,7 +5,7 @@ import { chromePath } from "../chrome-path.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = join(here, "manual.html");
-const out = join(here, "..", "..", "public", "Turning-Traffic-v2.1.25-新手操作手冊.pdf");
+const out = join(here, "..", "..", "public", "Turning-Traffic-v2.1.26-新手操作手冊.pdf");
 
 const chrome = chromePath();
 const browser = await chromium.launch({ executablePath: chrome, args: ["--no-sandbox"] });
@@ -24,7 +24,7 @@ await page.pdf({
   margin: { top: "20mm", bottom: "18mm", left: "16mm", right: "16mm" },
   headerTemplate: `<div style="${style}text-align:right;">Turning Traffic ｜ 路口尖峰轉向交通量分析 新手操作手冊</div>`,
   footerTemplate:
-    `<div style="${style}text-align:center;">v2.1.25 ｜ 2026-08-25 ｜ 正式成果前請先下載備份　　第 ` +
+    `<div style="${style}text-align:center;">v2.1.26 ｜ 2026-08-26 ｜ 正式成果前請先下載備份　　第 ` +
     `<span class="pageNumber"></span> / <span class="totalPages"></span> 頁</div>`,
 });
 

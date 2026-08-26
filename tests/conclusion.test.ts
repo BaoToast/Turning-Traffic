@@ -19,10 +19,6 @@ const META = {
   generatedAt: "2026-08-23 10:00",
 };
 
-function branch(name: string, over: Partial<ConclusionRecord["peaks"]> = {}) {
-  return over;
-}
-
 function makeRecord(over: Partial<ConclusionRecord> = {}): ConclusionRecord {
   return {
     id: over.station + "-" + over.quarter,

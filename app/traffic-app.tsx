@@ -158,6 +158,8 @@ const PCE_LABELS = {
 };
 const MOVE_LABELS = { left: "左轉", through: "直行", right: "右轉" };
 const ANALYSIS_VEHICLES = ["motorcycle", "car", "heavy", "special"] as const;
+const EMPTY_REPORT_TEMPLATES: ReportTemplate[] = [];
+const EMPTY_CONCLUSION_TEMPLATES: ConclusionTemplate[] = [];
 
 function recordVehicleIds(record: TrafficRecord) {
   const ids = new Set<string>();
@@ -3257,9 +3259,10 @@ export default function TrafficApp() {
   >({});
   const [conclusionTemplatesByProject, setConclusionTemplatesByProject] =
     useState<Record<string, ConclusionTemplate[]>>({});
-  const reportTemplates = reportTemplatesByProject[activeProjectId] || [];
+  const reportTemplates =
+    reportTemplatesByProject[activeProjectId] || EMPTY_REPORT_TEMPLATES;
   const conclusionTemplates =
-    conclusionTemplatesByProject[activeProjectId] || [];
+    conclusionTemplatesByProject[activeProjectId] || EMPTY_CONCLUSION_TEMPLATES;
   const setReportTemplates = scopedSetter<ReportTemplate[]>(
     setReportTemplatesByProject,
     [],
@@ -3528,9 +3531,10 @@ export default function TrafficApp() {
         catalogByProject: catalogByProject,
         mappingsByProject: mappingsByProject,
         /* 舊版欄位仍然寫出目前計畫的那一份，萬一退版也還讀得到東西。 */
-        pce: pce,
-        vehicleCatalog: vehicleCatalog,
-        vehicleMappings: vehicleMappings,
+        pce: pceByProject[activeProjectId] || DEFAULT_PCE,
+        vehicleCatalog:
+          catalogByProject[activeProjectId] || CORE_VEHICLE_LABELS,
+        vehicleMappings: mappingsByProject[activeProjectId] || {},
         formatMemories: formatMemories,
         vehicleSchemes: vehicleSchemes,
         reportTemplatesByProject: reportTemplatesByProject,
@@ -3586,13 +3590,15 @@ export default function TrafficApp() {
       activeProjectId,
       records,
       nameMap,
-      pce,
-      vehicleCatalog,
-      vehicleMappings,
+      pceByProject,
+      catalogByProject,
+      mappingsByProject,
       formatMemories,
       vehicleSchemes,
       reportTemplatesByProject,
       conclusionTemplatesByProject,
+      reportTemplates,
+      conclusionTemplates,
       recordRevisions,
       loaded,
     ],
@@ -5046,12 +5052,6 @@ export default function TrafficApp() {
     });
   }
 
-  /* eslint-disable react-hooks/preserve-manual-memoization --
-   * React Compiler 會提醒「手動 memo 無法保留」，因為 selected 是從 records 推導出來的
-   * 物件、它判斷可能被就地修改。本專案的建置流程並沒有啟用 React Compiler
-   * （vite.config.ts 沒有掛 babel-plugin-react-compiler），所以這裡的 useMemo 是實際
-   * 生效的最佳化；若日後導入 Compiler，可以把這三個 useMemo 直接拿掉改由它自動處理。
-   */
   /*
    * 三份轉向圖 SVG 都很大（7 叉路口有 14 張卡、上百條路徑），舊版直接寫在 JSX 裡，
    * 任何一次 render（包含輸入框打字、切換分頁）都會重新組三次字串並讓瀏覽器
@@ -5124,7 +5124,6 @@ export default function TrafficApp() {
     ],
   );
 
-  /* eslint-enable react-hooks/preserve-manual-memoization */
 
   /*
    * 拖曳圖卡與路口標籤。
@@ -11289,14 +11288,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.25-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.26-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.25-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.26-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >

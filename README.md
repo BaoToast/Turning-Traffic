@@ -19,7 +19,7 @@
 - JSON／ZIP 備份還原、A／B 電腦移轉、同季度同站號覆蓋策略、錯誤季度刪除、名稱映射與版本紀錄。
 - 最終版新增儲存格級來源追溯、匯入版本差異／還原、成果審核狀態、季度品質報告，以及 OD 矩陣、支線平衡與連續 60 分鐘尖峰敏感度分析。
 - 道路與流向管理保留清楚的簡潔道路預覽；需要調整轉向圖數據框時，另開全幅「圖卡排版預覽」，可直接拖曳或輸入左右 X／上下 Y 位移。版面依標準路口跨季度共用，匯出前會提示可能重疊。
-- 網站內建給非交通專業使用者的「新手操作手冊」頁面，並提供 12 頁 PDF 版下載；內容涵蓋完整操作流程、名詞、單位、品質檢查、轉向圖、輸出與備份。
+- 網站內建給非交通專業使用者的「新手操作手冊」頁面，並提供完整 PDF／DOCX 版下載；內容涵蓋完整操作流程、名詞、單位、品質檢查、轉向圖、輸出與備份。
 - 系統不加入容量相關分析，專注尖峰轉向流量彙整與比較。
 
 ## 尖峰計算原則
@@ -32,25 +32,27 @@
 
 ## 本機執行
 
-需要 Node.js 22 與 pnpm。
+需要 Node.js 22 與 npm。
 
 ```bash
-pnpm install
-pnpm dev
+npm ci
+npm run dev
 ```
 
 正式檢查：
 
 ```bash
-pnpm build
-pnpm test
-pnpm test:engine
-pnpm build:github
+npm run build
+npm test
+npm run test:engine
+npm run build:github
 ```
 
 ## GitHub Pages
 
-推送 `main` 後，`.github/workflows/pages.yml` 會建立靜態版並發布。首次使用時需在 GitHub 專案 Settings → Pages 將 Source 設為 **GitHub Actions**。
+GitHub 專案 Settings → Pages 的 Source 固定為 **Deploy from a branch → main → / (root)**。推送 `main` 後，內建的 `pages-build-deployment` 會發布根目錄網站；`.github/workflows/pages.yml` 只負責執行建置與測試，不另行部署。
+
+若用 GitHub 網頁手動上傳，請特別確認 `.github/`、`.nojekyll`、`.gitignore` 等點號開頭項目已一併上傳。判斷線上是否為最新版時，只使用帶版號的手冊檔名、`?v=` 查詢參數或該版專屬的雜湊資產；不要只讀固定檔名判斷，以免被 CDN 快取誤導。
 
 ## 資料與隱私
 

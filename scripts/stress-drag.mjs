@@ -21,7 +21,7 @@ await page.goto("http://localhost:8112/"); await page.waitForTimeout(1500);
 // 7叉路口 + 開啟排版預覽
 await page.locator('aside button:has-text("路口轉向圖"), nav button:has-text("路口轉向圖")').first().click();
 await page.waitForTimeout(1000);
-try { await page.locator("select").filter({hasText:"岡山交流道"}).first().selectOption({label:"台1－岡山交流道路口"}); } catch(e){ console.log("  (無法切7叉)"); }
+try { await page.locator("select").filter({hasText:"岡山交流道"}).first().selectOption({label:"台1－岡山交流道路口"}); } catch { console.log("  (無法切7叉)"); }
 await page.waitForTimeout(1200);
 const PREVIEW = process.argv[4] === "preview";
 if (PREVIEW) {
@@ -55,8 +55,8 @@ try {
 } catch(e){ console.log(`[${LABEL}] 拖曳中斷於第 ${steps} 步：`, e.message.slice(0,80)); }
 const elapsed = Date.now()-t0;
 let alive=0, store={bytes:0,revisions:0};
-try { alive = await page.evaluate(()=>document.querySelectorAll("[data-card-id]").length, {timeout:5000}); } catch(e){ alive=-1; }
-try { store = await page.evaluate(()=>{const raw=localStorage.getItem("turning-traffic-state-v2")||"";const j=JSON.parse(raw||"{}");return {bytes:raw.length,revisions:(j.recordRevisions||[]).length};}, {timeout:5000}); } catch(e){}
+try { alive = await page.evaluate(()=>document.querySelectorAll("[data-card-id]").length, {timeout:5000}); } catch { alive=-1; }
+try { store = await page.evaluate(()=>{const raw=localStorage.getItem("turning-traffic-state-v2")||"";const j=JSON.parse(raw||"{}");return {bytes:raw.length,revisions:(j.recordRevisions||[]).length};}, {timeout:5000}); } catch { /* best-effort stress probe */ }
 console.log(`[${LABEL}] ${steps} 步 / ${elapsed}ms / 每步 ${(elapsed/Math.max(1,steps)).toFixed(0)}ms / 存活圖卡 ${alive} / crashed=${crashed} / pageerrors=${errs}`);
 const writes = await page.evaluate(()=>window.__writes).catch(()=>-1);
 console.log(`[${LABEL}] localStorage ${Math.round(store.bytes/1024)} KB / 版本歷程 ${store.revisions} 筆 / 拖曳期間存檔次數 ${writes}`);

@@ -1,24 +1,16 @@
-name: Deploy GitHub Pages
+name: 建置與測試
 
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,13 +19,4 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # npm test 會先完成 Sites 建置，再執行全部單元與建置結果檢查。
       - run: npm test
-      - run: npm run build:github
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: github-pages-dist
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v4
