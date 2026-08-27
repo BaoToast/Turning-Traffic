@@ -1,7 +1,7 @@
 /*
  * 產生一份可直接塞進 localStorage("turning-traffic-state-v2") 的測試狀態，
  * 讓 Playwright 不必跑完整匯入流程就能操作路口轉向圖。
- * 兩個路口：4 叉（T15-03）與 7 叉（T15-01），車種含四大類＋3 個新增車種。
+ * 兩個路口：4 叉（S01-03）與 7 叉（S01-01），車種含四大類＋3 個新增車種。
  */
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -116,8 +116,8 @@ const state = {
   projects: [
     {
       id: projectId,
-      code: "11017",
-      name: "高捷岡山路竹延伸線RKC02標",
+      code: "A0000",
+      name: "示範捷運延伸線示範標",
       client: "測試單位",
       note: "",
       createdAt: "2026-01-02T00:00:00.000Z",
@@ -125,9 +125,9 @@ const state = {
   ],
   activeProjectId: projectId,
   records: [
-    buildRecord({ id: "R1", station: "T15-03", name: "台1－路科一路口", arms: ["A", "B", "C", "D"], quarter: "115Q2", projectId, seed: 7 }),
-    buildRecord({ id: "R2", station: "T15-01", name: "台1－岡山交流道路口", arms: ["A", "B", "C", "D", "E", "F", "G"], quarter: "115Q2", projectId, seed: 11 }),
-    buildRecord({ id: "R3", station: "T15-03", name: "台1－路科一路口", arms: ["A", "B", "C", "D"], quarter: "115Q1", projectId, seed: 13 }),
+    buildRecord({ id: "R1", station: "S01-03", name: "示範1－示範一路口", arms: ["A", "B", "C", "D"], quarter: "115Q2", projectId, seed: 7 }),
+    buildRecord({ id: "R2", station: "S01-01", name: "示範1－示範交流道路口", arms: ["A", "B", "C", "D", "E", "F", "G"], quarter: "115Q2", projectId, seed: 11 }),
+    buildRecord({ id: "R3", station: "S01-03", name: "示範1－示範一路口", arms: ["A", "B", "C", "D"], quarter: "115Q1", projectId, seed: 13 }),
   ],
   nameMap: {},
   pce: {

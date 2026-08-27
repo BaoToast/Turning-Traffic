@@ -356,7 +356,7 @@ await gotoView("歷季趨勢比較");
 await page
   .locator(".trend-controls select")
   .first()
-  .selectOption({ label: "中山路－國昌路－民強街路口" });
+  .selectOption({ label: "示範路－示範二路－示範三街路口" });
 await page.waitForTimeout(500);
 const trendText = await page.locator("main").innerText();
 const hasChart = (await page.locator("#trend-svg").count()) > 0;
@@ -373,7 +373,7 @@ ok("季數統計有寫出「有資料 N 季」", /有資料\s*\d+\s*季/.test(tr
 // 切到並存站號的路口
 const intersectionSelect = page.locator(".trend-controls select").first();
 const options = await intersectionSelect.locator("option").allTextContents();
-const parallel = options.find((t) => /岡山交流道匝道口/.test(t));
+const parallel = options.find((t) => /示範交流道匝道口/.test(t));
 if (parallel) {
   await intersectionSelect.selectOption({ label: parallel });
   await page.waitForTimeout(500);

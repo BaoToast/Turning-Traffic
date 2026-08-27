@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const base = JSON.parse(readFileSync(join(here, "seed-state.json"), "utf8"));
-const template = base.records.find((r) => r.station === "T15-03");
+const template = base.records.find((r) => r.station === "S01-03");
 
 const quarters = [];
 for (const year of [111, 112, 113, 114, 115])
@@ -50,13 +50,13 @@ function scaleRecord(source, { id, quarter, station, name, factor }) {
 const records = [];
 quarters.forEach((quarter, index) => {
   const year = Number(quarter.slice(0, 3));
-  const station = year <= 112 ? "T13-04" : year <= 113 ? "T14-04" : "T15-04";
+  const station = year <= 112 ? "S03-04" : year <= 113 ? "S04-04" : "S01-04";
   records.push(
     scaleRecord(template, {
       id: `W-${quarter}`,
       quarter,
       station,
-      name: "中山路－國昌路－民強街路口",
+      name: "示範路－示範二路－示範三街路口",
       factor: 0.82 + index * 0.03,
     }),
   );
@@ -65,8 +65,8 @@ quarters.forEach((quarter, index) => {
 // 並存站號：同一路口名稱、同一季，北向與南向各一筆。
 for (const quarter of ["114Q1", "114Q2", "114Q3", "114Q4", "115Q1", "115Q2"])
   for (const [station, factor] of [
-    ["T15-09N", 1.1],
-    ["T15-09S", 0.7],
+    ["S01-09N", 1.1],
+    ["S01-09S", 0.7],
   ])
     records.push(
       scaleRecord(template, {
@@ -74,7 +74,7 @@ for (const quarter of ["114Q1", "114Q2", "114Q3", "114Q4", "115Q1", "115Q2"])
         quarter,
         station,
         // 名稱完全相同、站號不同 —— 這才是「同一季並存兩個站」的情境。
-        name: "台1－岡山交流道匝道口",
+        name: "示範1－示範交流道匝道口",
         factor,
       }),
     );

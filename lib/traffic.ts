@@ -379,8 +379,93 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.27";
+export const VERSION = "v2.1.28";
+
+/**
+ * 最後一次「動到計算口徑」的版本。
+ *
+ * 成果鎖定會記下鎖定當時的系統版本。舊版只要版號和目前不同就報「鎖定衝突」，
+ * 但那是字串完全相等比較——**升過一次版，所有已鎖定的資料就永遠亮著紅字**，
+ * 而且下一版又全部重來一次。使用者有 20 幾季資料時，那是 20 幾筆永遠消不掉的警告。
+ *
+ * 更糟的是它會淹掉真正該看的那一個：「鎖定後的資料內容已變更」。兩種訊息長得
+ * 一模一樣紅，看久了就會連真的那次也一起略過。
+ *
+ * 所以改成：只有當鎖定當時的版本**早於**這個常數，數字才可能和現在不同，
+ * 那時候才算衝突。之後的改版若沒有動計算，鎖定仍然有效，只顯示一行說明。
+ *
+ * ⚠️ 升版時如果真的改了計算口徑（PCU 當量、尖峰視窗、駛入推導、車種歸類…），
+ *    **這個常數要跟著改成新版號**，否則舊鎖定會被誤判為仍然有效。
+ *    只改介面、文件、測試或發布流程則不要動它。
+ *
+ * 目前是 v2.1.21：那一版改了尖峰小時的口徑（只接受能精確組成 60 分鐘的格距）。
+ * v2.1.22 是存檔問題，v2.1.23 之後每一版都自述未變更計算。
+ */
+export const LAST_CALC_CHANGE_VERSION = "v2.1.21";
+
+/** 把 "v2.1.21" 拆成 [2,1,21] 以便比大小；認不得的格式回傳空陣列。 */
+function versionParts(version: string): number[] {
+  const match = String(version || "").match(/^v?(\d+(?:\.\d+)*)$/);
+  return match ? match[1].split(".").map(Number) : [];
+}
+
+/** version 是否等於或新於 baseline。格式認不得時一律回傳 false（從嚴）。 */
+export function isVersionAtLeast(version: string, baseline: string): boolean {
+  const a = versionParts(version);
+  const b = versionParts(baseline);
+  if (!a.length || !b.length) return false;
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const left = a[index] ?? 0;
+    const right = b[index] ?? 0;
+    if (left !== right) return left > right;
+  }
+  return true;
+}
+
+export type LockStatus = {
+  /** 真的需要使用者處理的事，會以紅字顯示。 */
+  conflicts: string[];
+  /** 只是說明，不是問題（例如升版但沒動計算）。 */
+  note: string;
+};
+
+/**
+ * 判斷一筆鎖定成果現在的狀況。
+ *
+ * 抽到這裡是為了能被測試：這段邏輯原本寫在畫面元件裡，而它決定的是
+ * 「使用者要不要為了一行紅字去解除、重新鎖定 20 幾季的資料」，值得釘住。
+ *
+ * @param lockedVersion 鎖定當時的系統版本
+ * @param currentVersion 目前的系統版本
+ * @param signatureMatches 鎖定後資料內容有沒有被動過
+ */
+export function lockStatus(
+  lockedVersion: string,
+  currentVersion: string,
+  signatureMatches: boolean,
+): LockStatus {
+  const conflicts: string[] = [];
+  if (!isVersionAtLeast(lockedVersion, LAST_CALC_CHANGE_VERSION))
+    conflicts.push(
+      `鎖定當時的版本（${lockedVersion}）早於最後一次變更計算口徑的 ${LAST_CALC_CHANGE_VERSION}，數字可能已經不同`,
+    );
+  else if (!isVersionAtLeast(currentVersion, lockedVersion))
+    conflicts.push(
+      `這筆成果由較新的系統版本（${lockedVersion}）鎖定，目前版本（${currentVersion}）無法確認相容性`,
+    );
+  if (!signatureMatches) conflicts.push("鎖定後的資料內容已變更");
+  const note =
+    conflicts.length || lockedVersion === currentVersion
+      ? ""
+      : `鎖定當時的版本是 ${lockedVersion}，之後的改版沒有變更計算口徑，數字不受影響。`;
+  return { conflicts, note };
+}
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.28",
+    date: "2026-08-27",
+    note: "把測試種子裡的實際計畫、站號與路口名稱換成示範資料，沒有變更任何計算規則或操作方式。scripts/seed-state.json 與 seed-wide.json 原本寫著實際的委託案名稱、計畫編號、站號與路口名稱，而這兩個檔案就在公開的 repository 裡、也能從 GitHub Pages 下載（裡面的流量數字本來就是 seed-state.mjs 用固定種子產生的，不是實際調查值，但名稱是真的）。本版改為「示範捷運延伸線示範標」「示範1－示範交流道路口」與 A0000／S01-01 這類假識別碼，並新增第 10 項守門檢查釘住種子與選取腳本不得再出現實際名稱。另新增 .gitattributes（* -text）：上一版的備份 ZIP 裡每一個文字檔都被轉成 CRLF，連建置產物也一樣，導致 assets 的內容不再雜湊成它自己的檔名、無法與線上逐位元核對；第 11 項守門檢查釘住這個設定。兩項都已實測會在對應的錯誤狀態下失敗。lib/ 與 app/ 裡的路口名稱刻意未動——referenceMovementForOd 等產品行為靠它判斷，要不要改是產品決策，不是清理工作。另修正使用者回報的鎖定衝突誤報：舊版只要鎖定當時的版號和目前不同就報「鎖定衝突」，是字串完全相等比較，於是升過一次版之後所有已鎖定資料就永遠亮紅字（使用者有 20 幾季），而且和真正該注意的「鎖定後資料內容已變更」長得一模一樣紅，會把真的那次一起淹掉。現在新增 LAST_CALC_CHANGE_VERSION（目前 v2.1.21，最後一次變更尖峰小時口徑的版本）與 lockStatus()，只有鎖定版本早於它才算衝突；升版但沒動計算只顯示一行灰字說明。使用者不需要、也不應該為了這行紅字去解除並重新鎖定——那會蓋掉原本的鎖定時間與版本這份稽核紀錄。新增單元測試 6 項與端對端檢查 2 項。另把 npm test 改為先跑 npm run lint，讓 CI 也把關程式碼檢查。另修正轉向圖同一張圖卡兩半各說各話：駛出那半印支線名稱、駛入那半印原始代碼（sourceCode），使用者替支線改名之後圖上只有一半會變，人工新增的支線會印成「←人工2」，PNG 與 PDF 匯出共用同一支產生程式所以交付出去的圖也一樣。兩半改為同一種取法，圖卡標題仍然保留「代碼 · 名稱」。另移除右上角季度選單裡的死選項「尚無季度」：它被無條件畫出來，但選了會把季度設成空字串、緊接著又被拉回最新一季，等於點了什麼都沒發生，而全系統六個季度選單只有這一個有它；現在只有真的一季都沒有時才顯示。新增端對端腳本 scripts/e2e-arm-name.mjs，兩項都已實測會在未修正的舊版下紅字。發布前增量複查另補上較新版本鎖定的降版相容性警示，以及舊備份自訂車種在結論草稿的顯示名稱 fallback；兩者都不改任何交通量或 PCU 計算。",
+  },
   {
     version: "v2.1.27",
     date: "2026-08-26",

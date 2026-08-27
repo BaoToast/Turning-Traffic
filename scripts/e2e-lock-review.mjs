@@ -135,6 +135,26 @@ ok(
   `已鎖 ${await lockedCount()} 筆`,
 );
 
+/*
+ * 剛鎖定的那一筆，版號就是目前這一版，不可以出現任何「鎖定衝突」。
+ *
+ * 起因（使用者回報，2026-08-27）：畫面上出現紅字「偵測到鎖定衝突：鎖定版本與
+ * 目前系統版本不同」。舊版是版號完全相等比較，於是升過一次版之後，所有已鎖定
+ * 的資料就永遠亮著紅字，而且會淹掉真正該注意的「鎖定後資料內容已變更」。
+ * 現在只有「鎖定當時的版本早於最後一次變更計算口徑的版本」才算衝突。
+ */
+await page.waitForTimeout(300);
+const bannerText = await page.locator(".lock-banner").first().innerText();
+ok(
+  "剛鎖定完不會出現鎖定衝突",
+  !bannerText.includes("鎖定衝突"),
+  bannerText.replace(/\s+/g, " ").slice(0, 90),
+);
+ok(
+  "鎖定狀態卡寫的是「鎖定後內容未被更動」",
+  (await page.locator(".lock-state").innerText()).includes("鎖定後內容未被更動"),
+);
+
 /* ── 3. 鎖定後審核欄位停用 ── */
 await page.waitForTimeout(400);
 ok(

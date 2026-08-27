@@ -10,6 +10,9 @@ import {
   inspectWorkbook,
   inspectWorkbookVariants,
   isSameSurvey,
+  isVersionAtLeast,
+  LAST_CALC_CHANGE_VERSION,
+  lockStatus,
   normalizeIntersectionName,
   pceFactor,
   qualityIssues,
@@ -22,6 +25,8 @@ import {
   SAFE_XLSX_READ_OPTIONS,
   safeObjectKey,
   stationFromFilename,
+  VERSION,
+  VERSION_HISTORY,
 } from "../lib/traffic.ts";
 
 test("normalizes filenames without deleting real road names", () => {
@@ -714,4 +719,81 @@ test("沒有被污染時什麼都不做", () => {
   const before = prototypeFingerprint();
   assert.deepEqual(detectPrototypePollution(before), []);
   assert.doesNotThrow(() => assertNoPrototypePollution(before, "正常檔案.xlsx"));
+});
+
+/*
+ * 鎖定狀態：升版本身不該被當成「鎖定衝突」。
+ *
+ * 起因（使用者回報，2026-08-27）：畫面上出現紅字「偵測到鎖定衝突：鎖定版本與
+ * 目前系統版本不同」。使用者問「這會造成什麼影響？是不是要解除再重新鎖定？
+ * 我有 20 幾季，要逐一解除＋重新鎖定會很麻煩」。
+ *
+ * 舊版是 `record.resultLock.version !== VERSION` ——字串完全相等比較。
+ * 後果是**升過一次版，所有已鎖定的資料就永遠亮紅字**，下一版又全部重來。
+ * 而且它和真正該注意的「鎖定後資料內容已變更」長得一模一樣紅，
+ * 看久了連真的那一次也會被略過。
+ *
+ * 現在只有「鎖定當時的版本早於最後一次變更計算口徑的版本」才算衝突。
+ * 解除、重新鎖定會蓋掉原本的鎖定時間與版本（那是稽核紀錄），不該為了
+ * 一行紅字去做。
+ */
+test("升版但沒有變更計算口徑時，鎖定不算衝突，只顯示一行說明", () => {
+  const status = lockStatus(LAST_CALC_CHANGE_VERSION, "v2.1.28", true);
+  assert.deepEqual(status.conflicts, [], "沒動計算的升版不可以報衝突");
+  assert.match(status.note, /沒有變更計算口徑/);
+});
+
+test("鎖定當時的版本早於最後一次變更計算口徑，才算衝突", () => {
+  const status = lockStatus("v2.1.19", "v2.1.28", true);
+  assert.equal(status.conflicts.length, 1);
+  assert.match(status.conflicts[0], /早於最後一次變更計算口徑/);
+  assert.equal(status.note, "", "已經是衝突了就不要再附一句沒事的說明");
+});
+
+test("較新版本建立的鎖定不可由較舊版本宣告安全", () => {
+  const status = lockStatus("v2.1.30", "v2.1.28", true);
+  assert.equal(status.conflicts.length, 1);
+  assert.match(status.conflicts[0], /較新的系統版本/);
+  assert.equal(status.note, "");
+});
+
+test("鎖定後資料被動過，永遠算衝突", () => {
+  const changed = lockStatus("v2.1.28", "v2.1.28", false);
+  assert.deepEqual(changed.conflicts, ["鎖定後的資料內容已變更"]);
+  /* 同版本、內容也沒動 → 完全乾淨 */
+  const clean = lockStatus("v2.1.28", "v2.1.28", true);
+  assert.deepEqual(clean.conflicts, []);
+  assert.equal(clean.note, "", "同一版不必特別說明");
+});
+
+test("使用者截圖那一筆（鎖定於 v2.1.22）不該再亮紅字", () => {
+  const status = lockStatus("v2.1.22", VERSION, true);
+  assert.deepEqual(
+    status.conflicts,
+    [],
+    "v2.1.22 之後沒有任何一版變更過計算口徑，那筆鎖定仍然有效",
+  );
+});
+
+test("版號比大小要照數字，不是照字串", () => {
+  /* 字串比較會說 "v2.1.9" > "v2.1.10"，那會讓舊鎖定被誤判為仍然有效 */
+  assert.equal(isVersionAtLeast("v2.1.10", "v2.1.9"), true);
+  assert.equal(isVersionAtLeast("v2.1.9", "v2.1.10"), false);
+  assert.equal(isVersionAtLeast("v2.1.21", "v2.1.21"), true);
+  assert.equal(isVersionAtLeast("v2.2.0", "v2.1.21"), true);
+  assert.equal(isVersionAtLeast("v2.0.9", "v2.1.21"), false);
+  /* 認不得的格式一律從嚴，當成「比較舊」 */
+  assert.equal(isVersionAtLeast("", "v2.1.21"), false);
+  assert.equal(isVersionAtLeast("beta", "v2.1.21"), false);
+});
+
+test("LAST_CALC_CHANGE_VERSION 必須是真的存在過的版本", () => {
+  assert.ok(
+    VERSION_HISTORY.some((entry) => entry.version === LAST_CALC_CHANGE_VERSION),
+    `LAST_CALC_CHANGE_VERSION（${LAST_CALC_CHANGE_VERSION}）不在版本紀錄裡`,
+  );
+  assert.ok(
+    isVersionAtLeast(VERSION, LAST_CALC_CHANGE_VERSION),
+    "目前版本不可能早於最後一次變更計算口徑的版本",
+  );
 });

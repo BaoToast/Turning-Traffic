@@ -2359,6 +2359,17 @@ input:focus {
 .lock-banner p {
   margin-top: 4px;
 }
+/*
+ * 「升版但沒動計算口徑」只是說明，不是衝突——用一般的次要文字，
+ * 不要和真正的鎖定衝突（紅色）長得一樣，否則使用者會兩種都略過。
+ */
+.lock-banner .lock-note {
+  color: var(--muted, #61777d);
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 42ch;
+  text-align: right;
+}
 .lock-banner.conflict {
   border-left-color: #b44d56;
   background: #fff7f7;

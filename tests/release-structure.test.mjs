@@ -324,3 +324,87 @@ test("七叉路口壓力測試不帶參數也能找到正式建置目錄", () =>
     "stress-drag.mjs 沒有把 github-pages-dist 設為預設根目錄",
   );
 });
+
+/*
+ * 測試用的種子資料不可以帶著實際的計畫、站號或路口名稱。
+ *
+ * 起因（2026-08-27 複查發現）：`scripts/seed-state.json` 與 `seed-wide.json`
+ * 裡寫著實際的委託案名稱、計畫編號、站號與路口名稱，而這兩個檔案就躺在
+ * 公開的 repository 裡，也可以直接從 GitHub Pages 下載。
+ *（裡面的流量數字本來就是 seed-state.mjs 用固定種子產生的，不是實際調查值，
+ *  但名稱是真的。）
+ *
+ * 測試需要的是「有兩個路口、一個四叉一個七叉」這種形狀，不是它們叫什麼名字。
+ * 這一支用清單比對釘住：日後有人為了方便又把實際名稱貼回種子檔或選取腳本，
+ * 會當場失敗——**那種事一旦發生，所有測試仍然是綠的，沒有任何跡象**。
+ *
+ * 注意：`lib/`、`app/` 與 `tests/*.ts` 裡也有這些名稱，但那些是**產品行為**
+ *（例如 referenceMovementForOd 就是靠路口名稱判斷要不要套用參考轉向表），
+ * 不在這一支的範圍內。要不要改，是產品決策，不是清理工作。
+ */
+test("測試種子與選取腳本裡沒有實際的計畫、站號或路口名稱", () => {
+  const forbidden = [
+    "高捷岡山路竹延伸線RKC02標",
+    "岡山交流道",
+    "路科一路口",
+    "國昌路",
+    "T15-01",
+    "T15-03",
+    "T15-04",
+    "T13-04",
+    "T14-04",
+    "11017",
+  ];
+  const files = [
+    "scripts/seed-state.mjs",
+    "scripts/seed-state.json",
+    "scripts/seed-wide.json",
+    "scripts/make-wide-seed.mjs",
+    "scripts/e2e-diagram.mjs",
+    "scripts/e2e-layout.mjs",
+    "scripts/stress-drag.mjs",
+  ];
+  const offenders = [];
+  for (const file of files) {
+    if (!has(file)) continue;
+    const text = read(file);
+    for (const word of forbidden)
+      if (text.includes(word)) offenders.push(`${file} → ${word}`);
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    "測試種子出現實際名稱；示範資料請用「示範…」與 A0000／S01-01 這類假識別碼",
+  );
+});
+
+/*
+ * `.gitattributes` 必須關掉換行轉換——理由寫在那個檔案裡。
+ */
+test("有 .gitattributes 且關閉了換行轉換", () => {
+  assert.ok(has(".gitattributes"), "缺少 .gitattributes");
+  assert.match(
+    read(".gitattributes"),
+    /^\*\s+-text\s*$/m,
+    ".gitattributes 缺少 `* -text`：在 Windows 上取出時 Git 會把建置產物轉成 CRLF，" +
+      "備份包就無法與線上內容逐位元核對（2026-08-27 實際發生過）",
+  );
+});
+
+test("結論草稿沿用分析頁的完整車種標籤 fallback", () => {
+  const source = readFileSync(join(root, "app", "traffic-app.tsx"), "utf8");
+  const start = source.indexOf("function toConclusionRecords");
+  const end = source.indexOf("function AuditWorkbench", start);
+  assert.ok(start >= 0 && end > start, "找不到結論草稿資料轉換區塊");
+  const block = source.slice(start, end);
+  assert.equal(
+    (block.match(/label:\s*vehicleLabel\(record, id\)/g) || []).length,
+    2,
+    "結論草稿的支線與整體車種名稱都必須共用 vehicleLabel()",
+  );
+  assert.doesNotMatch(
+    block,
+    /label:\s*record\.vehicleLabels\?\.\[id\]\s*\|\|/,
+    "不可在結論草稿另寫一套不完整的車種名稱 fallback",
+  );
+});

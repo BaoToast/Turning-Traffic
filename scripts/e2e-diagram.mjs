@@ -172,8 +172,8 @@ ok(`路口標籤「${labelBefore.text}」跟著滑鼠等距移動（不會跳到
   `Δx=${labelAfter.x - labelBefore.x}（要 -90）Δy=${labelAfter.y - labelBefore.y}（要 60）`);
 
 // ── 壓力測試：7 叉路口長時間連續拖曳 ────────────────────────
-const armSelect = page.locator("select").filter({ hasText: "岡山交流道" }).first();
-await armSelect.selectOption({ label: "台1－岡山交流道路口" });
+const armSelect = page.locator("select").filter({ hasText: "示範交流道" }).first();
+await armSelect.selectOption({ label: "示範1－示範交流道路口" });
 await page.waitForTimeout(1200);
 const arms = await page.evaluate(() => document.querySelectorAll(".diagram-canvas [data-label-id]").length);
 ok("已切換到 7 叉路口", arms === 7, `${arms} 支線`);
@@ -222,8 +222,8 @@ ok("已移除圖卡位移的 X／Y 數字輸入", offsetInputs === 0, `${offsetI
 
 // ── 三種顯示模式的版面互不干擾 ──────────────────────────────
 await go("路口轉向圖");
-const armSelect2 = page.locator("select").filter({ hasText: "路科一路口" }).first();
-if (await armSelect2.count()) { await armSelect2.selectOption({ label: "台1－路科一路口" }); await page.waitForTimeout(900); }
+const armSelect2 = page.locator("select").filter({ hasText: "示範一路口" }).first();
+if (await armSelect2.count()) { await armSelect2.selectOption({ label: "示範1－示範一路口" }); await page.waitForTimeout(900); }
 const setMode = async (label) => {
   await page.locator(`.flow-summary-control button:has-text("${label}")`).first().click();
   await page.waitForTimeout(600);
@@ -275,7 +275,7 @@ ok("路口標籤的位置同樣依顯示模式各自保存",
 // 存進 localStorage 的結構
 const layouts = await page.evaluate(() => {
   const state = JSON.parse(localStorage.getItem("turning-traffic-state-v2") || "{}");
-  const record = (state.records || []).find((r) => r.station === "T15-03");
+  const record = (state.records || []).find((r) => r.station === "S01-03");
   const approach = record?.approaches?.find((a) => a.cardLayouts);
   return approach ? Object.keys(approach.cardLayouts) : [];
 });
@@ -288,7 +288,7 @@ const resetAll = page.locator('button:has-text("重設所有圖卡位置")');
 if (await resetAll.count()) { await resetAll.first().click(); await page.waitForTimeout(900); }
 const cleared = await page.evaluate(() => {
   const state = JSON.parse(localStorage.getItem("turning-traffic-state-v2") || "{}");
-  const record = (state.records || []).find((r) => r.station === "T15-03");
+  const record = (state.records || []).find((r) => r.station === "S01-03");
   return (record?.approaches || []).some((a) => a.cardLayouts || a.cardOffsets || a.labelOffset);
 });
 ok("「重設所有圖卡位置」會清掉全部三種模式的版面", cleared === false);

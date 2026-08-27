@@ -36,6 +36,8 @@ import {
   TrafficRecord,
   VehicleKey,
   VERSION,
+  lockStatus,
+  LockStatus,
   VERSION_HISTORY,
   isSameSurvey,
 } from "../lib/traffic";
@@ -456,14 +458,23 @@ function resultSignature(record: TrafficRecord) {
   return (hash >>> 0).toString(36);
 }
 
+/**
+ * 這一筆鎖定成果現在的狀況。判斷邏輯在 lib/traffic.ts 的 lockStatus()，
+ * 抽出去是為了能被測試——它決定的是「使用者要不要為了一行紅字去解除、
+ * 重新鎖定 20 幾季的資料」。
+ */
+function lockState(record: TrafficRecord): LockStatus {
+  if (!record.resultLock) return { conflicts: [], note: "" };
+  return lockStatus(
+    record.resultLock.version,
+    VERSION,
+    record.resultLock.signature === resultSignature(record),
+  );
+}
+
+/** 只取「真的需要處理」的那些，紅字用。 */
 function lockConflict(record: TrafficRecord) {
-  if (!record.resultLock) return "";
-  const reasons: string[] = [];
-  if (record.resultLock.version !== VERSION)
-    reasons.push("鎖定版本與目前系統版本不同");
-  if (record.resultLock.signature !== resultSignature(record))
-    reasons.push("鎖定後的資料內容已變更");
-  return reasons.join("；");
+  return lockState(record).conflicts.join("；");
 }
 
 function closestDestination(
@@ -1171,6 +1182,22 @@ export function diagramMarkup(
         }, 0),
       );
     });
+    /*
+     * 駛入那半格的支線標籤。
+     *
+     * 這裡原本取的是 sourceCode（原始代碼 A~G），而正上方的 destinationLabels
+     * 取的是 approach.name。同一張圖卡的兩半因此各說各話：使用者把支線 A 改名
+     * 成「岡山北路北側」之後，駛出那格寫「→岡山北路北側」，駛入那格還是「←A」；
+     * 人工新增的支線更明顯，會印成「←人工2」。圖卡標題、道路名稱、箭頭提示
+     * 全都用 name，只有這裡不是。PNG 與 PDF 匯出共用同一支產生程式，所以
+     * 交付出去的圖也是錯的。
+     *
+     * 改成與 destinationLabels 完全相同的取法（含去掉開頭的「路口」兩字），
+     * 兩半從此一致。支線代碼並沒有消失——圖卡標題那一行仍然寫「A · 支線名稱」。
+     */
+    const approachLabel = function (source?: { name?: string }) {
+      return (source?.name || "").replace(/^路口\s*/, "");
+    };
     const incomingSources = names.map(function (movement) {
       if (incomingRoutes.length)
         return incomingRoutes
@@ -1178,10 +1205,10 @@ export function diagramMarkup(
             return route.movement === movement;
           })
           .map(function (route) {
-            return (
+            return approachLabel(
               record.approaches.find(function (item) {
                 return item.id === route.fromApproachId;
-              })?.sourceCode || ""
+              }),
             );
           })
           .filter(Boolean)
@@ -1193,7 +1220,7 @@ export function diagramMarkup(
             sourceIndex,
             movement,
           ) === index
-            ? source.sourceCode || source.name
+            ? approachLabel(source) || source.sourceCode || ""
             : "";
         })
         .filter(Boolean)
@@ -2449,7 +2476,7 @@ function toConclusionRecords(records: TrafficRecord[]): ConclusionRecord[] {
       };
       const list = vehicleIds.map(function (id) {
         return {
-          label: record.vehicleLabels?.[id] || VEHICLE_LABELS[id] || id,
+          label: vehicleLabel(record, id),
           count: Number(row.vehicle[id] || 0),
         };
       });
@@ -2508,7 +2535,7 @@ function toConclusionRecords(records: TrafficRecord[]): ConclusionRecord[] {
       compositionUnit: scope === "SURVEY" ? "輛/調查時段" : "輛/hr",
       composition: vehicleIds.map(function (id) {
         return {
-          label: record.vehicleLabels?.[id] || VEHICLE_LABELS[id] || id,
+          label: vehicleLabel(record, id),
           count: recordVehicleTotal(record, scope, id),
         };
       }),
@@ -2562,14 +2589,22 @@ function AuditWorkbench(props: {
   const lockedCount = props.quarterRecords.filter(function (item) {
     return Boolean(item.resultLock);
   }).length;
-  const conflicts = props.quarterRecords.map(lockConflict).filter(Boolean);
+  const lockStates = props.quarterRecords.map(lockState);
+  const conflicts = lockStates.flatMap((state) => state.conflicts);
+  /*
+   * 「升版但沒動計算」不是衝突，只是說明——用灰字，別跟真的衝突長得一樣紅。
+   * 舊版兩者都報成紅色「鎖定衝突」，於是升過一次版之後所有鎖定都永遠亮紅字，
+   * 真正該注意的「鎖定後資料被動過」就被淹掉了。
+   */
+  const versionNotes = lockStates.map((state) => state.note).filter(Boolean);
   if (!record)
     return (
       <Empty title="尚無可核對資料" text="請先選擇有匯入資料的計畫與季度。" />
     );
   /** 目前這一筆的鎖定狀況，下面的審核欄位與鎖定狀態卡都要用。 */
   const recordLock = record.resultLock;
-  const recordConflict = lockConflict(record);
+  const recordState = lockState(record);
+  const recordConflict = recordState.conflicts.join("；");
   const approachById = new Map(
     record.approaches.map(function (approach) {
       return [approach.id, approach] as const;
@@ -2698,6 +2733,11 @@ function AuditWorkbench(props: {
             偵測到鎖定衝突：{Array.from(new Set(conflicts)).join("；")}
           </strong>
         )}
+        {conflicts.length === 0 && versionNotes.length > 0 && (
+          <span className="lock-note">
+            {Array.from(new Set(versionNotes)).join("；")}
+          </span>
+        )}
       </section>
       <section className="panel review-panel">
         <div>
@@ -2757,6 +2797,7 @@ function AuditWorkbench(props: {
               {recordConflict
                 ? "　⚠ " + recordConflict + "。"
                 : "　鎖定後內容未被更動。"}
+              {!recordConflict && recordState.note ? "　" + recordState.note : ""}
               {" "}
               鎖定期間修改名稱、角度、流向、批次指定資料別、重新匯入或刪除季度，
               系統都會先跳出確認並要求解除鎖定才會動手。
@@ -6917,7 +6958,13 @@ export default function TrafficApp() {
                   setQuarter(e.target.value);
                 }}
               >
-                <option value="">尚無季度</option>
+                {/*
+                  「尚無季度」只在真的一季都沒有的時候才是提示；有季度時它是一顆
+                  死選項——選了會把季度設成空字串，緊接著 useEffect 又把它拉回最新
+                  一季，所以使用者看到的是「點了什麼事都沒發生」。全系統六個季度
+                  選單，也只有這一個有它。
+                */}
+                {quarters.length === 0 && <option value="">尚無季度</option>}
                 {quarters.map(function (q) {
                   return <option key={q}>{q}</option>;
                 })}
@@ -11288,14 +11335,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.27-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.28-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.27-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.28-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >

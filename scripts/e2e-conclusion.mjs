@@ -64,9 +64,9 @@ const pageNumbers = await page.evaluate(() => {
     );
     if (cells.length > 2) rows.push(cells);
   }
-  // 標題長得像「T15-01 · 中山北路－岡山路口」，抓站號用來對到草稿的同一段。
+  // 標題長得像「S01-01 · 示範1－示範交流道路口」，抓站號用來對到草稿的同一段。
   const title = document.querySelector(".content h2")?.textContent || "";
-  return { title, station: (title.match(/T[\d-]+\w*/) || [""])[0], rows };
+  return { title, station: (title.match(/[A-Z]\d+-\d+\w*/) || [""])[0], rows };
 });
 console.log("── 分析頁：", pageNumbers.title, "（站號", pageNumbers.station, "）");
 pageNumbers.rows.slice(0, 3).forEach((r) => console.log("  ", r.join(" | ")));
@@ -473,7 +473,7 @@ await go("歷季趨勢比較");
 await page
   .locator(".trend-controls select")
   .first()
-  .selectOption({ label: "中山路－國昌路－民強街路口" });
+  .selectOption({ label: "示範路－示範二路－示範三街路口" });
 await page.waitForTimeout(500);
 const outPoints = await page.locator("#trend-svg circle").count();
 await page.locator('.trend-controls button:has-text("駛入總量")').first().click();
