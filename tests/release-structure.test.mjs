@@ -408,3 +408,36 @@ test("結論草稿沿用分析頁的完整車種標籤 fallback", () => {
     "不可在結論草稿另寫一套不完整的車種名稱 fallback",
   );
 });
+
+/*
+ * 兩張四大車種名稱對照表必須完全一致。
+ *
+ * app/traffic-app.tsx 的 VEHICLE_LABELS 與 lib/traffic.ts 的 CORE_VEHICLE_LABELS
+ * 曾經對不起來（大型車 vs 大型／大客車、特種車 vs 特種／聯結車）。匯入時寫進紀錄的
+ * 是 CORE 那一組，而 vehicleLabel() 優先讀紀錄；v2.1.19 以前的舊備份沒有那個欄位，
+ * 就會落到 VEHICLE_LABELS 那一組——同一個車種在跨季的結論草稿裡前後兩種寫法。
+ */
+test("四大車種的名稱在 app 與 lib 兩邊一致", () => {
+  const appSrc = readFileSync(new URL("../app/traffic-app.tsx", import.meta.url), "utf8");
+  const libSrc = readFileSync(new URL("../lib/traffic.ts", import.meta.url), "utf8");
+  const pick = (source, name) => {
+    const block = source.slice(source.indexOf(`const ${name}`));
+    const body = block.slice(block.indexOf("{") + 1, block.indexOf("}"));
+    const out = {};
+    body.split("\n").forEach((line) => {
+      const m = line.match(/^\s*(\w+):\s*"([^"]*)"/);
+      if (m) out[m[1]] = m[2];
+    });
+    return out;
+  };
+  const app = pick(appSrc, "VEHICLE_LABELS");
+  const lib = pick(libSrc, "CORE_VEHICLE_LABELS");
+  const keys = Object.keys(lib);
+  assert.ok(keys.length === 4, `CORE_VEHICLE_LABELS 應有 4 個車種，實際 ${keys.length}`);
+  const mismatched = keys.filter((k) => app[k] !== lib[k]);
+  assert.deepEqual(
+    mismatched.map((k) => `${k}: app=${app[k]} / lib=${lib[k]}`),
+    [],
+    "兩張表對不起來",
+  );
+});

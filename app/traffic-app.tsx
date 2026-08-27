@@ -145,12 +145,22 @@ const NAV: { id: View; label: string; icon: string; group?: string }[] = [
   { id: "help", label: "新手操作手冊", icon: "?" },
 ];
 
+/*
+ * ⚠️ 四大車種的名稱必須和 lib/traffic.ts 的 CORE_VEHICLE_LABELS 完全一致。
+ *
+ * 這裡原本寫「大型／大客車」「特種／聯結車」，而匯入時寫進紀錄的是
+ * CORE_VEHICLE_LABELS 的「大型車」「特種車」。vehicleLabel() 優先讀紀錄裡的
+ * vehicleLabels，所以：正常匯入的資料顯示「大型車」，而 v2.1.19 以前的舊備份
+ * （那時候還沒有 vehicleLabels 欄位）會落到這張表、顯示「大型／大客車」——
+ * 跨季的結論草稿因此可能同一個車種前後兩種寫法。以匯入時實際寫入的那一組為準。
+ * 有一項測試釘住兩張表一致。
+ */
 const VEHICLE_LABELS: Record<string, string> = {
   all: "全部車種",
   motorcycle: "機車",
   car: "小型車",
-  heavy: "大型／大客車",
-  special: "特種／聯結車",
+  heavy: "大型車",
+  special: "特種車",
 };
 const PCE_LABELS = {
   special: "特種／聯結車",
@@ -11335,14 +11345,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.28-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.29-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.28-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.29-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >

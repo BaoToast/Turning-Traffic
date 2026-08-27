@@ -379,7 +379,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.28";
+export const VERSION = "v2.1.29";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -449,7 +449,23 @@ export function lockStatus(
     conflicts.push(
       `鎖定當時的版本（${lockedVersion}）早於最後一次變更計算口徑的 ${LAST_CALC_CHANGE_VERSION}，數字可能已經不同`,
     );
-  else if (!isVersionAtLeast(currentVersion, lockedVersion))
+  /*
+   * ⚠️ 這一條只有在「兩個版號都解析得出來」時才成立。
+   *
+   * isVersionAtLeast 認不得格式時一律回傳 false（從嚴），對「鎖定版本早於常數」
+   * 那一條來說是對的；但用在這裡會反過來出事：只要 VERSION 帶了 `-final`、
+   * `-rc1`、`-hotfix` 這種尾巴，或前後多一個空白，它就解析不出來，於是
+   * **每一筆 v2.1.21 以後鎖定的資料全部亮紅字**——正是這一版要修掉的那個症狀。
+   * 實測 19×19 的版號矩陣：currentVersion 一旦不可解析，就多出 344 筆紅字。
+   * 而且訊息會說反（「較新的版本 v2.1.27 鎖定、目前 V2.1.28」）。
+   *
+   * 版號認不得是「不知道」，不是「有問題」，所以這裡不報衝突。
+   */
+  else if (
+    versionParts(currentVersion).length > 0
+    && versionParts(lockedVersion).length > 0
+    && !isVersionAtLeast(currentVersion, lockedVersion)
+  )
     conflicts.push(
       `這筆成果由較新的系統版本（${lockedVersion}）鎖定，目前版本（${currentVersion}）無法確認相容性`,
     );
@@ -461,6 +477,11 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.29",
+    date: "2026-08-27",
+    note: "發布後複查發現三件事，都不影響任何交通量、PCU、駛入／駛出、尖峰搜尋或車種組成的計算。一、v2.1.28 新增的『被更新版本鎖定』警示，判斷時沒有先確認版號解析得出來——isVersionAtLeast 認不得格式時一律回傳 false（對『鎖定版本早於常數』那條是對的），用在這裡卻會反過來：只要 VERSION 帶了 -final、-rc1 這種尾巴或多一個空白就解析不出來，於是每一筆 v2.1.21 以後鎖定的資料全部亮紅字，正是 v2.1.28 要修掉的那個症狀（實測 19×19 版號矩陣會多出 344 筆紅字），訊息還會說反。改為兩個版號都解析得出來才判斷——版號認不得是『不知道』，不是『有問題』。二、四大車種的名稱兩張表對不起來：app 的 VEHICLE_LABELS 寫『大型／大客車』『特種／聯結車』，lib 的 CORE_VEHICLE_LABELS 寫『大型車』『特種車』，而匯入時寫進紀錄的是後者。vehicleLabel() 優先讀紀錄，所以 v2.1.19 以前沒有 vehicleLabels 欄位的舊備份會落到前者，跨季的結論草稿因此同一個車種前後兩種寫法。以匯入時實際寫入的那一組為準，並新增第 12 項發布結構檢查釘住兩張表一致（已實測會在舊寫法下紅字）。三、交付的 ZIP 中文檔名沒有標記 UTF-8，解壓後全部變成 #Uxxxx 亂碼，導致該備存包內找不到程式連得到的手冊檔名、發布結構檢查第 4 項紅字（44 項中 2 項失敗）；檔名還原後 44/44 全過。⚠️ 線上網站不受影響（使用者實測手冊下載正常），受影響的只有交付出去的備存 ZIP——拿它還原 repository 會少掉手冊。本版重新打包並標記 UTF-8 檔名。",
+  },
   {
     version: "v2.1.28",
     date: "2026-08-27",

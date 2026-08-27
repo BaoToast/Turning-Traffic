@@ -30,7 +30,7 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = join(here, "manual.html");
-const out = join(here, "..", "..", "public", "Turning-Traffic-v2.1.28-新手操作手冊.docx");
+const out = join(here, "..", "..", "public", "Turning-Traffic-v2.1.29-新手操作手冊.docx");
 
 const NAVY = "17353E";
 const TEAL = "087F75";
@@ -433,7 +433,7 @@ for (const block of blocks) {
 
 const doc = new Document({
   creator: "Turning Traffic",
-  title: "Turning Traffic 新手操作手冊 v2.1.28",
+  title: "Turning Traffic 新手操作手冊 v2.1.29",
   description: "寫給完全沒有交通背景的新手：從建立計畫、匯入調查檔、核對品質，到轉向圖、報表勾選匯出與備份。",
   styles: {
     default: {
@@ -487,7 +487,7 @@ const doc = new Document({
               spacing: { before: 0 },
               children: [
                 new TextRun({
-                  text: "v2.1.28 ｜ 2026-08-27 ｜ 正式成果前請先下載備份　　第 ",
+                  text: "v2.1.29 ｜ 2026-08-27 ｜ 正式成果前請先下載備份　　第 ",
                   font: FONT,
                   size: 15,
                   color: MUTED,
