@@ -1,12 +1,97 @@
 import * as XLSX from "xlsx";
 
-export type PeakKey = "AM" | "PM";
+/**
+ * 尖峰時段。三個都是「某一小時的流率」，PCU 欄位的單位是 PCU/hr。
+ *
+ * DAY（全日尖峰小時）＝掃過完整 24 小時找出來的最大一小時，**只有 24 小時的
+ * 調查檔算得出來**。資料不足 24 小時時整組留空、畫面顯示「－」，絕不拿
+ * 上午／下午尖峰去頂替——那等於用 4 小時的樣本冒充一整天的最大值。
+ */
+export type PeakKey = "AM" | "PM" | "DAY";
+
+/**
+ * 畫面與匯出用的「統計範圍」＝三個尖峰再加上 FULL。
+ *
+ * FULL（全日時段）**不是尖峰**，是一整天的累計量，單位是「輛／調查日」與
+ * 「PCU／調查日」，不能和尖峰的 PCU/hr 相提並論。它也**不是獨立存起來的
+ * 數字**：每次載入都由 record.survey／route.survey 現算（見 syncRouteTotals）。
+ *
+ * 為什麼要現算而不是存一份：同一個概念在系統裡有兩份來源，遲早會分岔——
+ * 這個專案已經因為同類問題（同一件事在 N 個地方各算各的）修過三輪。
+ * survey 是唯一的來源，FULL 只是它的另一種呈現。
+ */
+export type ScopeKey = PeakKey | "FULL";
 export type MovementKey = "left" | "through" | "right";
 export type PceVehicle = string;
 export type VehicleKey = "all" | PceVehicle;
 export type LaneClass = "fast" | "slow" | "motorcycle" | "other";
 /** mixed/left/custom are retained only so older JSON backups remain readable. */
 export type LaneType = LaneClass | "mixed" | "left" | "custom";
+
+export const PEAK_KEYS: PeakKey[] = ["AM", "PM", "DAY"];
+export const SCOPE_KEYS: ScopeKey[] = ["AM", "PM", "DAY", "FULL"];
+
+export const SCOPE_LABELS: Record<ScopeKey, string> = {
+  AM: "上午尖峰",
+  PM: "下午尖峰",
+  DAY: "全日尖峰小時",
+  FULL: "全日時段",
+};
+
+/** 匯出欄名與圖面標題用的短標籤（「AM Peak」這種既有寫法沿用）。 */
+export const SCOPE_SHORT_LABELS: Record<ScopeKey, string> = {
+  AM: "AM Peak",
+  PM: "PM Peak",
+  DAY: "全日尖峰",
+  FULL: "全日時段",
+};
+
+/**
+ * 每個尖峰要在哪一段時間裡找那個最大的一小時。單位是「當天的第幾分鐘」。
+ *
+ * ⚠️ 上午／下午的範圍在 v2.1.30 由使用者決定放寬：
+ *   舊：AM [05:00, 12:00)、PM [12:00, 23:00)
+ *   新：AM [00:00, 12:00)、PM [12:00, 24:00)
+ * 舊的兩段合起來掃不到 23:00–24:00 與 00:00–05:00，真正的尖峰若落在那六個
+ * 小時，任何一個數字都抓不到。放寬之後兩段剛好把一天鋪滿、且不重疊。
+ *
+ * 實測使用者提供的 8 份調查檔，新舊口徑算出來的上午／下午尖峰完全相同
+ * （深夜與清晨本來就不會是尖峰）；差別只在那六個小時真的出現尖峰的場合。
+ * 即便如此這仍是**計算口徑變更**，所以 LAST_CALC_CHANGE_VERSION 一併推進。
+ */
+export const PEAK_RANGES: Record<PeakKey, [number, number]> = {
+  AM: [0, 12 * 60],
+  PM: [12 * 60, 24 * 60],
+  DAY: [0, 24 * 60],
+};
+
+/**
+ * 某個統計範圍的單位——**全系統只有這一支**。
+ *
+ * 尖峰是「某一小時的流率」（PCU/hr、輛/hr），全日時段是「一整天的累計量」
+ * （PCU/調查日、輛/調查日）。兩者不可以相加、也不可以互相比較，所以單位
+ * 一定要跟著範圍走。以前單位都是寫死的 "PCU/hr"，新增全日時段之後如果
+ * 沿用，圖上會出現「24,463.3 PCU/hr」這種一看就錯的數字。
+ */
+export function scopeUnit(scope: ScopeKey, kind: "pcu" | "vehicle" = "pcu") {
+  const per = scope === "FULL" ? "調查日" : "hr";
+  return `${kind === "pcu" ? "PCU" : "輛"}/${per}`;
+}
+
+/** 一天有幾分鐘。「這份調查有沒有涵蓋完整一天」全系統只用這一個門檻。 */
+export const FULL_DAY_MINUTES = 24 * 60;
+
+/**
+ * 這份調查是不是完整的 24 小時？
+ *
+ * 全日時段與全日尖峰小時**都**卡這一道；只有這一支函式說了算，
+ * 不要在別處再寫一次 `minutes >= 1440`。
+ */
+export function coversFullDay(
+  survey: { minutes?: number } | null | undefined,
+): boolean {
+  return Number(survey?.minutes || 0) >= FULL_DAY_MINUTES;
+}
 
 export type Project = {
   id: string;
@@ -137,7 +222,11 @@ export type RouteFlow = {
   fromApproachId: string;
   toApproachId: string;
   movement: MovementKey;
-  volumes: Record<PeakKey, RouteVolume>;
+  /**
+   * 三個尖峰的 PCU/hr，加上 FULL（全日時段）。
+   * FULL 每次載入都由 survey 現算（syncRouteTotals），不是獨立來源。
+   */
+  volumes: Record<ScopeKey, RouteVolume>;
   /** Actual vehicles for the complete imported survey period. */
   survey?: {
     vehicle: Record<string, number>;
@@ -192,7 +281,7 @@ export type Approach = {
       }
     >
   >;
-  movements: Record<PeakKey, Movement>;
+  movements: Record<ScopeKey, Movement>;
 };
 
 export type ReviewStatus = "待核對" | "已核對" | "已確認" | "需修正";
@@ -379,7 +468,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.29";
+export const VERSION = "v2.1.31";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -398,10 +487,20 @@ export const VERSION = "v2.1.29";
  *    **這個常數要跟著改成新版號**，否則舊鎖定會被誤判為仍然有效。
  *    只改介面、文件、測試或發布流程則不要動它。
  *
- * 目前是 v2.1.21：那一版改了尖峰小時的口徑（只接受能精確組成 60 分鐘的格距）。
- * v2.1.22 是存檔問題，v2.1.23 之後每一版都自述未變更計算。
+ * 目前是 v2.1.30。那一版動了兩件計算口徑：
+ *   (1) 上午尖峰的搜尋範圍由 [05:00, 12:00) 改為 [00:00, 12:00)，
+ *       下午尖峰由 [12:00, 23:00) 改為 [12:00, 24:00)。舊的兩段合起來
+ *       掃不到 23:00–24:00 與 00:00–05:00。
+ *   (2) 每一格的原始車輛數先四捨五入成整數再進入所有計算（有些調查檔
+ *       的儲存格存的是小數，Excel 只是顯示成整數）。
+ * 實測使用者提供的 8 份調查檔，(1) 新舊口徑算出來的尖峰完全相同、
+ * (2) 只影響儲存格本來就有小數的那一份；但口徑確實變了，依使用者決定
+ * 推進本常數，讓 v2.1.30 以前鎖定的季度亮出鎖定衝突。
+ *
+ * 在此之前是 v2.1.21：那一版改了尖峰小時的口徑（只接受能精確組成 60 分鐘的格距）。
+ * v2.1.22 是存檔問題，v2.1.23～v2.1.29 每一版都自述未變更計算。
  */
-export const LAST_CALC_CHANGE_VERSION = "v2.1.21";
+export const LAST_CALC_CHANGE_VERSION = "v2.1.30";
 
 /** 把 "v2.1.21" 拆成 [2,1,21] 以便比大小；認不得的格式回傳空陣列。 */
 function versionParts(version: string): number[] {
@@ -477,6 +576,16 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.31",
+    date: "2026-08-28",
+    note: "發布前複查修正。歷季趨勢的「整體」模式在 v2.1.30 已畫入第三條「全日尖峰」折線，但圖例、顏色、標題、右側季度摘要與下載檔名仍只按 AM／PM 處理。現在整體模式的三條線均有獨立顏色、圖例、點標籤與右側摘要，PNG 檔名也明確寫出 AM_PM_DAY；Excel 圖表繼續使用同一組三個尖峰數列。另將多車種調查的品質訊息由「四車種合計」改為「各車種合計」。本版沒有變更尖峰選擇、車種當量、轉向分類或任何流量計算，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30。",
+  },
+  {
+    version: "v2.1.30",
+    date: "2026-08-28",
+    note: "新增「全日時段」與「全日尖峰小時」兩大類統計，並依使用者決定調整兩項計算口徑。**一、新增全日尖峰小時（DAY）**：掃過完整 24 小時找出流量最大的那一個小時，只有 24 小時的調查檔算得出來；不足一天的調查（例如只做 07:00–09:00＋17:00–19:00 共 4 小時）一律顯示「－」，不拿 4 小時的樣本冒充一整天的最大值——那個數字必然等於上午與下午尖峰裡較大的一個，看起來像新資訊其實不是。**二、全日時段（FULL）納入同一套統計範圍**：路口轉向圖、車種組成分析、駛入／駛出流量、流量核對工作台、OD 矩陣、支線平衡、Excel 匯出與批次成果包一律以 SCOPE_KEYS 產生欄位，新增時段不必再到各處手動補一次。全日時段不另外存檔，每次載入由 record.survey／route.survey 現算（syncRouteTotals），只有一個來源。**三、上午／下午尖峰的搜尋範圍放寬**：上午由 [05:00, 12:00) 改為 [00:00, 12:00)，下午由 [12:00, 23:00) 改為 [12:00, 24:00)。舊的兩段合起來掃不到 23:00–24:00 與 00:00–05:00，真正的尖峰若落在那六個小時，任何一個數字都抓不到；新的兩段剛好把一天鋪滿且不重疊。實測使用者提供的 8 份調查檔，新舊口徑算出來的上午／下午尖峰完全相同。**四、每一格的原始車輛數先四捨五入成整數再進入所有計算**：有些調查檔的儲存格存的是小數（0.36、5.5506…），Excel 的格式把它顯示成整數，於是報告上看到 0 與 6、程式拿去算的卻是 0.36 與 5.5506，全日車輛數會算出 27,988.79 輛這種不存在的車。四捨五入放在全系統唯一讀取原始儲存格的地方，之後的加總、尖峰滾動、PCU 換算全部自動吃到整數。**五、轉向圖新增「車輛數」顯示模式**：原本只有交通量（PCU）、百分比、PCU＋百分比三種，選「全部車種」時拿不到純輛數；新模式一律報實際調查到的車輛數，可搭配車種篩選看單一車種或全部車種的輛數。圖上的單位跟著統計範圍走（尖峰是 PCU/hr、輛/hr，全日時段是 PCU/調查日、輛/調查日），不再寫死 PCU/hr。**六、既有資料相容**：舊備份與舊 localStorage 只有 AM／PM，載入時自動補上空的 DAY／FULL，既有的上午／下午尖峰數字一個都不動；全日時段因為是從已存的調查總量現算，舊資料直接就有，全日尖峰小時則需要重新匯入原始檔（逐時間格的資料沒有存檔，無法回推），畫面與品質檢查都會明確寫出是哪一種原因。三、四兩項確實變更了計算口徑，依使用者決定一併推進 LAST_CALC_CHANGE_VERSION 至 v2.1.30，v2.1.30 以前鎖定的季度會亮出鎖定衝突。",
+  },
   {
     version: "v2.1.29",
     date: "2026-08-27",
@@ -791,6 +900,12 @@ export function createDemoRecords(): TrafficRecord[] {
           lanes: ai < 4 ? 2 : 1,
           capacity: ai < 4 ? 1450 + si * 40 : null,
           movements: {
+            /*
+             * 示範資料只有上午與下午尖峰。全日時段與全日尖峰小時留空
+             * ——示範資料本來就不是 24 小時的調查，硬編一個數字進去會讓
+             * 使用者以為那是真的算出來的。
+             */
+            ...emptyScopeMovements(),
             AM: movement(Math.round(scale * (0.74 + (ai % 3) * 0.08)), [
               0.12 + (ai % 2) * 0.04,
               0.72 - (ai % 3) * 0.03,
@@ -813,6 +928,7 @@ export function createDemoRecords(): TrafficRecord[] {
         date: `${quarterMonths[qi]}-${String(8 + si * 2).padStart(2, "0")}`,
         surveyType: "平日",
         peaks: {
+          ...emptyPeakWindows(),
           AM: { start: "07:15", end: "08:15" },
           PM: { start: "17:00", end: "18:00" },
         },
@@ -898,12 +1014,12 @@ function hash(value: string) {
 
 export function totalMovement(
   approach: Approach,
-  peak: PeakKey,
+  peak: ScopeKey,
   movementKey?: MovementKey,
   vehicle: VehicleKey = "all",
   routes?: RouteFlow[],
 ) {
-  const row = approach.movements[peak];
+  const row = approach.movements[peak] || emptyMovement();
   if (vehicle !== "all") {
     const vehicleTotal = row.vehicle[vehicle] || 0;
     if (!movementKey) return vehicleTotal;
@@ -931,7 +1047,120 @@ export function totalMovement(
   return movementKey ? row[movementKey] : row.left + row.through + row.right;
 }
 
-export function recordTotal(record: TrafficRecord, peak: PeakKey) {
+/** PCU 一律留一位小數。全系統只有這一支，畫面與匯出才不會差在小數點。 */
+export function roundedPcu(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
+export function emptyMovement(): Movement {
+  return {
+    left: 0,
+    through: 0,
+    right: 0,
+    vehicle: {} as Record<string, number>,
+    rawVehicleTotal: null,
+  };
+}
+
+export function emptyRouteVolume(): RouteVolume {
+  return { pcu: 0, vehicle: {} };
+}
+
+/** 四個統計範圍都給一份空的 Movement，之後再覆蓋有資料的那幾個。 */
+export function emptyScopeMovements(): Record<ScopeKey, Movement> {
+  return Object.fromEntries(
+    SCOPE_KEYS.map((key) => [key, emptyMovement()]),
+  ) as Record<ScopeKey, Movement>;
+}
+
+export function emptyScopeVolumes(): Record<ScopeKey, RouteVolume> {
+  return Object.fromEntries(
+    SCOPE_KEYS.map((key) => [key, emptyRouteVolume()]),
+  ) as Record<ScopeKey, RouteVolume>;
+}
+
+/** 三個尖峰都給一組空的起訖時間。空字串＝「這個尖峰沒有值」。 */
+export function emptyPeakWindows(): Record<
+  PeakKey,
+  { start: string; end: string }
+> {
+  return Object.fromEntries(
+    PEAK_KEYS.map((key) => [key, { start: "", end: "" }]),
+  ) as Record<PeakKey, { start: string; end: string }>;
+}
+
+/**
+ * 補齊一筆紀錄的四個統計範圍，讓舊備份與舊 localStorage 直接能用。
+ *
+ * v2.1.29 以前的資料只有 AM／PM。這支函式在載入、還原備份、匯入之後都會跑，
+ * 把缺的 DAY 與 FULL 補成空值——**空值不是 0**：畫面靠「有沒有 peaks.DAY.start」
+ * 分辨「這份調查不足 24 小時」與「舊資料還沒重新匯入」，兩種都顯示「－」但
+ * 說明不一樣。這裡不會憑空生出數字，也不會動到任何既有的 AM／PM 值。
+ */
+export function ensureRecordScopes(record: TrafficRecord): TrafficRecord {
+  record.peaks = record.peaks || ({} as TrafficRecord["peaks"]);
+  for (const key of PEAK_KEYS)
+    if (!record.peaks[key]) record.peaks[key] = { start: "", end: "" };
+  (record.approaches || []).forEach(function (approach) {
+    approach.movements =
+      approach.movements || ({} as Approach["movements"]);
+    for (const key of SCOPE_KEYS)
+      if (!approach.movements[key]) approach.movements[key] = emptyMovement();
+  });
+  (record.routes || []).forEach(function (route) {
+    route.volumes = route.volumes || ({} as RouteFlow["volumes"]);
+    for (const key of SCOPE_KEYS)
+      if (!route.volumes[key]) route.volumes[key] = emptyRouteVolume();
+  });
+  return record;
+}
+
+/** 這筆紀錄算得出全日尖峰小時嗎？（有 24 小時資料，而且真的挑到了一個視窗） */
+export function hasDayPeak(record: TrafficRecord): boolean {
+  return coversFullDay(record.survey) && Boolean(record.peaks?.DAY?.start);
+}
+
+/**
+ * 全日相關欄位為什麼是「－」。畫面上只寫一句摘要，詳細說明在手冊。
+ * 回 null 代表算得出來，沒有理由要說。
+ */
+export function fullDayUnavailableReason(
+  record: TrafficRecord,
+  scope: ScopeKey,
+): string | null {
+  if (scope !== "DAY" && scope !== "FULL") return null;
+  if (!coversFullDay(record.survey))
+    return `本筆調查僅涵蓋 ${formatSurveyHours(record)}，不足 24 小時`;
+  if (scope === "DAY" && !record.peaks?.DAY?.start)
+    return "此筆為舊版匯入的資料，請重新匯入原始檔以取得全日尖峰小時";
+  return null;
+}
+
+/**
+ * 一筆紀錄在某個統計範圍底下「涵蓋的時間」要怎麼寫。
+ *
+ * 尖峰寫挑到的那一小時（07:00–08:00）；全日時段寫實際調查時數。
+ * 算不出來時回 "－"——空白會讓人以為只是還沒載入完。
+ */
+export function scopeWindowLabel(
+  record: TrafficRecord,
+  scope: ScopeKey,
+): string {
+  if (scope === "FULL")
+    return coversFullDay(record.survey) ? "24 小時" : "－";
+  const window = record.peaks?.[scope];
+  return window?.start && window?.end ? `${window.start}–${window.end}` : "－";
+}
+
+/** 「4 小時」「24 小時」這種字樣；沒有調查時數資訊時回「未知時數」。 */
+export function formatSurveyHours(record: TrafficRecord): string {
+  const minutes = Number(record.survey?.minutes || 0);
+  if (!minutes) return "未知時數";
+  const hours = minutes / 60;
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} 小時`;
+}
+
+export function recordTotal(record: TrafficRecord, peak: ScopeKey) {
   return record.approaches.reduce(
     (sum, approach) => sum + totalMovement(approach, peak),
     0,
@@ -957,19 +1186,42 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
           "此筆由舊版匯入器建立，缺少可追溯的起點→終點流向；請刪除本筆後，以 v1.4.0 重新匯入原始 Excel。",
       });
     }
-    for (const peak of ["AM", "PM"] as PeakKey[]) {
-      const hour = Number(record.peaks[peak].start.split(":")[0]);
-      if (
-        (peak === "AM" && (hour < 5 || hour >= 12)) ||
-        (peak === "PM" && (hour < 12 || hour >= 23))
-      ) {
+    for (const peak of PEAK_KEYS) {
+      /*
+       * 尖峰時間落在搜尋範圍外＝資料有問題。範圍不再寫死在這裡，一律讀
+       * PEAK_RANGES——以前這裡自己寫了一份 5/12/23，改口徑時很容易只改了
+       * 挑選那一邊、忘了這邊，於是每一筆新資料都被自己的檢查判成異常。
+       *
+       * 全日尖峰（DAY）搜尋範圍就是一整天，不可能落在範圍外，所以只有在
+       * 「有 24 小時資料卻沒挑到視窗」時才需要說話——那是格距組不成一小時
+       * （例如 2 小時一格），rollingPeak 會回 null。
+       */
+      const window = record.peaks[peak];
+      if (!window?.start) {
+        if (peak === "DAY" && coversFullDay(record.survey))
+          issues.push({
+            id: `${record.id}-DAY-missing`,
+            severity: "warning",
+            category: "尖峰時段異常",
+            station: record.station,
+            quarter: record.quarter,
+            message:
+              "有完整 24 小時資料，但沒有全日尖峰小時。可能是舊版匯入的資料（重新匯入原始檔即可），或原始檔的時間格距組不成整整一小時。",
+          });
+        continue;
+      }
+      const [rangeStart, rangeEnd] = PEAK_RANGES[peak];
+      const startMinutes =
+        Number(window.start.split(":")[0]) * 60 +
+        Number(window.start.split(":")[1] || 0);
+      if (startMinutes < rangeStart || startMinutes + 60 > rangeEnd) {
         issues.push({
           id: `${record.id}-${peak}-time`,
           severity: "warning",
           category: "尖峰時段異常",
           station: record.station,
           quarter: record.quarter,
-          message: `${peak} 尖峰 ${record.peaks[peak].start} 不在預設搜尋範圍。`,
+          message: `${SCOPE_LABELS[peak]} ${window.start} 不在預設搜尋範圍（${formatMinutes(rangeStart)}–${formatMinutes(rangeEnd)}）。`,
         });
       }
       const approachTotals = record.approaches.map((a) =>
@@ -983,9 +1235,10 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
             category: "缺值",
             station: record.station,
             quarter: record.quarter,
-            message: `${record.approaches[index].name} ${peak} 含非數值欄位。`,
+            message: `${record.approaches[index].name} ${SCOPE_LABELS[peak]} 含非數值欄位。`,
           });
-        const m = record.approaches[index].movements[peak];
+        const m =
+          record.approaches[index].movements[peak] || emptyMovement();
         const classifiedVehicleTotal = Object.values(m.vehicle).reduce(
           (a, b) => a + b,
           0,
@@ -1005,7 +1258,7 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
               category: "車種統計異常",
               station: record.station,
               quarter: record.quarter,
-              message: `${record.approaches[index].name} ${peak}：左直右實際車輛合計 ${turningVehicleTotal.toLocaleString()} 輛/hr，四車種合計 ${classifiedVehicleTotal.toLocaleString()} 輛/hr，差 ${difference.toLocaleString()} 輛/hr。`,
+              message: `${record.approaches[index].name} ${SCOPE_LABELS[peak]}：左直右實際車輛合計 ${turningVehicleTotal.toLocaleString()} 輛/hr，各車種合計 ${classifiedVehicleTotal.toLocaleString()} 輛/hr，差 ${difference.toLocaleString()} 輛/hr。`,
               details: {
                 turningVehicleTotal,
                 classifiedVehicleTotal,
@@ -1039,13 +1292,19 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
      * 所以那一格永遠是 0，等於對使用者謊稱「已經檢查過而且沒問題」。
      */
     if (record.routes?.length)
-      for (const peak of ["AM", "PM"] as PeakKey[]) {
+      for (const peak of SCOPE_KEYS) {
+        /*
+         * 沒有這個範圍的資料就跳過——不足 24 小時的調查，DAY 與 FULL 整組
+         * 是空的，兩邊都是 0、差值也是 0，跑下去只是白跑；但如果哪天其中
+         * 一邊有值另一邊沒有，那就是真的脫鉤，仍然要被抓出來。
+         */
         const movementTotal = record.approaches.reduce(function (sum, approach) {
           return sum + totalMovement(approach, peak);
         }, 0);
         const routeTotal = record.routes.reduce(function (sum, route) {
           return sum + Number(route.volumes[peak]?.pcu || 0);
         }, 0);
+        if (!movementTotal && !routeTotal) continue;
         const difference = Math.round((movementTotal - routeTotal) * 10) / 10;
         // 兩邊都做到小數一位，容差取 0.11 與 conservationCheck 一致。
         if (Math.abs(difference) >= 0.11)
@@ -1055,14 +1314,20 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
             category: "總數不一致",
             station: record.station,
             quarter: record.quarter,
-            message: `${peak} 尖峰：路口轉向總量 ${movementTotal.toLocaleString()} PCU/hr 與逐條流向加總 ${routeTotal.toLocaleString()} PCU/hr 相差 ${difference.toLocaleString()} PCU/hr。常見原因是刪除支線後未重算，請到「流量核對工作台」確認。`,
+            message: `${SCOPE_LABELS[peak]}：路口轉向總量 ${movementTotal.toLocaleString()} ${scopeUnit(peak)} 與逐條流向加總 ${routeTotal.toLocaleString()} ${scopeUnit(peak)} 相差 ${difference.toLocaleString()} ${scopeUnit(peak)}。常見原因是刪除支線後未重算，請到「流量核對工作台」確認。`,
           });
       }
   }
   return issues;
 }
 
-export type IntervalRow = { start: number; label: string; values: number[] };
+export type IntervalRow = {
+  start: number;
+  label: string;
+  values: number[];
+  /** One-based source row for each contributing worksheet. */
+  sourceRows?: Record<string, number>;
+};
 
 export function rollingPeak(
   rows: IntervalRow[],
@@ -1144,6 +1409,34 @@ export function rollingPeak(
   return best;
 }
 
+/**
+ * 一次算出三個尖峰的視窗——**全系統只有這一支**。
+ *
+ * 匯入預覽（inspectWorkbook）與換過當量係數後的重算（configuredImportPreview）
+ * 都走這裡，所以兩邊不可能挑到不同的視窗。以前那兩處各寫一次 rollingPeak，
+ * 要新增一個時段就得記得兩邊都補。
+ *
+ * @param surveyMinutes 這份調查總共涵蓋幾分鐘。不足 24 小時時 DAY 一律是 null：
+ *   只做了 4 小時（例如 07–09＋17–19）卻回報一個「全日尖峰」，那個數字必然
+ *   等於上午與下午尖峰裡較大的一個，看起來像新資訊其實不是，還會被當成
+ *   整天的最大值寫進報告。
+ */
+export function peakWindowsFor(
+  rows: IntervalRow[],
+  intervalMinutes: number,
+  weights: number[] | undefined,
+  surveyMinutes: number,
+): Record<PeakKey, ReturnType<typeof rollingPeak>> {
+  const fullDay = coversFullDay({ minutes: surveyMinutes });
+  return {
+    AM: rollingPeak(rows, PEAK_RANGES.AM, intervalMinutes, weights),
+    PM: rollingPeak(rows, PEAK_RANGES.PM, intervalMinutes, weights),
+    DAY: fullDay
+      ? rollingPeak(rows, PEAK_RANGES.DAY, intervalMinutes, weights)
+      : null,
+  };
+}
+
 function parseTime(value: unknown): number | null {
   if (typeof value === "number" && value > 0 && value < 1)
     return Math.round(value * 24 * 60);
@@ -1191,8 +1484,15 @@ export type ImportPreview = {
     minutes: number;
     values: number[];
   };
-  am: ReturnType<typeof rollingPeak>;
-  pm: ReturnType<typeof rollingPeak>;
+  /**
+   * 三個尖峰各自挑到的那一小時。用 Record 而不是 am/pm/day 三個欄位，是為了讓
+   * 下游一律寫 `preview.peakWindows[key]`——以前寫成 `key === "AM" ? item.am : item.pm`
+   * 的地方有兩處，多一個時段就要記得兩邊都改，漏一邊就是「同一件事在不同畫面
+   * 說不同話」。
+   *
+   * DAY 只有 24 小時的調查檔才會有值（coversFullDay），否則是 null。
+   */
+  peakWindows: Record<PeakKey, ReturnType<typeof rollingPeak>>;
   date: string;
   dateSource: { sheet: string; cell: string; raw: string } | null;
   surveyType: string;
@@ -1829,7 +2129,20 @@ export async function inspectWorkbook(
           const value =
             sheet[XLSX.utils.encode_cell({ r: row, c: column.sourceColumn })]
               ?.v;
-          interval.values[column.valueIndex] = Number(value) || 0;
+          /*
+           * 每一格的車輛數先四捨五入成整數，再拿去做後面所有計算。
+           *
+           * 起因：使用者的 06525T2503 調查檔裡，儲存格存的是小數
+           * （0.36、5.5506 …），Excel 的格式把它顯示成整數，於是報告上
+           * 看到的是 0 與 6，程式拿去算的卻是 0.36 與 5.5506。全日車輛數
+           * 因此算出 27,988.79 輛——一個不存在的車。PCU 也跟著帶小數。
+           *
+           * 依使用者決定：以「畫面上看到的整數」為準。四捨五入放在這裡
+           * ——**全系統唯一讀取原始儲存格的地方**——之後的加總、尖峰滾動、
+           * PCU 換算、全日累計全部自動吃到整數，不必在下游各補一次
+           * （補在下游就會變成同一件事在 N 個地方各做各的）。
+           */
+          interval.values[column.valueIndex] = Math.round(Number(value) || 0);
         });
         intervalMap.set(start, interval);
       }
@@ -2011,8 +2324,12 @@ export async function inspectWorkbook(
       minutes: intervalRows.length * intervalMinutes,
       values: surveyValues,
     },
-    am: rollingPeak(intervalRows, [5 * 60, 12 * 60], intervalMinutes, weights),
-    pm: rollingPeak(intervalRows, [12 * 60, 23 * 60], intervalMinutes, weights),
+    peakWindows: peakWindowsFor(
+      intervalRows,
+      intervalMinutes,
+      weights,
+      intervalRows.length * intervalMinutes,
+    ),
     date: rocDate(dateText),
     dateSource: dateCell
       ? { sheet: dateCell.sheet, cell: dateCell.cell, raw: dateCell.text }

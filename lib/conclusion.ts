@@ -17,7 +17,12 @@
  * ・跨路口、跨季度一律不加總，只寫各自的值、最大／最小、平均與變動幅度。
  */
 
-export type PeakKey = "AM" | "PM";
+/*
+ * 這裡刻意不從 lib/traffic 匯入型別：那一支會連帶把 xlsx 拉進來，
+ * 而這個檔案是純文字產生器，測試要能單獨跑。三個鍵值必須和 lib/traffic
+ * 的 PeakKey 一致——tests/conclusion.test.ts 有一項檢查釘住這件事。
+ */
+export type PeakKey = "AM" | "PM" | "DAY";
 
 /** 可勾選的敘述指標。 */
 export const CONCLUSION_METRICS = [
@@ -200,6 +205,7 @@ export type ConclusionMeta = {
 const PEAK_LABEL: Record<PeakKey, string> = {
   AM: "上午尖峰",
   PM: "下午尖峰",
+  DAY: "全日尖峰小時",
 };
 
 function num(value: number | null | undefined, digits: number) {

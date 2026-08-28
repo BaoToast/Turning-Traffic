@@ -2,19 +2,25 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { branchBalance, conservationCheck, diagramCollisionWarnings, odMatrix, peakSensitivity } from "../lib/final-features.ts";
 import type { TrafficRecord } from "../lib/traffic.ts";
+import {
+  emptyMovement,
+  emptyRouteVolume,
+  emptyPeakWindows,
+} from "../lib/traffic.ts";
 
 function record(): TrafficRecord {
   const movement = { left: 0, through: 10, right: 0, vehicle: { car: 10 }, rawVehicleTotal: 10 };
   return {
     id: "r", station: "T-01", name: "測試路口", rawName: "source.xls", quarter: "115Q2", date: "2026-05-01", surveyType: "平日",
-    peaks: { AM: { start: "07:00", end: "08:00" }, PM: { start: "17:00", end: "18:00" } },
+    /* 全日尖峰留空：這筆測試資料不是 24 小時的調查。 */
+    peaks: { ...emptyPeakWindows(), AM: { start: "07:00", end: "08:00" }, PM: { start: "17:00", end: "18:00" } },
     approaches: [
-      { id: "A", name: "路口A", bearing: "東", angle: 0, lanes: null, capacity: null, movements: { AM: movement, PM: movement } },
-      { id: "B", name: "路口B", bearing: "西", angle: 180, lanes: null, capacity: null, movements: { AM: movement, PM: movement } },
+      { id: "A", name: "路口A", bearing: "東", angle: 0, lanes: null, capacity: null, movements: { DAY: emptyMovement(), FULL: emptyMovement(), AM: movement, PM: movement } },
+      { id: "B", name: "路口B", bearing: "西", angle: 180, lanes: null, capacity: null, movements: { DAY: emptyMovement(), FULL: emptyMovement(), AM: movement, PM: movement } },
     ],
     routes: [
-      { id: "A-B", fromApproachId: "A", toApproachId: "B", movement: "through", volumes: { AM: { pcu: 10, vehicle: { car: 10 } }, PM: { pcu: 10, vehicle: { car: 10 } } } },
-      { id: "B-A", fromApproachId: "B", toApproachId: "A", movement: "through", volumes: { AM: { pcu: 10, vehicle: { car: 10 } }, PM: { pcu: 10, vehicle: { car: 10 } } } },
+      { id: "A-B", fromApproachId: "A", toApproachId: "B", movement: "through", volumes: { DAY: emptyRouteVolume(), FULL: emptyRouteVolume(), AM: { pcu: 10, vehicle: { car: 10 } }, PM: { pcu: 10, vehicle: { car: 10 } } } },
+      { id: "B-A", fromApproachId: "B", toApproachId: "A", movement: "through", volumes: { DAY: emptyRouteVolume(), FULL: emptyRouteVolume(), AM: { pcu: 10, vehicle: { car: 10 } }, PM: { pcu: 10, vehicle: { car: 10 } } } },
     ],
     sourceTrace: { templateId: "t", templateName: "測試", dateSource: null, cells: [], intervals: [0, 15, 30, 45, 60].map(function (start, index) { return { start, end: start + 15, pcu: index + 1, vehicles: index + 1 }; }) },
     sourceFiles: ["source.xls"], importedAt: "2026-05-01T00:00:00Z", validation: { referenceFound: false, matchRate: null, notes: [] },

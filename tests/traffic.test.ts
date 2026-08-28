@@ -304,7 +304,7 @@ test("splits weekday and holiday hourly workbooks into independent previews", as
     ["假日", "平日"],
   );
   assert.ok(previews.every(function (preview) { return preview.templateId === "hourly-weekday-holiday-turning-v1"; }));
-  assert.ok(previews.every(function (preview) { return preview.am?.end - preview.am?.start === 60; }));
+  assert.ok(previews.every(function (preview) { return (preview.peakWindows.AM?.end ?? 0) - (preview.peakWindows.AM?.start ?? 0) === 60; }));
 });
 
 /*
@@ -556,7 +556,7 @@ test("時間欄用全形數字或冒號旁有空白時，整張表仍讀得到�
     const preview = await inspectWorkbook(turningSheet({ timeText }), DEFAULT_PCE);
     assert.equal(preview.intervals, 4, `${label}：整張表讀成 0 筆`);
     assert.equal(preview.columns.length, 48, label);
-    assert.ok(preview.am, `${label}：找不到上午尖峰`);
+    assert.ok(preview.peakWindows.AM, `${label}：找不到上午尖峰`);
   }
 });
 
@@ -738,7 +738,17 @@ test("沒有被污染時什麼都不做", () => {
  * 一行紅字去做。
  */
 test("升版但沒有變更計算口徑時，鎖定不算衝突，只顯示一行說明", () => {
-  const status = lockStatus(LAST_CALC_CHANGE_VERSION, "v2.1.28", true);
+  /*
+   * 這幾項刻意用 LAST_CALC_CHANGE_VERSION 與 VERSION 這兩個常數，不寫死版號。
+   * 舊版寫死 "v2.1.28"，於是 v2.1.30 把常數推進之後，三項測試同時紅字——
+   * 紅的不是程式，是測試自己過期了。用常數寫，日後再推進常數也不必動這裡。
+   */
+  /*
+   * 「之後又升了版、但那幾版都沒動計算」——目前 LAST_CALC_CHANGE_VERSION
+   * 就等於 VERSION，還沒有這樣的版本存在，所以用一個假的未來版號來測
+   * lockStatus 這支函式本身的行為。
+   */
+  const status = lockStatus(LAST_CALC_CHANGE_VERSION, "v9.9.9", true);
   assert.deepEqual(status.conflicts, [], "沒動計算的升版不可以報衝突");
   assert.match(status.note, /沒有變更計算口徑/);
 });
@@ -751,28 +761,47 @@ test("鎖定當時的版本早於最後一次變更計算口徑，才算衝突",
 });
 
 test("較新版本建立的鎖定不可由較舊版本宣告安全", () => {
-  const status = lockStatus("v2.1.30", "v2.1.28", true);
+  const status = lockStatus("v9.9.9", VERSION, true);
   assert.equal(status.conflicts.length, 1);
   assert.match(status.conflicts[0], /較新的系統版本/);
   assert.equal(status.note, "");
 });
 
 test("鎖定後資料被動過，永遠算衝突", () => {
-  const changed = lockStatus("v2.1.28", "v2.1.28", false);
+  const changed = lockStatus(
+    LAST_CALC_CHANGE_VERSION,
+    LAST_CALC_CHANGE_VERSION,
+    false,
+  );
   assert.deepEqual(changed.conflicts, ["鎖定後的資料內容已變更"]);
   /* 同版本、內容也沒動 → 完全乾淨 */
-  const clean = lockStatus("v2.1.28", "v2.1.28", true);
+  const clean = lockStatus(
+    LAST_CALC_CHANGE_VERSION,
+    LAST_CALC_CHANGE_VERSION,
+    true,
+  );
   assert.deepEqual(clean.conflicts, []);
   assert.equal(clean.note, "", "同一版不必特別說明");
 });
 
-test("使用者截圖那一筆（鎖定於 v2.1.22）不該再亮紅字", () => {
+test("v2.1.30 真的動了計算口徑，之前鎖定的資料要亮紅字", () => {
+  /*
+   * ⚠️ 這一項在 v2.1.29 以前是反過來寫的（「鎖定於 v2.1.22 不該再亮紅字」）。
+   *
+   * 當時是對的：v2.1.22～v2.1.29 沒有任何一版動過計算。v2.1.30 動了兩件事
+   * ——上午／下午尖峰的搜尋範圍，以及每一格車輛數先四捨五入——所以
+   * LAST_CALC_CHANGE_VERSION 推進到 v2.1.30，比它早鎖定的資料就必須亮紅字。
+   * 使用者已確認接受這件事（「我鎖定的檔案我可以解鎖再重新鎖定沒關係」）。
+   *
+   * 這一項存在的意義是：日後若有人在沒有動計算的版本又推進了這個常數，
+   * 會先在這裡被問一次「你真的動了口徑嗎」。
+   */
   const status = lockStatus("v2.1.22", VERSION, true);
-  assert.deepEqual(
-    status.conflicts,
-    [],
-    "v2.1.22 之後沒有任何一版變更過計算口徑，那筆鎖定仍然有效",
-  );
+  assert.equal(status.conflicts.length, 1);
+  assert.match(status.conflicts[0], /早於最後一次變更計算口徑/);
+  /* 而 v2.1.30 之後鎖定的仍然乾淨。 */
+  const after = lockStatus(LAST_CALC_CHANGE_VERSION, VERSION, true);
+  assert.deepEqual(after.conflicts, []);
 });
 
 test("版號比大小要照數字，不是照字串", () => {

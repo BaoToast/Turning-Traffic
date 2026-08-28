@@ -22,15 +22,31 @@ import {
   IMPORT_FORMAT_TEMPLATES,
   inspectWorkbookVariants,
   Movement,
+  MovementKey,
   normalizeIntersectionName,
   PceMatrix,
   pceFactor,
   PeakKey,
+  ScopeKey,
+  PEAK_KEYS,
+  SCOPE_KEYS,
+  SCOPE_LABELS,
+  SCOPE_SHORT_LABELS,
+  scopeUnit,
+  scopeWindowLabel,
+  coversFullDay,
+  hasDayPeak,
+  fullDayUnavailableReason,
+  formatSurveyHours,
+  emptyMovement,
+  emptyScopeMovements,
+  ensureRecordScopes,
+  roundedPcu,
   Project,
   qualityIssues,
   referenceMovementForOd,
   recordTotal,
-  rollingPeak,
+  peakWindowsFor,
   RouteFlow,
   totalMovement,
   TrafficRecord,
@@ -102,11 +118,42 @@ type View =
   | "backup"
   | "help";
 type DiagramStyle = "formal" | "standard" | "simple";
-type DisplayMode = "volume" | "percent" | "both";
+/*
+ * 轉向圖上那個數字要顯示什麼。
+ *   volume  ＝交通量（PCU；車種選單一車種時本來就是輛數）
+ *   count   ＝車輛數（v2.1.30 新增，一律是實際調查到的輛數，不套當量）
+ *   percent ＝佔比
+ *   both    ＝交通量＋佔比
+ */
+type DisplayMode = "volume" | "count" | "percent" | "both";
 type ArrowMode = "all" | "focus";
 // 顯示模式同時也是版面保存的單位，直接沿用 lib 的型別避免兩邊定義漂移
 type FlowSummaryMode = FlowLayoutMode;
+/*
+ * 車種組成分析的「分析範圍」。
+ *
+ * SURVEY（全調查時段）＝這份檔案匯入到多少就算多少，**不等於全日**：
+ * 只做 07–09＋17–19 的調查，它就是那 4 小時的累計。因此標籤一律把實際
+ * 涵蓋時數寫出來（compositionScopeLabel），免得 4 小時被當成一整天。
+ * 24 小時的調查底下，SURVEY 就等於全日時段。
+ */
 type CompositionScope = PeakKey | "SURVEY";
+
+/** 分析範圍要怎麼寫——全系統只有這一支。 */
+function compositionScopeLabel(
+  record: TrafficRecord | null | undefined,
+  scope: CompositionScope,
+) {
+  if (scope !== "SURVEY") return SCOPE_LABELS[scope];
+  return record
+    ? `全調查時段（${formatSurveyHours(record)}）`
+    : "全調查時段";
+}
+
+/** 分析範圍的單位。車種組成一律報實際車輛數，不套 PCU 當量。 */
+function compositionScopeUnit(scope: CompositionScope) {
+  return scope === "SURVEY" ? "輛/調查時段" : scopeUnit(scope, "vehicle");
+}
 type ImportResolution = {
   action: "auto" | "auto-new" | "new" | "merge" | "skip";
   targetId?: string;
@@ -181,9 +228,14 @@ function recordVehicleIds(record: TrafficRecord) {
   Object.keys(record.survey?.vehicle || {}).forEach(function (id) {
     ids.add(id);
   });
+  /*
+   * 四個統計範圍都要掃。車種清單一律由**資料裡實際出現過的**車種決定，
+   * 不是寫死那四種——調查表可以有自行車、電動車、任何自訂車種，
+   * ANALYSIS_VEHICLES 只用來決定內建四種的排列順序。
+   */
   record.approaches.forEach(function (approach) {
-    (["AM", "PM"] as PeakKey[]).forEach(function (peak) {
-      Object.keys(approach.movements[peak].vehicle || {}).forEach(
+    SCOPE_KEYS.forEach(function (peak) {
+      Object.keys(approach.movements[peak]?.vehicle || {}).forEach(
         function (id) {
           ids.add(id);
         },
@@ -523,13 +575,11 @@ function movementTargetIndex(
   return closestDestination(approaches, sourceIndex, targetAngle);
 }
 
-function roundedPcu(value: number) {
-  return Math.round(value * 10) / 10;
-}
+/* roundedPcu 與 emptyMovement 已移到 lib/traffic，畫面與 lib 共用同一份。 */
 
 function destinationFlowTotal(
   record: TrafficRecord,
-  peak: PeakKey,
+  peak: ScopeKey,
   destinationIndex: number,
   vehicle: VehicleKey,
 ) {
@@ -601,7 +651,7 @@ function destinationFlowTotal(
 
 function sourceFlowTotal(
   record: TrafficRecord,
-  peak: PeakKey,
+  peak: ScopeKey,
   sourceIndex: number,
 ) {
   const source = record.approaches[sourceIndex];
@@ -619,7 +669,7 @@ function sourceFlowTotal(
   return roundedPcu(totalMovement(source, peak));
 }
 
-function branchPeakFlows(record: TrafficRecord, peak: PeakKey) {
+function branchPeakFlows(record: TrafficRecord, peak: ScopeKey) {
   return record.approaches.map(function (approach, index) {
     return {
       approach,
@@ -640,16 +690,37 @@ function movementFromGeometry(
 }
 
 function syncRouteTotals(record: TrafficRecord) {
+  /*
+   * 先補齊四個統計範圍再說。舊備份與舊 localStorage 只有 AM／PM，
+   * 底下每一段都直接寫 route.volumes[key]，少了鍵就會丟例外。
+   */
+  ensureRecordScopes(record);
+  /*
+   * 全日時段（FULL）在這裡**現算**，不是存起來的獨立數字。
+   *
+   * 唯一的來源是 route.survey / record.survey——也就是「這份調查每一欄
+   * 總共幾輛車」。存兩份的話，改當量係數、刪支線、合併路口之後兩份就會
+   * 分岔，而且是在報告送出去之後才被發現。
+   *
+   * ⚠️ 這一段要放在「沒有 routes 就 return」**之前**：沒有流向的舊資料
+   * 一樣要把 FULL 清乾淨，否則備份裡萬一帶著上一版留下的值，會一直留著。
+   */
+  const fullDay = coversFullDay(record.survey);
+  record.routes?.forEach(function (route) {
+    route.volumes.FULL = {
+      pcu: 0,
+      vehicle: fullDay ? { ...(route.survey?.vehicle || {}) } : {},
+    };
+  });
+  record.approaches.forEach(function (approach) {
+    approach.movements.FULL = emptyMovement();
+  });
   if (!record.routes?.length) return record;
   const pce = record.pceUsed || DEFAULT_PCE;
   record.routes.forEach(function (route) {
-    (["AM", "PM"] as PeakKey[]).forEach(function (key) {
+    SCOPE_KEYS.forEach(function (key) {
       route.volumes[key].pcu = roundedPcu(
-        (
-          Object.keys(route.volumes[key].vehicle) as Array<
-            keyof typeof route.volumes.AM.vehicle
-          >
-        ).reduce(function (sum, vehicle) {
+        Object.keys(route.volumes[key].vehicle).reduce(function (sum, vehicle) {
           return (
             sum +
             Number(route.volumes[key].vehicle[vehicle] || 0) *
@@ -660,18 +731,38 @@ function syncRouteTotals(record: TrafficRecord) {
     });
   });
   record.approaches.forEach(function (approach) {
-    (["AM", "PM"] as PeakKey[]).forEach(function (key) {
+    SCOPE_KEYS.forEach(function (key) {
       const totals = { left: 0, through: 0, right: 0 };
+      const vehicle: Record<string, number> = {};
+      let rawVehicleTotal = 0;
       record.routes
         ?.filter(function (route) {
           return route.fromApproachId === approach.id;
         })
         .forEach(function (route) {
           totals[route.movement] += route.volumes[key].pcu;
+          Object.entries(route.volumes[key].vehicle).forEach(function (entry) {
+            const count = Number(entry[1]) || 0;
+            vehicle[entry[0]] = Number(vehicle[entry[0]] || 0) + count;
+            rawVehicleTotal += count;
+          });
         });
       approach.movements[key].left = roundedPcu(totals.left);
       approach.movements[key].through = roundedPcu(totals.through);
       approach.movements[key].right = roundedPcu(totals.right);
+      /*
+       * 只有全日時段的逐車種輛數在這裡重建。
+       *
+       * AM／PM／全日尖峰的 vehicle 是匯入時由「該尖峰視窗內的原始格子」
+       * 算出來的，重建會覆蓋掉使用者在核對工作台改過的值；而 FULL 本來
+       * 就沒有存，每次都要從 survey 現算。
+       */
+      if (key === "FULL") {
+        approach.movements[key].vehicle = vehicle;
+        approach.movements[key].rawVehicleTotal = fullDay
+          ? rawVehicleTotal
+          : null;
+      }
     });
   });
   return record;
@@ -686,6 +777,12 @@ function applyReferenceMovementRule(record: TrafficRecord) {
    * 內建的參考表改回去了——而畫面上明明寫著「本路口採人工確認分類；調整
    * 圖面角度不會覆蓋」。
    */
+  /*
+   * 這一支是「每次開啟網頁、每次還原備份」都會跑的入口，所以四個統計範圍
+   * 的補齊放在最前面：底下每一條路徑都會讀 volumes[key]，舊備份少了
+   * DAY／FULL 兩個鍵就會丟例外，整個計畫的資料會進不去。
+   */
+  ensureRecordScopes(record);
   if (record.movementRule === "manual") return syncRouteTotals(record);
   let applied = false;
   const armCodes = (record.approaches || []).map(function (approach) {
@@ -868,7 +965,7 @@ export function adjustedLayoutModes(approach: Approach) {
 
 export function diagramMarkup(
   record: TrafficRecord,
-  peak: PeakKey,
+  peak: ScopeKey,
   style: DiagramStyle,
   mode: DisplayMode,
   vehicle: VehicleKey,
@@ -882,11 +979,66 @@ export function diagramMarkup(
     height = expandedCanvas ? 900 : 820,
     cx = width / 2,
     cy = expandedCanvas ? 470 : 430;
-  const unit = vehicle === "all" ? "PCU/hr" : "輛/hr";
+  /*
+   * 「車輛數」顯示模式（v2.1.30）。
+   *
+   * 車種選「全部車種」時，原本的「交通量」給的是各車種乘上 PCU 當量後的
+   * 總和（PCU/hr），這一版新增的「車輛數」給的是各車種輛數**直接相加**。
+   * 兩者差很多——一輛大型車等於好幾個小客車當量——所以單位一定要跟著換，
+   * 否則圖上會出現標著 PCU/hr 的輛數。
+   * 車種選單一車種時兩種模式的數字相同：單一車種本來就是報輛數。
+   *
+   * 單位也跟著統計範圍走：尖峰是某一小時的流率（PCU/hr、輛/hr），
+   * 全日時段是一整天的累計（PCU/調查日、輛/調查日）。
+   */
+  const countMode = mode === "count";
+  const unit = scopeUnit(
+    peak,
+    countMode || vehicle !== "all" ? "vehicle" : "pcu",
+  );
+  const countVehicleIds =
+    countMode && vehicle === "all" ? recordVehicleIds(record) : [];
+  const sumOverVehicles = function (pick: (id: string) => number) {
+    return countVehicleIds.reduce(function (sum, id) {
+      return sum + pick(id);
+    }, 0);
+  };
+  /* 圖上任何一個「一支支線某個轉向的值」都走這一支。 */
+  const movementValue = function (
+    approach: Approach,
+    movementKey?: MovementKey,
+  ) {
+    return countMode && vehicle === "all"
+      ? sumOverVehicles(function (id) {
+          return totalMovement(approach, peak, movementKey, id, record.routes);
+        })
+      : totalMovement(approach, peak, movementKey, vehicle, record.routes);
+  };
+  /* 一條 OD 流向的值。 */
+  const routeValueOf = function (route: RouteFlow) {
+    if (countMode && vehicle === "all")
+      return Object.values(route.volumes[peak]?.vehicle || {}).reduce(
+        function (sum, value) {
+          return sum + (Number(value) || 0);
+        },
+        0,
+      );
+    return vehicle === "all"
+      ? Number(route.volumes[peak]?.pcu || 0)
+      : Number(route.volumes[peak]?.vehicle[vehicle] || 0);
+  };
+  /* 駛入某一支支線的合計。 */
+  const destinationValue = function (destinationIndex: number) {
+    return countMode && vehicle === "all"
+      ? sumOverVehicles(function (id) {
+          return destinationFlowTotal(record, peak, destinationIndex, id);
+        })
+      : destinationFlowTotal(record, peak, destinationIndex, vehicle);
+  };
   const total = Math.max(
     1,
     record.approaches.reduce(function (sum, approach) {
-      return sum + totalMovement(approach, peak, undefined, vehicle);
+      return sum + movementValue(approach);
     }, 0),
   );
   const point = function (angle: number, radius: number) {
@@ -1001,7 +1153,7 @@ export function diagramMarkup(
     );
 
     const values = names.map(function (key) {
-      return totalMovement(approach, peak, key, vehicle, record.routes);
+      return movementValue(approach, key);
     });
     const approachTotal = values.reduce(function (a, b) {
       return a + b;
@@ -1023,10 +1175,7 @@ export function diagramMarkup(
         if (destinationIndex < 0) return;
         if (!keepRoute(index, destinationIndex)) return;
         const destination = record.approaches[destinationIndex];
-        const routeValue =
-          vehicle === "all"
-            ? route.volumes[peak].pcu
-            : Number(route.volumes[peak].vehicle[vehicle] || 0);
+        const routeValue = routeValueOf(route);
         const laneOffset = (routeIndex - (explicitRoutes.length - 1) / 2) * 1.6;
         const start = point(approach.angle + laneOffset, 145);
         const end = point(destination.angle - laneOffset, 158);
@@ -1123,7 +1272,9 @@ export function diagramMarkup(
         ? Math.round((value / sectionTotal) * 100) + "%"
         : "0%";
       if (mode === "percent") return pct;
-      if (mode === "volume") return value.toLocaleString() + " " + unit;
+      /* 交通量與車輛數都是「一個數字＋單位」，差別在 unit 與取值來源。 */
+      if (mode === "volume" || mode === "count")
+        return value.toLocaleString() + " " + unit;
       return value.toLocaleString() + " " + unit + " | " + pct;
     };
     const destinationLabels = names.map(function (key, movementIndex) {
@@ -1145,7 +1296,7 @@ export function diagramMarkup(
         ? explicit.join("、")
         : record.approaches[destinations[movementIndex]].name;
     });
-    const destinationTotal = destinationFlowTotal(record, peak, index, vehicle);
+    const destinationTotal = destinationValue(index);
     const sourceCode = approach.sourceCode || String.fromCharCode(65 + index);
     const incomingValues = names.map(function (movement) {
       if (incomingRoutes.length)
@@ -1155,12 +1306,7 @@ export function diagramMarkup(
               return route.movement === movement;
             })
             .reduce(function (sum, route) {
-              return (
-                sum +
-                (vehicle === "all"
-                  ? Number(route.volumes[peak].pcu || 0)
-                  : Number(route.volumes[peak].vehicle[vehicle] || 0))
-              );
+              return sum + routeValueOf(route);
             }, 0),
         );
       return roundedPcu(
@@ -1177,16 +1323,7 @@ export function diagramMarkup(
                 ) !== index
               )
                 return movementSum;
-              return (
-                movementSum +
-                totalMovement(
-                  source,
-                  peak,
-                  sourceMovement,
-                  vehicle,
-                  record.routes,
-                )
-              );
+              return movementSum + movementValue(source, sourceMovement);
             }, 0)
           );
         }, 0),
@@ -1612,8 +1749,9 @@ export function diagramMarkup(
     });
   }
 
+  /* 圖上那一行「這張圖是哪個時段」。全日時段沒有尖峰小時，寫涵蓋時數。 */
   const peakText =
-    peak + " Peak " + record.peaks[peak].start + "–" + record.peaks[peak].end;
+    SCOPE_SHORT_LABELS[peak] + " " + scopeWindowLabel(record, peak);
   const meta =
     style === "simple"
       ? ""
@@ -1779,24 +1917,34 @@ async function svgToPng(svg: string, scale = 2) {
  * 對應不到就是對應不到，寧可留白讓使用者去修檔案或設定車種對應，
  * 也不要給一個兩倍且單位錯誤的數字。
  */
-function emptyMovement() {
-  return {
-    left: 0,
-    through: 0,
-    right: 0,
-    vehicle: {} as Record<string, number>,
-    rawVehicleTotal: null,
-  };
+
+/**
+ * 某個統計範圍要用哪一組逐欄數值——**全系統只有這一支**。
+ *
+ * 三個尖峰各讀自己挑到的那一小時；FULL（全日時段）讀整份調查的加總，
+ * 而且**只有 24 小時的調查才給值**：不足一天的調查（例如只做 07–09＋17–19）
+ * 若讓它有值，那個數字會被當成「整天的量」寫進報告，而它其實只有 4 小時。
+ *
+ * 以前這裡寫成 `peak === "AM" ? item.am?.values : item.pm?.values`，
+ * 一樣的三元判斷在檔案裡有兩處，多一個時段就得記得兩邊都補。
+ */
+function scopeValues(
+  item: ImportPreview,
+  scope: ScopeKey,
+): number[] | undefined {
+  if (scope === "FULL")
+    return coversFullDay(item.survey) ? item.survey?.values : undefined;
+  return item.peakWindows?.[scope]?.values;
 }
 
 function mappedMovement(
   item: ImportPreview,
-  peak: PeakKey,
+  peak: ScopeKey,
   approachName: string,
   pce: PceMatrix,
   vehicleMappings: VehicleMappingTable,
 ) {
-  const values = peak === "AM" ? item.am?.values : item.pm?.values;
+  const values = scopeValues(item, peak);
   const vehicle: Record<string, number> = {};
   const raw = { left: 0, through: 0, right: 0 };
   const pcu = { left: 0, through: 0, right: 0 };
@@ -1879,8 +2027,10 @@ function recordFromPreview(
 ): TrafficRecord {
   const appliedPce = item.pceUsed || pce;
   const length = Math.max(
-    item.am?.values.length || 0,
-    item.pm?.values.length || 0,
+    ...SCOPE_KEYS.map(function (key) {
+      return scopeValues(item, key)?.length || 0;
+    }),
+    0,
   );
   const mappedNames = item.approaches.length
     ? item.approaches
@@ -1901,10 +2051,14 @@ function recordFromPreview(
       ? length / 3
       : 4;
   const mappedMovements = mappedNames.map(function (name) {
-    return {
-      AM: mappedMovement(item, "AM", name, appliedPce, vehicleMappings),
-      PM: mappedMovement(item, "PM", name, appliedPce, vehicleMappings),
-    };
+    return Object.fromEntries(
+      SCOPE_KEYS.map(function (key) {
+        return [
+          key,
+          mappedMovement(item, key, name, appliedPce, vehicleMappings),
+        ];
+      }),
+    ) as Record<ScopeKey, ReturnType<typeof mappedMovement>>;
   });
   const geometry = inferApproachGeometry(item, mappedNames, mappedMovements);
   const approaches: Approach[] = Array.from(
@@ -1935,12 +2089,8 @@ function recordFromPreview(
            *（它會依每一欄自己的車種與轉向別套用當量係數，是正確的算法）。
            * 完全對應不到才留白。
            */
-          AM: mappedMovements[index]
-            ? mappedMovements[index].AM
-            : emptyMovement(),
-          PM: mappedMovements[index]
-            ? mappedMovements[index].PM
-            : emptyMovement(),
+          ...emptyScopeMovements(),
+          ...(mappedMovements[index] || {}),
         },
       };
     },
@@ -1986,8 +2136,8 @@ function recordFromPreview(
   const routes = [...routeKeys.values()]
     .map(function (route, index) {
       const volumes = Object.fromEntries(
-        (["AM", "PM"] as PeakKey[]).map(function (key) {
-          const values = key === "AM" ? item.am?.values : item.pm?.values;
+        SCOPE_KEYS.map(function (key) {
+          const values = scopeValues(item, key);
           const vehicle: Record<string, number> = {};
           let routePcu = 0;
           item.columns
@@ -2052,8 +2202,16 @@ function recordFromPreview(
       Number(surveyVehicle[analysisVehicle] || 0) +
       (Number(item.survey?.values[column.valueIndex]) || 0);
   });
-  const traceCells = (["AM", "PM"] as PeakKey[]).flatMap(function (tracePeak) {
-    const window = tracePeak === "AM" ? item.am : item.pm;
+  /*
+   * 逐格追溯只做三個尖峰，不做全日時段。
+   *
+   * 尖峰是一小時、頂多四格，攤開來看得出「哪一格哪一欄湊成這個數字」；
+   * 全日時段是 24 小時 × 每一欄，一筆七叉路口就是好幾萬列，存進
+   * localStorage 會直接把配額吃光，而且沒有人會去逐格看一整天。
+   * 全日的數字仍然可以在「流量核對工作台」與匯出的 Excel 裡對得出來。
+   */
+  const traceCells = PEAK_KEYS.flatMap(function (tracePeak) {
+    const window = item.peakWindows?.[tracePeak];
     if (!window) return [];
     return (item.intervalRows || [])
       .filter(function (row) {
@@ -2150,20 +2308,21 @@ function recordFromPreview(
         return [definition.id, vehicleMappings[definition.id] || definition.id];
       }),
     ),
-    peaks: {
-      AM: item.am
-        ? {
-            start: formatMinutes(item.am.start),
-            end: formatMinutes(item.am.end),
-          }
-        : { start: "", end: "" },
-      PM: item.pm
-        ? {
-            start: formatMinutes(item.pm.start),
-            end: formatMinutes(item.pm.end),
-          }
-        : { start: "", end: "" },
-    },
+    peaks: Object.fromEntries(
+      PEAK_KEYS.map(function (key) {
+        const window = item.peakWindows?.[key];
+        return [
+          key,
+          window
+            ? {
+                start: formatMinutes(window.start),
+                end: formatMinutes(window.end),
+              }
+            : /* 空字串＝這個尖峰沒有值，和「00:00」是兩回事。 */
+              { start: "", end: "" },
+        ];
+      }),
+    ) as TrafficRecord["peaks"],
     survey: item.survey
       ? {
           intervals: item.survey.intervals,
@@ -2282,17 +2441,16 @@ function configuredImportPreview(
   });
   return {
     ...item,
-    am: rollingPeak(
+    /*
+     * 換過當量係數之後要重挑尖峰（挑的依據是 PCU）。這裡和匯入預覽走
+     * 同一支 peakWindowsFor，兩邊不可能挑到不同的視窗，也不會有一邊
+     * 忘了補新時段的問題。
+     */
+    peakWindows: peakWindowsFor(
       item.intervalRows,
-      [5 * 60, 12 * 60],
       item.intervalMinutes,
       weights,
-    ),
-    pm: rollingPeak(
-      item.intervalRows,
-      [12 * 60, 23 * 60],
-      item.intervalMinutes,
-      weights,
+      item.survey?.minutes ?? item.intervalRows.length * item.intervalMinutes,
     ),
     pceUsed: structuredClone(pce),
   };
@@ -2300,7 +2458,7 @@ function configuredImportPreview(
 
 function destinationVehicleTotal(
   record: TrafficRecord,
-  peak: PeakKey,
+  peak: ScopeKey,
   destinationIndex: number,
 ) {
   const destination = record.approaches[destinationIndex];
@@ -2319,64 +2477,22 @@ function destinationVehicleTotal(
     }, 0);
 }
 
-function surveyDestinationTotals(
-  record: TrafficRecord,
-  destinationIndex: number,
-) {
-  const destination = record.approaches[destinationIndex];
-  if (
-    !record.survey ||
-    record.survey.minutes < 24 * 60 ||
-    !destination ||
-    !record.routes?.length
-  )
-    return { pcu: null, vehicles: null };
-  const pce = record.pceUsed || DEFAULT_PCE;
-  let pcu = 0;
-  let vehicles = 0;
-  record.routes
-    .filter(function (route) {
-      return route.toApproachId === destination.id && Boolean(route.survey);
-    })
-    .forEach(function (route) {
-      recordVehicleIds(record).forEach(function (vehicle) {
-        const count = Number(route.survey?.vehicle[vehicle] || 0);
-        vehicles += count;
-        pcu += count * pceFactor(pce, vehicle, route.movement);
-      });
-    });
-  return { pcu: roundedPcu(pcu), vehicles };
-}
-
-function surveySourceTotals(record: TrafficRecord, sourceIndex: number) {
-  const source = record.approaches[sourceIndex];
-  if (
-    !record.survey ||
-    record.survey.minutes < 24 * 60 ||
-    !source ||
-    !record.routes?.length
-  )
-    return { pcu: null, vehicles: null };
-  const pce = record.pceUsed || DEFAULT_PCE;
-  let pcu = 0;
-  let vehicles = 0;
-  record.routes
-    .filter(function (route) {
-      return route.fromApproachId === source.id && Boolean(route.survey);
-    })
-    .forEach(function (route) {
-      recordVehicleIds(record).forEach(function (vehicle) {
-        const count = Number(route.survey?.vehicle[vehicle] || 0);
-        vehicles += count;
-        pcu += count * pceFactor(pce, vehicle, route.movement);
-      });
-    });
-  return { pcu: roundedPcu(pcu), vehicles };
-}
+/*
+ * surveyDestinationTotals / surveySourceTotals（v2.1.29 以前）已經移除。
+ *
+ * 那兩支是「全日欄位」專用的第二套加總：各自從 route.survey 逐筆乘上當量。
+ * 現在全日時段和三個尖峰一樣，走 destinationFlowTotal / sourceFlowTotal
+ * 讀 route.volumes.FULL——而 volumes.FULL 正是 syncRouteTotals 從同一份
+ * route.survey 現算出來的。少一套加總，就少一個會和畫面分岔的地方。
+ *
+ * 差別只有小數點的取法：舊版是「逐筆不取整數→加總→取到一位小數」，
+ * 現在是「逐筆取到一位小數→加總→再取一位小數」，與三個尖峰一致。
+ * 實測使用者的三份 24 小時調查檔，兩種取法的全日量差距見交付說明。
+ */
 
 function sourceVehicleTotal(
   record: TrafficRecord,
-  peak: PeakKey,
+  peak: ScopeKey,
   sourceIndex: number,
 ) {
   const source = record.approaches[sourceIndex];
@@ -2418,25 +2534,53 @@ function storedNameOf(record: TrafficRecord) {
   return record.nameEdited ? record.name : renormalizeStoredName(record.name);
 }
 
+export type ScopeFlow = { pcu: number | null; vehicles: number | null };
+
+/**
+ * 一支支線在某個統計範圍的駛入／駛出量——**全系統只有這一支**。
+ *
+ * 為什麼要有這一支：舊版把四個數字寫成 inboundAmPcu、inboundPmPcu、
+ * inboundFullDayPcu… 這種平鋪欄位，每加一個時段就要在畫面、Excel、
+ * 結論草稿、報告草稿四個地方各補一次，漏掉哪一個都不會有人發現。
+ *
+ * 算不出來時回 null（畫面顯示「－」），**不是 0**：
+ * ・全日時段：調查不足 24 小時
+ * ・全日尖峰：沒有 24 小時資料，或這一筆是舊版匯入的（需重新匯入）
+ * 0 會被當成「這裡真的沒有車」，還會被平均與最大最小算進去。
+ */
+function scopeFlowFor(
+  record: TrafficRecord,
+  index: number,
+  scope: ScopeKey,
+): { inbound: ScopeFlow; outbound: ScopeFlow } {
+  const blank = { pcu: null, vehicles: null };
+  if (
+    (scope === "FULL" && !coversFullDay(record.survey)) ||
+    (scope === "DAY" && !hasDayPeak(record))
+  )
+    return { inbound: { ...blank }, outbound: { ...blank } };
+  return {
+    inbound: {
+      pcu: destinationFlowTotal(record, scope, index, "all"),
+      vehicles: destinationVehicleTotal(record, scope, index),
+    },
+    outbound: {
+      pcu: sourceFlowTotal(record, scope, index),
+      vehicles: sourceVehicleTotal(record, scope, index),
+    },
+  };
+}
+
 function inboundAnalysisRows(record: TrafficRecord) {
   return record.approaches.map(function (approach, index) {
-    const inboundSurvey = surveyDestinationTotals(record, index);
-    const outboundSurvey = surveySourceTotals(record, index);
-    return {
-      approach,
-      inboundFullDayPcu: inboundSurvey.pcu,
-      inboundAmPcu: destinationFlowTotal(record, "AM", index, "all"),
-      inboundPmPcu: destinationFlowTotal(record, "PM", index, "all"),
-      inboundFullDayVehicles: inboundSurvey.vehicles,
-      inboundAmVehicles: destinationVehicleTotal(record, "AM", index),
-      inboundPmVehicles: destinationVehicleTotal(record, "PM", index),
-      outboundFullDayPcu: outboundSurvey.pcu,
-      outboundAmPcu: sourceFlowTotal(record, "AM", index),
-      outboundPmPcu: sourceFlowTotal(record, "PM", index),
-      outboundFullDayVehicles: outboundSurvey.vehicles,
-      outboundAmVehicles: sourceVehicleTotal(record, "AM", index),
-      outboundPmVehicles: sourceVehicleTotal(record, "PM", index),
-    };
+    const inbound = {} as Record<ScopeKey, ScopeFlow>;
+    const outbound = {} as Record<ScopeKey, ScopeFlow>;
+    SCOPE_KEYS.forEach(function (scope) {
+      const flows = scopeFlowFor(record, index, scope);
+      inbound[scope] = flows.inbound;
+      outbound[scope] = flows.outbound;
+    });
+    return { approach, inbound, outbound };
   });
 }
 
@@ -2503,11 +2647,11 @@ function toConclusionRecords(records: TrafficRecord[]): ConclusionRecord[] {
     const peakData = function (peak: PeakKey) {
       const window = record.peaks?.[peak];
       const totalVehicles = rows.reduce(function (sum, row) {
-        const value = peak === "AM" ? row.inboundAmVehicles : row.inboundPmVehicles;
+        const value = peak === "AM" ? row.inbound.AM.vehicles : row.inbound.PM.vehicles;
         return value === null ? sum : sum + value;
       }, 0);
       const hasVehicles = rows.some(function (row) {
-        return (peak === "AM" ? row.inboundAmVehicles : row.inboundPmVehicles) !== null;
+        return (peak === "AM" ? row.inbound.AM.vehicles : row.inbound.PM.vehicles) !== null;
       });
       return {
         window: window ? window.start + "–" + window.end : "",
@@ -2521,14 +2665,14 @@ function toConclusionRecords(records: TrafficRecord[]): ConclusionRecord[] {
             inflowByVehicleSafe: composition ? composition.inbound : null,
             twoWayByVehicleSafe: composition ? composition.twoWay : null,
             directionDisplay: composition ? composition.display : "split",
-            inflowPcu: peak === "AM" ? row.inboundAmPcu : row.inboundPmPcu,
-            outflowPcu: peak === "AM" ? row.outboundAmPcu : row.outboundPmPcu,
+            inflowPcu: peak === "AM" ? row.inbound.AM.pcu : row.inbound.PM.pcu,
+            outflowPcu: peak === "AM" ? row.outbound.AM.pcu : row.outbound.PM.pcu,
             inflowVehicles:
-              peak === "AM" ? row.inboundAmVehicles : row.inboundPmVehicles,
+              peak === "AM" ? row.inbound.AM.vehicles : row.inbound.PM.vehicles,
             outflowVehicles:
-              peak === "AM" ? row.outboundAmVehicles : row.outboundPmVehicles,
-            inflowFullDayVehicles: row.inboundFullDayVehicles,
-            outflowFullDayVehicles: row.outboundFullDayVehicles,
+              peak === "AM" ? row.outbound.AM.vehicles : row.outbound.PM.vehicles,
+            inflowFullDayVehicles: row.inbound.FULL.vehicles,
+            outflowFullDayVehicles: row.outbound.FULL.vehicles,
           };
         }),
       };
@@ -2563,8 +2707,8 @@ const SITE_SUMMARY_LIMIT = 30;
 
 function AuditWorkbench(props: {
   record: TrafficRecord | null;
-  peak: PeakKey;
-  setPeak: (peak: PeakKey) => void;
+  peak: ScopeKey;
+  setPeak: (peak: ScopeKey) => void;
   quarter: string;
   quarterRecords: TrafficRecord[];
   lockQuarter: () => void;
@@ -2633,15 +2777,20 @@ function AuditWorkbench(props: {
       const origin = approachById.get(route.fromApproachId);
       const destination = approachById.get(route.toApproachId);
       const row: Record<string, string | number> = {
-        尖峰: props.peak + " Peak",
+        時段: SCOPE_LABELS[props.peak],
         起點: origin?.name || route.fromApproachId,
         終點: destination?.name || route.toApproachId,
         轉向: MOVE_LABELS[route.movement],
         流量: route.volumes[props.peak].pcu,
-        流量單位: "PCU/hr",
+        流量單位: scopeUnit(props.peak),
       };
       recordVehicleIds(record).forEach(function (vehicleKey) {
-        row[vehicleLabel(record, vehicleKey) + "（輛/hr）"] = Number(
+        row[
+          vehicleLabel(record, vehicleKey) +
+            "（" +
+            scopeUnit(props.peak, "vehicle") +
+            "）"
+        ] = Number(
           route.volumes[props.peak].vehicle[vehicleKey] || 0,
         );
       });
@@ -2701,10 +2850,9 @@ function AuditWorkbench(props: {
         <div className="audit-actions">
           <Segmented
             value={props.peak}
-            options={[
-              ["AM", "AM Peak"],
-              ["PM", "PM Peak"],
-            ]}
+            options={SCOPE_KEYS.map(function (key): [ScopeKey, string] {
+              return [key, SCOPE_SHORT_LABELS[key]];
+            })}
             onChange={props.setPeak}
           />
           <button onClick={downloadAuditWorkbook}>下載核對 Excel</button>
@@ -2937,20 +3085,20 @@ function AuditWorkbench(props: {
       </section>
       <section className="audit-kpis">
         <Kpi
-          label="系統尖峰總量"
-          value={peakTotal.toLocaleString() + " PCU/hr"}
-          note={
-            record.peaks[props.peak].start + "–" + record.peaks[props.peak].end
+          label={
+            props.peak === "FULL" ? "系統全日總量" : "系統尖峰總量"
           }
+          value={peakTotal.toLocaleString() + " " + scopeUnit(props.peak)}
+          note={scopeWindowLabel(record, props.peak)}
         />
         <Kpi
           label="OD 逐筆加總"
-          value={routeTotal.toLocaleString() + " PCU/hr"}
+          value={routeTotal.toLocaleString() + " " + scopeUnit(props.peak)}
           note={routes.length + " 筆 OD 流向"}
         />
         <Kpi
           label="核對差值"
-          value={difference.toLocaleString() + " PCU/hr"}
+          value={difference.toLocaleString() + " " + scopeUnit(props.peak)}
           note={Math.abs(difference) < 0.11 ? "兩者一致" : "請展開下表追查"}
           accent={Math.abs(difference) < 0.11 ? "" : "warn"}
         />
@@ -3224,7 +3372,7 @@ export default function TrafficApp() {
   const [importQuarterNo, setImportQuarterNo] = useState("");
   const [selectedIntersection, setSelectedIntersection] = useState("");
   const [selectedSurveyType, setSelectedSurveyType] = useState("");
-  const [peak, setPeak] = useState<PeakKey>("AM");
+  const [peak, setPeak] = useState<ScopeKey>("AM");
   const [compositionScope, setCompositionScope] =
     useState<CompositionScope>("AM");
   const [diagramStyle, setDiagramStyle] = useState<DiagramStyle>("formal");
@@ -3811,6 +3959,17 @@ export default function TrafficApp() {
     },
     [selected, selectedIntersection],
   );
+  /*
+   * 選著「全日尖峰小時」或「全日時段」，再切到一個只做了幾小時的路口時，
+   * 那個時段在新路口是算不出來的。不退回去的話畫面會整片 0，而且看起來
+   * 像資料壞掉；退回上午尖峰並且下拉選單也跟著變，使用者才知道發生什麼事。
+   */
+  useEffect(
+    function () {
+      if (selected && fullDayUnavailableReason(selected, peak)) setPeak("AM");
+    },
+    [selected, peak],
+  );
   useEffect(
     function () {
       if (selected && selected.surveyType !== selectedSurveyType)
@@ -3943,10 +4102,10 @@ export default function TrafficApp() {
       const focusLabel = siteLabelOf(focus);
       const peakLabel = function (peakKey: PeakKey) {
         const own =
-          focus.peaks[peakKey].start + "–" + focus.peaks[peakKey].end;
+          scopeWindowLabel(focus, peakKey);
         const others = new Set(
           exportRecords.map(function (record) {
-            return record.peaks[peakKey].start + "–" + record.peaks[peakKey].end;
+            return scopeWindowLabel(record, peakKey);
           }),
         );
         others.delete(own);
@@ -3958,8 +4117,12 @@ export default function TrafficApp() {
           .map(function (row) {
             return {
               name: row.approach.name,
-              am: direction === "inbound" ? row.inboundAmPcu : row.outboundAmPcu,
-              pm: direction === "inbound" ? row.inboundPmPcu : row.outboundPmPcu,
+              /* 這一段寫的是上午／下午尖峰的各支線流量。AM 與 PM 一定
+                 有值（不像全日欄位會是 null），?? 0 只是讓型別收斂。 */
+              am: (direction === "inbound" ? row.inbound.AM : row.outbound.AM)
+                .pcu ?? 0,
+              pm: (direction === "inbound" ? row.inbound.PM : row.outbound.PM)
+                .pcu ?? 0,
             };
           })
           .sort(function (a, b) {
@@ -4001,7 +4164,9 @@ export default function TrafficApp() {
       let conservationChecked = 0;
       let conservationPassed = 0;
       exportRecords.forEach(function (record) {
-        (["AM", "PM"] as PeakKey[]).forEach(function (peakKey) {
+        /* 只比三個尖峰：它們都是「某一小時」的量，可以互相比大小。
+           全日時段是一整天的累計，拿來比一定是它最大，沒有意義。 */
+        PEAK_KEYS.forEach(function (peakKey) {
           odMatrix(record, peakKey).forEach(function (row) {
             row.values.forEach(function (value, destinationIndex) {
               const destination = record.approaches[destinationIndex];
@@ -4108,24 +4273,22 @@ export default function TrafficApp() {
             const vehicleIds = recordVehicleIds(record);
             return {
               name: siteLabelOf(record),
-              peaks: (["AM", "PM"] as PeakKey[]).map(function (peakKey) {
+              peaks: PEAK_KEYS.map(function (peakKey) {
                 const vehicleSum = vehicleIds.reduce(function (sum, id) {
                   return sum + recordVehicleTotal(record, peakKey, id);
                 }, 0);
                 return {
-                  label: peakKey === "AM" ? "上午尖峰" : "下午尖峰",
+                  label: SCOPE_LABELS[peakKey],
                   hour:
-                    record.peaks[peakKey].start +
-                    "–" +
-                    record.peaks[peakKey].end,
+                    scopeWindowLabel(record, peakKey),
                   total: recordTotal(record, peakKey),
                   arms: rows.map(function (row) {
                     return {
                       name: row.approach.name,
-                      outbound:
-                        peakKey === "AM" ? row.outboundAmPcu : row.outboundPmPcu,
-                      inbound:
-                        peakKey === "AM" ? row.inboundAmPcu : row.inboundPmPcu,
+                      /* 直接用 peakKey 取，不要再寫 AM/PM 三元判斷——
+                         多了全日尖峰之後，三元判斷會把它當成 PM。 */
+                      outbound: row.outbound[peakKey].pcu ?? 0,
+                      inbound: row.inbound[peakKey].pcu ?? 0,
                     };
                   }),
                   vehicles: vehicleSum
@@ -4334,7 +4497,7 @@ export default function TrafficApp() {
       return before ? { now: record, before } : null;
     })
     .filter(Boolean) as { now: TrafficRecord; before: TrafficRecord }[];
-  const pairedChange = function (peakKey: PeakKey) {
+  const pairedChange = function (peakKey: ScopeKey) {
     const now = comparablePairs.reduce(function (sum, pair) {
       return sum + recordTotal(pair.now, peakKey);
     }, 0);
@@ -4343,7 +4506,7 @@ export default function TrafficApp() {
     }, 0);
     return before ? (now / before - 1) * 100 : null;
   };
-  // AM 與 PM 分開報，不相加。畫面上顯示目前選定的尖峰。
+  // 四個統計範圍分開報，不相加。畫面上顯示目前選定的那一個。
   const change = comparablePairs.length ? pairedChange(peak) : null;
   const maxRank = Math.max(
     1,
@@ -4677,8 +4840,7 @@ export default function TrafficApp() {
           role: "無法辨識",
           sheets: { traffic: [], log: [], phase: [], ignored: [] },
           intervals: 0,
-          am: null,
-          pm: null,
+          peakWindows: { AM: null, PM: null, DAY: null },
           date: "",
           dateSource: null,
           surveyType: "待設定",
@@ -4834,7 +4996,9 @@ export default function TrafficApp() {
     const originals = importRows.filter(function (row) {
       return (
         row.role === "原始交通量" &&
-        Boolean(row.am || row.pm) &&
+        PEAK_KEYS.some(function (key) {
+          return Boolean(row.peakWindows?.[key]);
+        }) &&
         row.layout !== "unknown" &&
         row.columns.length > 0 &&
         importResolutions[row.file]?.action !== "skip"
@@ -5456,16 +5620,30 @@ export default function TrafficApp() {
         return {
           季度: record.quarter,
           資料別: record.surveyType || "待設定",
-          "AM Peak（PCU/hr）": recordTotal(record, "AM"),
-          "PM Peak（PCU/hr）": recordTotal(record, "PM"),
+          ...Object.fromEntries(
+            PEAK_KEYS.flatMap(function (key) {
+              return [
+                [
+                  `${SCOPE_SHORT_LABELS[key]}（${scopeUnit(key)}）`,
+                  recordTotal(record, key),
+                ],
+              ];
+            }),
+          ),
           站號: record.station,
           路口名稱: record.name,
-          "AM 尖峰時段": record.peaks.AM.start + "–" + record.peaks.AM.end,
-          "PM 尖峰時段": record.peaks.PM.start + "–" + record.peaks.PM.end,
+          ...Object.fromEntries(
+            PEAK_KEYS.map(function (key) {
+              return [
+                `${SCOPE_SHORT_LABELS[key]} 尖峰時段`,
+                scopeWindowLabel(record, key),
+              ];
+            }),
+          ),
         };
       });
     const vehicleComposition = exportRecords.flatMap(function (record) {
-      return (["SURVEY", "AM", "PM"] as CompositionScope[]).flatMap(
+      return (["SURVEY", ...PEAK_KEYS] as CompositionScope[]).flatMap(
         function (scope) {
           const analysisVehicles = recordVehicleIds(record);
           const counts = Object.fromEntries(
@@ -5488,7 +5666,7 @@ export default function TrafficApp() {
               季度: record.quarter,
               站號: record.station,
               路口名稱: record.name,
-              分析範圍: scope === "SURVEY" ? "全調查時段" : scope + " Peak",
+              分析範圍: compositionScopeLabel(record, scope),
               時段:
                 scope === "SURVEY"
                   ? `${record.survey?.intervals || 0} 個 ${Math.round(
@@ -5497,7 +5675,7 @@ export default function TrafficApp() {
                     )} 分鐘區間（${((record.survey?.minutes || 0) / 60).toFixed(
                       1,
                     )} 小時）`
-                  : record.peaks[scope].start + "-" + record.peaks[scope].end,
+                  : scopeWindowLabel(record, scope),
               車種: vehicleLabel(record, vehicleKey),
               單位: scope === "SURVEY" ? "輛/調查時段" : "輛/hr",
               數量: counts[vehicleKey],
@@ -5519,32 +5697,38 @@ export default function TrafficApp() {
           路口名稱: record.name,
           目的支線代碼: row.approach.sourceCode || row.approach.id,
           目的支線名稱: row.approach.name,
-          "全日駛入量（PCU/調查日）":
-            row.inboundFullDayPcu == null ? "－" : row.inboundFullDayPcu,
-          "全日駛出量（PCU/調查日）":
-            row.outboundFullDayPcu == null ? "－" : row.outboundFullDayPcu,
-          "AM Peak 時段": record.peaks.AM.start + "–" + record.peaks.AM.end,
-          "AM Peak 駛入量（PCU/hr）": row.inboundAmPcu,
-          "AM Peak 駛出量（PCU/hr）": row.outboundAmPcu,
-          "PM Peak 時段": record.peaks.PM.start + "–" + record.peaks.PM.end,
-          "PM Peak 駛入量（PCU/hr）": row.inboundPmPcu,
-          "PM Peak 駛出量（PCU/hr）": row.outboundPmPcu,
-          "全日駛入實際車輛數（輛/調查日）":
-            row.inboundFullDayVehicles == null
-              ? "－"
-              : row.inboundFullDayVehicles,
-          "全日駛出實際車輛數（輛/調查日）":
-            row.outboundFullDayVehicles == null
-              ? "－"
-              : row.outboundFullDayVehicles,
-          "AM Peak 駛入實際車輛數（輛/hr）":
-            row.inboundAmVehicles == null ? "－" : row.inboundAmVehicles,
-          "AM Peak 駛出實際車輛數（輛/hr）":
-            row.outboundAmVehicles == null ? "－" : row.outboundAmVehicles,
-          "PM Peak 駛入實際車輛數（輛/hr）":
-            row.inboundPmVehicles == null ? "－" : row.inboundPmVehicles,
-          "PM Peak 駛出實際車輛數（輛/hr）":
-            row.outboundPmVehicles == null ? "－" : row.outboundPmVehicles,
+          /*
+           * 四個統計範圍各一組欄位，欄名由 SCOPE_KEYS 直接產生。
+           * 舊版是把 AM／PM／全日的欄位一個一個手寫出來，加一個時段就要
+           * 補六個欄位、而且很容易漏掉車輛數那半。
+           * 算不出來的一律寫「－」，不是 0——0 會被 Excel 的加總與平均吃進去。
+           */
+          ...Object.fromEntries(
+            SCOPE_KEYS.flatMap(function (scope) {
+              const label = SCOPE_SHORT_LABELS[scope];
+              const pcu = scopeUnit(scope);
+              const veh = scopeUnit(scope, "vehicle");
+              const cell = function (value: number | null) {
+                return value == null ? "－" : value;
+              };
+              return [
+                [
+                  `${label} 時段`,
+                  scopeWindowLabel(record, scope),
+                ],
+                [`${label} 駛入量（${pcu}）`, cell(row.inbound[scope].pcu)],
+                [`${label} 駛出量（${pcu}）`, cell(row.outbound[scope].pcu)],
+                [
+                  `${label} 駛入實際車輛數（${veh}）`,
+                  cell(row.inbound[scope].vehicles),
+                ],
+                [
+                  `${label} 駛出實際車輛數（${veh}）`,
+                  cell(row.outbound[scope].vehicles),
+                ],
+              ];
+            }),
+          ),
         };
       });
     });
@@ -5575,13 +5759,19 @@ export default function TrafficApp() {
             路口名稱: record.name,
             支線代碼: approach.sourceCode || String.fromCharCode(65 + index),
             支線名稱: approach.name,
-            "AM 尖峰時段": record.peaks.AM.start + "–" + record.peaks.AM.end,
+            ...Object.fromEntries(
+              PEAK_KEYS.map(function (key) {
+                return [
+                  `${SCOPE_SHORT_LABELS[key]} 尖峰時段`,
+                  scopeWindowLabel(record, key),
+                ];
+              }),
+            ),
             "AM 路口轉向總量（PCU/hr）": recordTotal(record, "AM"),
             "AM 駛出路口（該支線→路口中心，PCU/hr）":
               amFlows[index].enteringIntersection,
             "AM 駛入路口（路口中心→該支線，PCU/hr）":
               amFlows[index].leavingIntersection,
-            "PM 尖峰時段": record.peaks.PM.start + "–" + record.peaks.PM.end,
             "PM 路口轉向總量（PCU/hr）": recordTotal(record, "PM"),
             "PM 駛出路口（該支線→路口中心，PCU/hr）":
               pmFlows[index].enteringIntersection,
@@ -5640,22 +5830,11 @@ export default function TrafficApp() {
       const label = direction === "inbound" ? "駛入" : "駛出";
       const rows = exportRecords.flatMap(function (record) {
         return inboundAnalysisRows(record).map(function (row) {
-          const pcuAm =
-            direction === "inbound" ? row.inboundAmPcu : row.outboundAmPcu;
-          const pcuPm =
-            direction === "inbound" ? row.inboundPmPcu : row.outboundPmPcu;
-          const vehAm =
-            direction === "inbound"
-              ? row.inboundAmVehicles
-              : row.outboundAmVehicles;
-          const vehPm =
-            direction === "inbound"
-              ? row.inboundPmVehicles
-              : row.outboundPmVehicles;
-          const full =
-            direction === "inbound"
-              ? row.inboundFullDayPcu
-              : row.outboundFullDayPcu;
+          const flowOf = function (scope: ScopeKey) {
+            return direction === "inbound"
+              ? row.inbound[scope]
+              : row.outbound[scope];
+          };
           return {
             計畫:
               projects.find(function (project) {
@@ -5668,15 +5847,27 @@ export default function TrafficApp() {
             路口名稱: record.name,
             支線代碼: row.approach.sourceCode || row.approach.id,
             支線名稱: row.approach.name,
-            "AM 尖峰時段": record.peaks.AM.start + "–" + record.peaks.AM.end,
-            ["AM Peak " + label + "量（PCU/hr）"]: pcuAm,
-            ["AM Peak " + label + "實際車輛數（輛/hr）"]:
-              vehAm == null ? "－" : vehAm,
-            "PM 尖峰時段": record.peaks.PM.start + "–" + record.peaks.PM.end,
-            ["PM Peak " + label + "量（PCU/hr）"]: pcuPm,
-            ["PM Peak " + label + "實際車輛數（輛/hr）"]:
-              vehPm == null ? "－" : vehPm,
-            ["全日" + label + "量（PCU/調查日）"]: full == null ? "－" : full,
+            /* 欄位由 SCOPE_KEYS 產生，新增時段時這張表自動跟上。 */
+            ...Object.fromEntries(
+              SCOPE_KEYS.flatMap(function (scope) {
+                const scopeLabel = SCOPE_SHORT_LABELS[scope];
+                const flow = flowOf(scope);
+                return [
+                  [`${scopeLabel} 時段`, scopeWindowLabel(record, scope)],
+                  [
+                    `${scopeLabel} ${label}量（${scopeUnit(scope)}）`,
+                    flow.pcu == null ? "－" : flow.pcu,
+                  ],
+                  [
+                    `${scopeLabel} ${label}實際車輛數（${scopeUnit(
+                      scope,
+                      "vehicle",
+                    )}）`,
+                    flow.vehicles == null ? "－" : flow.vehicles,
+                  ],
+                ];
+              }),
+            ),
           };
         });
       });
@@ -5715,7 +5906,9 @@ export default function TrafficApp() {
       );
     if (wanted.has("odMatrix")) {
       const rows = exportRecords.flatMap(function (record) {
-        return (["AM", "PM"] as PeakKey[]).flatMap(function (peakKey) {
+        /* 三個尖峰單位相同（PCU/hr），可以放在同一張表；全日時段是
+           PCU/調查日，已經有「各路口駛入駛出流量」那張表的全日欄位。 */
+        return PEAK_KEYS.flatMap(function (peakKey) {
           return odMatrix(record, peakKey).flatMap(function (row) {
             return row.values
               .map(function (value, destinationIndex) {
@@ -5726,7 +5919,7 @@ export default function TrafficApp() {
                   季度: record.quarter,
                   站號: record.station,
                   路口名稱: record.name,
-                  時段: peakKey + " Peak",
+                  時段: SCOPE_SHORT_LABELS[peakKey],
                   起點支線: row.origin,
                   目的支線: destination.name,
                   "流量（PCU/hr）": value,
@@ -5745,13 +5938,13 @@ export default function TrafficApp() {
     }
     if (wanted.has("branchBalance")) {
       const rows = exportRecords.flatMap(function (record) {
-        return (["AM", "PM"] as PeakKey[]).flatMap(function (peakKey) {
+        return PEAK_KEYS.flatMap(function (peakKey) {
           return branchBalance(record, peakKey).map(function (row) {
             return {
               季度: record.quarter,
               站號: record.station,
               路口名稱: record.name,
-              時段: peakKey + " Peak",
+              時段: SCOPE_SHORT_LABELS[peakKey],
               支線: row.name,
               "駛出（PCU/hr）": row.outbound,
               "駛入（PCU/hr）": row.inbound,
@@ -5928,8 +6121,14 @@ export default function TrafficApp() {
             "歷季趨勢比較",
             trendRows.length + 1,
             [
-              { name: "AM Peak", column: "C", color: "087F75" },
-              { name: "PM Peak", column: "D", color: "D97706" },
+              /* trendRows 的欄位順序：A 季度、B 資料別、C～E 三個尖峰。 */
+              ...PEAK_KEYS.map(function (key, index) {
+                return {
+                  name: SCOPE_SHORT_LABELS[key],
+                  column: String.fromCharCode(67 + index),
+                  color: ["087F75", "D97706", "1D4ED8"][index],
+                };
+              }),
             ],
           )
         : new Blob(
@@ -5970,9 +6169,7 @@ export default function TrafficApp() {
 
   function exportCompositionExcel() {
     if (!current.length) return notify("本季度沒有可輸出的車種組成資料。");
-    const unit = compositionScope === "SURVEY" ? "輛/調查時段" : "輛/hr";
-    const scopeLabel =
-      compositionScope === "SURVEY" ? "全調查時段" : compositionScope + " Peak";
+    const unit = compositionScopeUnit(compositionScope);
     const summaryRows = current.map(function (record) {
       const analysisVehicles = recordVehicleIds(record);
       const counts = Object.fromEntries(
@@ -5992,13 +6189,11 @@ export default function TrafficApp() {
         季度: record.quarter,
         站號: record.station,
         路口名稱: record.name,
-        分析範圍: scopeLabel,
+        分析範圍: compositionScopeLabel(record, compositionScope),
         時段:
           compositionScope === "SURVEY"
-            ? `${record.survey?.minutes || 0} 分鐘`
-            : record.peaks[compositionScope].start +
-              "–" +
-              record.peaks[compositionScope].end,
+            ? formatSurveyHours(record)
+            : scopeWindowLabel(record, compositionScope),
         單位: unit,
         實際車輛合計: total,
       };
@@ -6022,7 +6217,7 @@ export default function TrafficApp() {
           季度: record.quarter,
           站號: record.station,
           路口名稱: record.name,
-          分析範圍: scopeLabel,
+          分析範圍: compositionScopeLabel(record, compositionScope),
           車種: vehicleLabel(record, vehicleKey),
           單位: unit,
           數量: counts[index],
@@ -6060,7 +6255,12 @@ export default function TrafficApp() {
     XLSX.utils.book_append_sheet(workbook, detailSheet, "車種組成明細");
     XLSX.writeFile(
       workbook,
-      `${activeProject?.code || "Project"}_${quarter}_${scopeLabel}_車種組成.xlsx`,
+      /* 檔名不帶調查時數（各路口不一樣），只帶範圍名稱。 */
+      `${activeProject?.code || "Project"}_${quarter}_${
+        compositionScope === "SURVEY"
+          ? "全調查時段"
+          : SCOPE_LABELS[compositionScope]
+      }_車種組成.xlsx`,
       { bookType: "xlsx" },
     );
     notify("車種組成 Excel 已下載。");
@@ -6071,7 +6271,7 @@ export default function TrafficApp() {
     const matrixRows = matrix.map(function (row) {
       const output: Record<string, string | number> = {
         來源支線: row.origin,
-        單位: "PCU/hr",
+        單位: scopeUnit(peak),
       };
       record.approaches.forEach(function (approach, index) {
         output["駛入 " + approach.name] = row.values[index];
@@ -6373,7 +6573,7 @@ export default function TrafficApp() {
     );
     const scopedRecords = scoped
       ? records.filter(function (record) {
-          return scopedIds.has(record.projectId);
+          return record.projectId ? scopedIds.has(record.projectId) : false;
         })
       : records;
     const scopedRecordIds = new Set(
@@ -7744,8 +7944,13 @@ export default function TrafficApp() {
                           <th>版本／差異處理</th>
                           <th>站號／名稱</th>
                           <th>名稱處理</th>
-                          <th>AM Peak（PCU/hr）</th>
-                          <th>PM Peak（PCU/hr）</th>
+                          {PEAK_KEYS.map(function (key) {
+                            return (
+                              <th key={key}>
+                                {SCOPE_SHORT_LABELS[key]}（PCU/hr）
+                              </th>
+                            );
+                          })}
                           <th>檢查</th>
                           <th></th>
                         </tr>
@@ -7813,30 +8018,28 @@ export default function TrafficApp() {
                                     <b>
                                       已存在第 {existingImport.revision || 1} 版
                                     </b>
-                                    <small>
-                                      AM：
-                                      {recordTotal(
+                                    {PEAK_KEYS.map(function (key) {
+                                      const window = liveRow.peakWindows?.[key];
+                                      const before = recordTotal(
                                         existingImport,
-                                        "AM",
-                                      ).toLocaleString()}{" "}
-                                      →{" "}
-                                      {Math.round(
-                                        liveRow.am?.total || 0,
-                                      ).toLocaleString()}{" "}
-                                      PCU/hr
-                                    </small>
-                                    <small>
-                                      PM：
-                                      {recordTotal(
-                                        existingImport,
-                                        "PM",
-                                      ).toLocaleString()}{" "}
-                                      →{" "}
-                                      {Math.round(
-                                        liveRow.pm?.total || 0,
-                                      ).toLocaleString()}{" "}
-                                      PCU/hr
-                                    </small>
+                                        key,
+                                      );
+                                      /* 兩邊都沒有值的時段不必列出來占版面
+                                         （例如不足 24 小時的檔，全日尖峰） */
+                                      if (!before && !window) return null;
+                                      return (
+                                        <small key={key}>
+                                          {SCOPE_SHORT_LABELS[key]}：
+                                          {before.toLocaleString()} →{" "}
+                                          {window
+                                            ? Math.round(
+                                                window.total,
+                                              ).toLocaleString()
+                                            : "—"}{" "}
+                                          PCU/hr
+                                        </small>
+                                      );
+                                    })}
                                     <select
                                       value={
                                         importConflictModes[row.file] ||
@@ -7930,30 +8133,25 @@ export default function TrafficApp() {
                                   </select>
                                 )}
                               </td>
-                              <td>
-                                {liveRow.am
-                                  ? formatMinutes(liveRow.am.start) +
-                                    "–" +
-                                    formatMinutes(liveRow.am.end) +
-                                    " · " +
-                                    Math.round(
-                                      liveRow.am.total,
-                                    ).toLocaleString() +
-                                    " PCU/hr"
-                                  : "—"}
-                              </td>
-                              <td>
-                                {liveRow.pm
-                                  ? formatMinutes(liveRow.pm.start) +
-                                    "–" +
-                                    formatMinutes(liveRow.pm.end) +
-                                    " · " +
-                                    Math.round(
-                                      liveRow.pm.total,
-                                    ).toLocaleString() +
-                                    " PCU/hr"
-                                  : "—"}
-                              </td>
+                              {PEAK_KEYS.map(function (key) {
+                                const window = liveRow.peakWindows?.[key];
+                                return (
+                                  <td key={key}>
+                                    {window
+                                      ? formatMinutes(window.start) +
+                                        "–" +
+                                        formatMinutes(window.end) +
+                                        " · " +
+                                        Math.round(
+                                          window.total,
+                                        ).toLocaleString() +
+                                        " PCU/hr"
+                                      : /* 全日尖峰要有 24 小時資料才算得出來；
+                                           不足一天時這裡就是「—」，不推估。 */
+                                        "—"}
+                                  </td>
+                                );
+                              })}
                               <td>
                                 {row.warnings.map(function (warning) {
                                   return (
@@ -8295,17 +8493,24 @@ export default function TrafficApp() {
                       <h1>各路口車種組成</h1>
                       <p>
                         以原始實際車輛數統計，不套用 PCU
-                        當量；可切換全調查時段、AM 尖峰或 PM 尖峰。
+                        當量。「全調查時段」是這份檔案實際涵蓋的時數，只有
+                        24 小時的調查才等於全日；全日尖峰小時同樣需要 24
+                        小時資料。
                       </p>
                     </div>
                     <div className="head-buttons">
                       <Segmented
                         value={compositionScope}
-                        options={[
-                          ["SURVEY", "全調查時段"],
-                          ["AM", "AM Peak"],
-                          ["PM", "PM Peak"],
-                        ]}
+                        options={(
+                          ["SURVEY", ...PEAK_KEYS] as CompositionScope[]
+                        ).map(function (key): [CompositionScope, string] {
+                          return [
+                            key,
+                            key === "SURVEY"
+                              ? "全調查時段"
+                              : SCOPE_SHORT_LABELS[key],
+                          ];
+                        })}
                         onChange={setCompositionScope}
                       />
                       <button
@@ -8396,10 +8601,13 @@ export default function TrafficApp() {
                             (selected.survey.minutes / 60).toFixed(1) +
                             " 小時）"
                           : "此筆為舊版資料；重新匯入原始檔後可顯示全調查時段組成。"
-                        : "尖峰時段：" +
-                          selected.peaks[compositionScope].start +
-                          "–" +
-                          selected.peaks[compositionScope].end}
+                        : fullDayUnavailableReason(
+                              selected,
+                              compositionScope,
+                            ) ||
+                          SCOPE_LABELS[compositionScope] +
+                            "：" +
+                            scopeWindowLabel(selected, compositionScope)}
                     </div>
                   </section>
                   <section className="kpi-grid composition-kpis">
@@ -8424,9 +8632,8 @@ export default function TrafficApp() {
                           label={vehicleLabel(selected, vehicleKey)}
                           value={
                             count.toLocaleString() +
-                            (compositionScope === "SURVEY"
-                              ? " 輛/調查時段"
-                              : " 輛/hr")
+                            " " +
+                            compositionScopeUnit(compositionScope)
                           }
                           note={
                             total
@@ -8578,7 +8785,7 @@ export default function TrafficApp() {
                           {quarter} 各路口{" "}
                           {compositionScope === "SURVEY"
                             ? "全調查時段"
-                            : compositionScope + " Peak"}{" "}
+                            : SCOPE_SHORT_LABELS[compositionScope]}{" "}
                           車種組成
                         </h2>
                       </div>
@@ -8729,9 +8936,15 @@ export default function TrafficApp() {
                       </label>
                     )}
                     <div className="source-note">
-                      {selected.survey && selected.survey.minutes >= 24 * 60
-                        ? `完整24小時調查資料：${selected.survey.minutes / 60} 小時；可計算全日欄位。`
-                        : "此格式未提供完整24小時資料；全日欄位不適用。"}
+                      {coversFullDay(selected.survey)
+                        ? `完整 24 小時調查資料；全日時段與全日尖峰小時皆可計算。${
+                            hasDayPeak(selected)
+                              ? ""
+                              : "（此筆為舊版匯入，全日尖峰需重新匯入原始檔）"
+                          }`
+                        : `本筆調查僅涵蓋 ${formatSurveyHours(
+                            selected,
+                          )}，全日時段與全日尖峰小時皆不適用，欄位以「－」表示，不以尖峰推估。`}
                     </div>
                   </section>
                   <section className="panel">
@@ -8742,9 +8955,12 @@ export default function TrafficApp() {
                           {selected.station} · {selected.name}
                         </h2>
                         <small>
-                          AM Peak：{selected.peaks.AM.start}–
-                          {selected.peaks.AM.end}；PM Peak：
-                          {selected.peaks.PM.start}–{selected.peaks.PM.end}
+                          {SCOPE_KEYS.map(function (scope) {
+                            return `${SCOPE_SHORT_LABELS[scope]}：${scopeWindowLabel(
+                              selected,
+                              scope,
+                            )}`;
+                          }).join("；")}
                         </small>
                       </div>
                     </div>
@@ -8756,12 +8972,22 @@ export default function TrafficApp() {
                                 為終點的駛入量、與以這支為起點的駛出量，寫成
                                 目的路口會讓右半邊的駛出欄位看起來方向相反。 */}
                             <th>路口支線／道路支線</th>
-                            <th>全日駛入／駛出（PCU/調查日）</th>
-                            <th>AM Peak 駛入／駛出（PCU/hr）</th>
-                            <th>PM Peak 駛入／駛出（PCU/hr）</th>
-                            <th>全日駛入／駛出車輛數（輛/調查日）</th>
-                            <th>AM Peak 駛入／駛出車輛數（輛/hr）</th>
-                            <th>PM Peak 駛入／駛出車輛數（輛/hr）</th>
+                            {SCOPE_KEYS.map(function (scope) {
+                              return (
+                                <th key={"pcu-" + scope}>
+                                  {SCOPE_SHORT_LABELS[scope]} 駛入／駛出（
+                                  {scopeUnit(scope)}）
+                                </th>
+                              );
+                            })}
+                            {SCOPE_KEYS.map(function (scope) {
+                              return (
+                                <th key={"veh-" + scope}>
+                                  {SCOPE_SHORT_LABELS[scope]} 駛入／駛出車輛數（
+                                  {scopeUnit(scope, "vehicle")}）
+                                </th>
+                              );
+                            })}
                           </tr>
                         </thead>
                         <tbody>
@@ -8782,36 +9008,24 @@ export default function TrafficApp() {
                                   <br />
                                   <small>{row.approach.name}</small>
                                 </td>
-                                <td>
-                                  駛入 {format(row.inboundFullDayPcu)}
-                                  <br />
-                                  駛出 {format(row.outboundFullDayPcu)}
-                                </td>
-                                <td>
-                                  駛入 {format(row.inboundAmPcu)}
-                                  <br />
-                                  駛出 {format(row.outboundAmPcu)}
-                                </td>
-                                <td>
-                                  駛入 {format(row.inboundPmPcu)}
-                                  <br />
-                                  駛出 {format(row.outboundPmPcu)}
-                                </td>
-                                <td>
-                                  駛入 {format(row.inboundFullDayVehicles)}
-                                  <br />
-                                  駛出 {format(row.outboundFullDayVehicles)}
-                                </td>
-                                <td>
-                                  駛入 {format(row.inboundAmVehicles)}
-                                  <br />
-                                  駛出 {format(row.outboundAmVehicles)}
-                                </td>
-                                <td>
-                                  駛入 {format(row.inboundPmVehicles)}
-                                  <br />
-                                  駛出 {format(row.outboundPmVehicles)}
-                                </td>
+                                {SCOPE_KEYS.map(function (scope) {
+                                  return (
+                                    <td key={"pcu-" + scope}>
+                                      駛入 {format(row.inbound[scope].pcu)}
+                                      <br />
+                                      駛出 {format(row.outbound[scope].pcu)}
+                                    </td>
+                                  );
+                                })}
+                                {SCOPE_KEYS.map(function (scope) {
+                                  return (
+                                    <td key={"veh-" + scope}>
+                                      駛入 {format(row.inbound[scope].vehicles)}
+                                      <br />
+                                      駛出 {format(row.outbound[scope].vehicles)}
+                                    </td>
+                                  );
+                                })}
                               </tr>
                             );
                           })}
@@ -8928,15 +9142,33 @@ export default function TrafficApp() {
                       </label>
                     )}
                     <label>
-                      尖峰
+                      時段
                       <select
                         value={peak}
                         onChange={function (e) {
-                          setPeak(e.target.value as PeakKey);
+                          setPeak(e.target.value as ScopeKey);
                         }}
                       >
-                        <option value="AM">AM Peak</option>
-                        <option value="PM">PM Peak</option>
+                        {SCOPE_KEYS.map(function (key) {
+                          /*
+                           * 全日尖峰小時與全日時段要有 24 小時的調查資料才
+                           * 算得出來。選項照樣列出來（不然使用者不知道有這個
+                           * 功能），但選不下去，並在後面寫出為什麼。
+                           */
+                          const reason = selected
+                            ? fullDayUnavailableReason(selected, key)
+                            : null;
+                          return (
+                            <option
+                              key={key}
+                              value={key}
+                              disabled={Boolean(reason)}
+                            >
+                              {SCOPE_LABELS[key]}
+                              {reason ? `（${reason}）` : ""}
+                            </option>
+                          );
+                        })}
                       </select>
                     </label>
                     <label>
@@ -9003,9 +9235,16 @@ export default function TrafficApp() {
                           setDisplayMode(e.target.value as DisplayMode);
                         }}
                       >
-                        <option value="volume">交通量</option>
+                        <option value="volume">
+                          交通量（{scopeUnit(peak)}）
+                        </option>
+                        <option value="count">
+                          車輛數（{scopeUnit(peak, "vehicle")}）
+                        </option>
                         <option value="percent">百分比</option>
-                        <option value="both">PCU/hr＋百分比</option>
+                        <option value="both">
+                          {scopeUnit(peak)}＋百分比
+                        </option>
                       </select>
                     </label>
                     <label>
@@ -9049,11 +9288,10 @@ export default function TrafficApp() {
                         </p>
                         <dl>
                           <div>
-                            <dt>尖峰時段</dt>
-                            <dd>
-                              {selected.peaks[peak].start}–
-                              {selected.peaks[peak].end}
-                            </dd>
+                            <dt>
+                              {peak === "FULL" ? "調查時段" : "尖峰時段"}
+                            </dt>
+                            <dd>{scopeWindowLabel(selected, peak)}</dd>
                           </div>
                           <div>
                             <dt>路口總流量</dt>
@@ -9188,22 +9426,7 @@ export default function TrafficApp() {
                               name: "新增支線 " + seq,
                               // 不要沿用第一條支線的交通量與版面，否則新支線會
                               // 直接頂著別人的數字、圖卡也疊在同一個位置。
-                              movements: {
-                                AM: {
-                                  left: 0,
-                                  through: 0,
-                                  right: 0,
-                                  vehicle: {},
-                                  rawVehicleTotal: null,
-                                },
-                                PM: {
-                                  left: 0,
-                                  through: 0,
-                                  right: 0,
-                                  vehicle: {},
-                                  rawVehicleTotal: null,
-                                },
-                              },
+                              movements: emptyScopeMovements(),
                               cardOffset: undefined,
                               cardOffsets: undefined,
                               labelOffset: undefined,
@@ -9827,10 +10050,21 @@ export default function TrafficApp() {
                         <tr>
                           <th>計畫</th>
                           <th>站號／路口</th>
-                          <th>AM 尖峰時段</th>
-                          <th>AM 尖峰轉向總量（PCU/hr）</th>
-                          <th>PM 尖峰時段</th>
-                          <th>PM 尖峰轉向總量（PCU/hr）</th>
+                          {PEAK_KEYS.map(function (key) {
+                            return (
+                              <th key={"h-" + key}>
+                                {SCOPE_SHORT_LABELS[key]} 時段
+                              </th>
+                            );
+                          })}
+                          {PEAK_KEYS.map(function (key) {
+                            return (
+                              <th key={"t-" + key}>
+                                {SCOPE_SHORT_LABELS[key]} 轉向總量（
+                                {scopeUnit(key)}）
+                              </th>
+                            );
+                          })}
                         </tr>
                       </thead>
                       <tbody>
@@ -9860,18 +10094,26 @@ export default function TrafficApp() {
                                   <br />
                                   <small>{record.name}</small>
                                 </td>
-                                <td>
-                                  {record.peaks.AM.start}–{record.peaks.AM.end}
-                                </td>
-                                <td>
-                                  {recordTotal(record, "AM").toLocaleString()}
-                                </td>
-                                <td>
-                                  {record.peaks.PM.start}–{record.peaks.PM.end}
-                                </td>
-                                <td>
-                                  {recordTotal(record, "PM").toLocaleString()}
-                                </td>
+                                {PEAK_KEYS.map(function (key) {
+                                  return (
+                                    <td key={"h-" + key}>
+                                      {scopeWindowLabel(record, key)}
+                                    </td>
+                                  );
+                                })}
+                                {PEAK_KEYS.map(function (key) {
+                                  /* 全日尖峰算不出來時寫「－」，不寫 0.0。 */
+                                  return (
+                                    <td key={"t-" + key}>
+                                      {hasDayPeak(record) || key !== "DAY"
+                                        ? recordTotal(
+                                            record,
+                                            key,
+                                          ).toLocaleString()
+                                        : "－"}
+                                    </td>
+                                  );
+                                })}
                               </tr>
                             );
                           })}
@@ -10082,7 +10324,9 @@ export default function TrafficApp() {
           {view === "trend" && (
             <TrendView
               records={projectRecords}
-              peak={peak}
+              /* 歷季趨勢只比尖峰：全日時段是一整天的累計，
+                 和尖峰的 PCU/hr 不同單位，畫在同一張折線圖會誤導。 */
+              peak={peak === "FULL" ? "AM" : peak}
               setPeak={setPeak}
               notify={notify}
               pendingCount={pendingSurveyTypeRecords().length}
@@ -11345,14 +11589,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.29-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.31-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.29-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.31-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
@@ -11652,7 +11896,7 @@ function ConclusionStudio(props: {
       const names = new Set<string>();
       for (const record of source) {
         if (keys.length && !keys.includes(record.intersectionKey)) continue;
-        for (const peak of ["AM", "PM"] as PeakKey[])
+        for (const peak of PEAK_KEYS)
           for (const branch of record.peaks[peak]?.branches || [])
             names.add(branch.name);
       }
@@ -12354,7 +12598,7 @@ function TrendView(props: {
   });
   const rows = trend.rows;
   const trendPeaks: PeakKey[] =
-    trendMode === "ALL" ? ["AM", "PM"] : [trendMode];
+    trendMode === "ALL" ? PEAK_KEYS : [trendMode];
   /*
    * 趨勢用「駛出」還是「駛入」的總量。
    *
@@ -12390,10 +12634,20 @@ function TrendView(props: {
   });
   const max = Math.max(...values, 1) * 1.12;
   const chartWidth = Math.max(780, 180 + rows.length * 100);
+  const peakColors: Record<PeakKey, string> = {
+    AM: "#087f75",
+    PM: "#d97706",
+    DAY: "#1d4ed8",
+  };
+  const peakLegendLabels: Record<PeakKey, string> = {
+    AM: "AM Peak",
+    PM: "PM Peak",
+    DAY: "全日尖峰",
+  };
   const series = trendPeaks.map(function (peak) {
     return {
       peak,
-      color: peak === "AM" ? "#087f75" : "#d97706",
+      color: peakColors[peak],
       points: rows.map(function (record, index) {
         return {
           x: 100 + (index * (chartWidth - 170)) / Math.max(1, rows.length - 1),
@@ -12412,7 +12666,7 @@ function TrendView(props: {
         return entry[0] === activeIntersection;
       })?.[1] || "路口") +
         "_" +
-        (trendMode === "ALL" ? "AM_PM" : trendMode) +
+        (trendMode === "ALL" ? "AM_PM_DAY" : trendMode) +
         /*
          * 檔名一定要帶視角。整張圖（折線、點標籤、右側摘要）都跟著
          * 駛出／駛入切換走，兩種視角各匯出一次會得到內容不同、
@@ -12428,56 +12682,92 @@ function TrendView(props: {
     if (!rows.length) return props.notify("目前範圍沒有可輸出的季度資料。");
     const data = rows.map(function (record, index) {
       /* 匯出要跟畫面同一個視角，否則折線圖與附表會給出兩組數字。 */
-      const am = totalOf(record, "AM");
-      const pm = totalOf(record, "PM");
-      const priorAm = index ? totalOf(rows[index - 1], "AM") : 0;
-      const priorPm = index ? totalOf(rows[index - 1], "PM") : 0;
+      const totals = Object.fromEntries(
+        PEAK_KEYS.map(function (key) {
+          return [key, totalOf(record, key)];
+        }),
+      ) as Record<PeakKey, number>;
+      const prior = Object.fromEntries(
+        PEAK_KEYS.map(function (key) {
+          return [key, index ? totalOf(rows[index - 1], key) : 0];
+        }),
+      ) as Record<PeakKey, number>;
       return {
         季度: record.quarter,
         資料別: record.surveyType || "待設定",
-        "AM Peak（PCU/hr）": am,
-        "PM Peak（PCU/hr）": pm,
-        "AM 較前季（%）": priorAm ? am / priorAm - 1 : null,
-        "PM 較前季（%）": priorPm ? pm / priorPm - 1 : null,
+        /* C、D、E 欄＝三個尖峰的量；F、G、H 欄＝各自的較前季百分比。 */
+        ...Object.fromEntries(
+          PEAK_KEYS.map(function (key) {
+            return [
+              `${SCOPE_SHORT_LABELS[key]}（${scopeUnit(key)}）`,
+              totals[key],
+            ];
+          }),
+        ),
+        ...Object.fromEntries(
+          PEAK_KEYS.map(function (key) {
+            return [
+              `${SCOPE_SHORT_LABELS[key]} 較前季（%）`,
+              prior[key] ? totals[key] / prior[key] - 1 : null,
+            ];
+          }),
+        ),
         站號: record.station,
         路口名稱: record.name,
-        "AM 尖峰時段": record.peaks.AM.start + "–" + record.peaks.AM.end,
-        "PM 尖峰時段": record.peaks.PM.start + "–" + record.peaks.PM.end,
+        ...Object.fromEntries(
+          PEAK_KEYS.map(function (key) {
+            return [
+              `${SCOPE_SHORT_LABELS[key]} 尖峰時段`,
+              scopeWindowLabel(record, key),
+            ];
+          }),
+        ),
         /*
          * 這一欄讓收到 Excel 的人看得出數字是哪一種視角算出來的。
-         * 一定要放在**最後**：下面的原生折線圖是用欄位字母（C、D）指定
-         * 數列的，百分比格式也是套在 E、F 欄，插在中間會讓圖表畫到別欄。
+         * 一定要放在**最後**：下面的原生折線圖是用欄位字母（C、D、E）指定
+         * 數列的，百分比格式也是套在 F、G、H 欄，插在中間會讓圖表畫到別欄。
          */
         統計視角: trendFlow === "outbound" ? "駛出總量" : "駛入總量",
       };
     });
     const workbook = XLSX.utils.book_new();
     const sheet = XLSX.utils.json_to_sheet(data);
-    sheet["!cols"] = [12, 12, 20, 20, 18, 18, 12, 30, 18, 18, 14].map(
-      function (wch) {
-        return { wch };
-      },
-    );
+    sheet["!cols"] = [
+      12, 12, 20, 20, 20, 18, 18, 18, 12, 30, 18, 18, 18, 14,
+    ].map(function (wch) {
+      return { wch };
+    });
     sheet["!autofilter"] = { ref: sheet["!ref"] || "A1:A1" };
-    // 欄位多了「資料別」，數值欄整體右移一欄。
+    /*
+     * 欄位順序：A 季度、B 資料別、C～E 三個尖峰的量、F～H 三個較前季百分比。
+     * 這裡是照欄位字母套格式，所以上面 data 的欄位順序不可以亂動。
+     */
+    const valueColumns = PEAK_KEYS.map(function (_, index) {
+      return String.fromCharCode(67 + index);
+    });
+    const percentColumns = PEAK_KEYS.map(function (_, index) {
+      return String.fromCharCode(67 + PEAK_KEYS.length + index);
+    });
     for (let row = 2; row <= data.length + 1; row++)
-      ["C", "D"].forEach(function (column) {
+      valueColumns.forEach(function (column) {
         if (sheet[column + row]) sheet[column + row].z = "#,##0.0";
       });
     for (let row = 2; row <= data.length + 1; row++)
-      ["E", "F"].forEach(function (column) {
+      percentColumns.forEach(function (column) {
         if (sheet[column + row]) sheet[column + row].z = "0.0%";
       });
     XLSX.utils.book_append_sheet(workbook, sheet, "歷季趨勢比較");
+    const seriesOf = function (key: PeakKey) {
+      return {
+        name: SCOPE_SHORT_LABELS[key],
+        column: valueColumns[PEAK_KEYS.indexOf(key)],
+        color: peakColors[key].replace("#", "").toUpperCase(),
+      };
+    };
     const chartSeries =
-      trendMode === "AM"
-        ? [{ name: "AM Peak", column: "C", color: "087F75" }]
-        : trendMode === "PM"
-          ? [{ name: "PM Peak", column: "D", color: "D97706" }]
-          : [
-              { name: "AM Peak", column: "C", color: "087F75" },
-              { name: "PM Peak", column: "D", color: "D97706" },
-            ];
+      trendMode === "ALL"
+        ? PEAK_KEYS.map(seriesOf)
+        : [seriesOf(trendMode)];
     await downloadEditableTrendWorkbook(
       workbook,
       "歷季趨勢比較",
@@ -12578,11 +12868,12 @@ function TrendView(props: {
         <Segmented
           value={trendMode}
           options={[
-            ["AM", "AM Peak"],
-            ["PM", "PM Peak"],
+            ...PEAK_KEYS.map(function (key): [PeakKey | "ALL", string] {
+              return [key, SCOPE_SHORT_LABELS[key]];
+            }),
             ["ALL", "整體"],
           ]}
-          onChange={function (value) {
+          onChange={function (value: PeakKey | "ALL") {
             setTrendMode(value);
             if (value !== "ALL") props.setPeak(value);
           }}
@@ -12746,7 +13037,7 @@ function TrendView(props: {
                   return entry[0] === activeIntersection;
                 })?.[1]
               }{" "}
-              · {trendMode === "ALL" ? "AM／PM 整體" : trendMode}
+              · {trendMode === "ALL" ? "AM／PM／全日尖峰整體" : SCOPE_SHORT_LABELS[trendMode]}
             </h2>
             <span className="status-dot">PCU/hr</span>
           </div>
@@ -12790,24 +13081,17 @@ function TrendView(props: {
                 </g>
                 {trendMode === "ALL" && (
                   <g className="trend-legend">
-                    <circle
-                      cx={chartWidth - 205}
-                      cy="35"
-                      r="5"
-                      fill="#087f75"
-                    />
-                    <text x={chartWidth - 194} y="39">
-                      AM Peak
-                    </text>
-                    <circle
-                      cx={chartWidth - 115}
-                      cy="35"
-                      r="5"
-                      fill="#d97706"
-                    />
-                    <text x={chartWidth - 104} y="39">
-                      PM Peak
-                    </text>
+                    {PEAK_KEYS.map(function (key, index) {
+                      const x = chartWidth - 345 + index * 112;
+                      return (
+                        <g key={key}>
+                          <circle cx={x} cy="35" r="5" fill={peakColors[key]} />
+                          <text x={x + 11} y="39">
+                            {peakLegendLabels[key]}
+                          </text>
+                        </g>
+                      );
+                    })}
                   </g>
                 )}
                 {series.map(function (item) {
@@ -12840,9 +13124,13 @@ function TrendView(props: {
                               x={p.x}
                               y={
                                 p.y +
-                                (trendMode === "ALL" && item.peak === "PM"
-                                  ? 23
-                                  : -16)
+                                (trendMode !== "ALL"
+                                  ? -16
+                                  : item.peak === "AM"
+                                    ? -28
+                                    : item.peak === "PM"
+                                      ? 18
+                                      : 36)
                               }
                               className="point-value"
                               fill={item.color}
@@ -12895,57 +13183,72 @@ function TrendView(props: {
         <article className="panel trend-summary">
           <h2>季度變化</h2>
           {rows.map(function (record, index) {
-            const activePeak: PeakKey = trendMode === "ALL" ? "AM" : trendMode;
-            /* 同上：右側摘要也要跟著視角走，否則和左邊的折線圖互相矛盾。 */
-            const value = totalOf(record, activePeak);
-            const prior = index ? totalOf(rows[index - 1], activePeak) : 0;
-            const pct = prior ? (value / prior - 1) * 100 : null;
-            const pmValue = totalOf(record, "PM");
-            const pmPrior = index ? totalOf(rows[index - 1], "PM") : 0;
-            const pmPct = pmPrior ? (pmValue / pmPrior - 1) * 100 : null;
+            /* 右側摘要必須與左側實際畫出的數列一對一；新增 DAY 後不能只寫 AM／PM。 */
+            const summaries = trendPeaks.map(function (peak) {
+              const value = totalOf(record, peak);
+              const prior = index ? totalOf(rows[index - 1], peak) : 0;
+              return {
+                peak,
+                value,
+                pct: prior ? (value / prior - 1) * 100 : null,
+              };
+            });
+            const active = summaries[0];
             return (
               <div key={record.id}>
                 <span>{record.quarter}</span>
                 {trendMode === "ALL" ? (
                   <>
                     <b className="trend-pair">
-                      <span>AM {value.toLocaleString()} PCU/hr</span>
-                      <span>PM {pmValue.toLocaleString()} PCU/hr</span>
+                      {summaries.map(function (item) {
+                        return (
+                          <span key={item.peak}>
+                            {peakLegendLabels[item.peak]} {item.value.toLocaleString()} PCU/hr
+                          </span>
+                        );
+                      })}
                     </b>
                     <span className="trend-pcts">
-                      <i
-                        className={
-                          pct == null ? "flat" : pct >= 0 ? "up" : "down"
-                        }
-                      >
-                        AM{" "}
-                        {pct == null
-                          ? "基準"
-                          : (pct >= 0 ? "+" : "") + pct.toFixed(1) + "%"}
-                      </i>
-                      <i
-                        className={
-                          pmPct == null ? "flat" : pmPct >= 0 ? "up" : "down"
-                        }
-                      >
-                        PM{" "}
-                        {pmPct == null
-                          ? "基準"
-                          : (pmPct >= 0 ? "+" : "") + pmPct.toFixed(1) + "%"}
-                      </i>
+                      {summaries.map(function (item) {
+                        return (
+                          <i
+                            key={item.peak}
+                            className={
+                              item.pct == null
+                                ? "flat"
+                                : item.pct >= 0
+                                  ? "up"
+                                  : "down"
+                            }
+                          >
+                            {item.peak}{" "}
+                            {item.pct == null
+                              ? "基準"
+                              : (item.pct >= 0 ? "+" : "") +
+                                item.pct.toFixed(1) +
+                                "%"}
+                          </i>
+                        );
+                      })}
                     </span>
                   </>
                 ) : (
                   <>
-                    <b>{value.toLocaleString()} PCU/hr</b>
+                    <b>{active.value.toLocaleString()} PCU/hr</b>
                     <i
                       className={
-                        pct == null ? "flat" : pct >= 0 ? "up" : "down"
+                        active.pct == null
+                          ? "flat"
+                          : active.pct >= 0
+                            ? "up"
+                            : "down"
                       }
                     >
-                      {pct == null
+                      {active.pct == null
                         ? "基準"
-                        : (pct >= 0 ? "+" : "") + pct.toFixed(1) + "%"}
+                        : (active.pct >= 0 ? "+" : "") +
+                          active.pct.toFixed(1) +
+                          "%"}
                     </i>
                   </>
                 )}

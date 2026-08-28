@@ -1,5 +1,10 @@
 import { canonicalIntersectionKey } from "./traffic.ts";
-import type { PeakKey, TrafficRecord } from "./traffic";
+/*
+ * 這幾支都只是「照統計範圍取值」，尖峰與全日時段一體適用，
+ * 所以參數型別是 ScopeKey 而不是 PeakKey——否則畫面切到全日時段時，
+ * OD 矩陣、支線平衡、守恆檢查三張表就只能空著。
+ */
+import type { ScopeKey, TrafficRecord } from "./traffic";
 
 /**
  * 季度的排序鍵。
@@ -274,7 +279,7 @@ export type RecordRevision = {
   snapshot: TrafficRecord;
 };
 
-export function recordPeakTotal(record: TrafficRecord, peak: PeakKey) {
+export function recordPeakTotal(record: TrafficRecord, peak: ScopeKey) {
   return Math.round(
     record.approaches.reduce(function (sum, approach) {
       const movement = approach.movements[peak];
@@ -283,7 +288,7 @@ export function recordPeakTotal(record: TrafficRecord, peak: PeakKey) {
   ) / 10;
 }
 
-export function routePeakTotal(record: TrafficRecord, peak: PeakKey) {
+export function routePeakTotal(record: TrafficRecord, peak: ScopeKey) {
   if (!record.routes?.length) return recordPeakTotal(record, peak);
   return Math.round(
     record.routes.reduce(function (sum, route) {
@@ -292,14 +297,14 @@ export function routePeakTotal(record: TrafficRecord, peak: PeakKey) {
   ) / 10;
 }
 
-export function conservationCheck(record: TrafficRecord, peak: PeakKey) {
+export function conservationCheck(record: TrafficRecord, peak: ScopeKey) {
   const movement = recordPeakTotal(record, peak);
   const routes = routePeakTotal(record, peak);
   const difference = Math.round((movement - routes) * 10) / 10;
   return { movement, routes, difference, valid: Math.abs(difference) < 0.11 };
 }
 
-export function odMatrix(record: TrafficRecord, peak: PeakKey) {
+export function odMatrix(record: TrafficRecord, peak: ScopeKey) {
   return record.approaches.map(function (origin) {
     return {
       originId: origin.id,
@@ -322,7 +327,7 @@ export function odMatrix(record: TrafficRecord, peak: PeakKey) {
   });
 }
 
-export function branchBalance(record: TrafficRecord, peak: PeakKey) {
+export function branchBalance(record: TrafficRecord, peak: ScopeKey) {
   return record.approaches.map(function (approach) {
     const outbound = (record.routes || []).filter(function (route) {
       return route.fromApproachId === approach.id;

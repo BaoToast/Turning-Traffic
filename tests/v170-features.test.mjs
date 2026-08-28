@@ -53,10 +53,28 @@ test("keeps multi-quarter exports, batch packages, and format memories", () => {
 test("shows destination inbound analysis with honest full-day availability", () => {
   assert.match(appSource, /駛入／駛出各路口交通量/);
   assert.match(appSource, /inboundAnalysisRows/);
-  assert.match(appSource, /全日駛入量（PCU\/調查日）/);
-  assert.match(appSource, /record\.survey\.minutes < 24 \* 60/);
-  assert.match(appSource, /全日欄位不適用/);
   assert.match(appSource, /駛入駛出各路口流量/);
+  /*
+   * v2.1.30 起，四個統計範圍的欄位一律由 SCOPE_KEYS 產生，欄名不再逐個
+   * 手寫（舊版寫死「全日駛入量（PCU/調查日）」那一串）。改成檢查
+   * 「有沒有照範圍產生欄位」與「單位有沒有跟著範圍走」。
+   */
+  assert.match(appSource, /\$\{label\} 駛入量（\$\{pcu\}）/);
+  assert.match(appSource, /const pcu = scopeUnit\(scope\);/);
+  /*
+   * 「這份調查有沒有滿 24 小時」全系統只有 coversFullDay 說了算。
+   * 舊版是就地寫 `record.survey.minutes < 24 * 60`，同一個門檻散在好幾處，
+   * 改門檻時很容易只改到一半。
+   */
+  assert.doesNotMatch(
+    appSource,
+    /survey\.minutes\s*[<>]=?\s*24 \* 60/,
+    "還有地方自己寫 24 小時的門檻，沒有走 coversFullDay",
+  );
+  assert.match(appSource, /coversFullDay\(selected\.survey\)/);
+  /* 資料不足時要講清楚是「不適用」，不是給一個推估值。 */
+  assert.match(appSource, /全日時段與全日尖峰小時皆不適用/);
+  assert.match(appSource, /不以尖峰推估/);
 });
 
 test("deduplicates weekday and holiday geometry entries by canonical intersection", () => {
