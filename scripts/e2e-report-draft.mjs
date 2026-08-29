@@ -66,6 +66,14 @@ ok(
     /・下午尖峰（\d\d:\d\d–\d\d:\d\d）：路口轉向總量 [\d,.]+ PCU\/hr/.test(first),
 );
 ok("分項結果會列出各支線的駛出／駛入", /各支線駛出／駛入：/.test(first));
+ok(
+  "算不出的全日尖峰明確寫成無法計算",
+  /・全日尖峰小時（－）：無法計算。/.test(first),
+);
+ok(
+  "報告草稿不會把算不出的全日尖峰寫成 0",
+  !/全日尖峰小時（－）：路口轉向總量 0(?:\.0)? PCU\/hr/.test(first),
+);
 ok("草稿沒有出現 NaN 或 undefined", !/NaN|undefined|Infinity/.test(first));
 
 // 每一段勾選都要能真的關掉那一段。

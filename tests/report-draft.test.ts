@@ -364,6 +364,24 @@ test("各路口分項結果會逐個路口、逐個尖峰寫出", () => {
   );
 });
 
+test("各路口分項結果不會把無法計算的全日尖峰寫成 0", () => {
+  const c = context();
+  c.siteSummaries[0].peaks.push({
+    label: "全日尖峰小時",
+    hour: "－",
+    available: false,
+    total: 0,
+    arms: [
+      { name: "路口A", outbound: 0, inbound: 0 },
+      { name: "路口B", outbound: 0, inbound: 0 },
+    ],
+    vehicles: [],
+  });
+  const text = buildReportDraft(c, ["sites"]);
+  assert.match(text, /・全日尖峰小時（－）：無法計算。/);
+  assert.doesNotMatch(text, /全日尖峰小時（－）：路口轉向總量 0\.0 PCU\/hr/);
+});
+
 test("整體總結與各路口分項結果可以各自勾選，互不影響", () => {
   const onlyOverall = buildReportDraft(context(), ["inboundOutbound"]);
   assert.match(onlyOverall, /路口轉向總量：上午尖峰 2,900.6/);

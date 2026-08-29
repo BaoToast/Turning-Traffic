@@ -468,7 +468,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.31";
+export const VERSION = "v2.1.33";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -576,6 +576,16 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.33",
+    date: "2026-08-29",
+    note: "發布前複查補齊 v2.1.32 的 Excel 匯出缺口，沒有變更任何交通量計算。v2.1.32 已讓網頁歷季趨勢在無法計算全日尖峰時顯示「－」並斷線，但批次分析報表與頁面上的「下載趨勢 Excel」仍把相容欄位的 0 寫成真正數值，Excel 的可編輯圖表因此仍會掉到零。本版新增 scopeValueOrNull：無法計算的 DAY 匯出為空白 null，原生折線圖依既有 dispBlanksAs=gap 正確斷線；真正算得出的 0、以及 AM／PM 的 0 都完整保留。`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30。",
+  },
+  {
+    version: "v2.1.32",
+    date: "2026-08-29",
+    note: "複查修正兩項顯示問題，沒有動到任何計算。**一、歷季趨勢圖不再把「算不出全日尖峰」畫成 0**：不足 24 小時的調查、以及還沒重新匯入的舊備份，底層 DAY 欄位是空值 0；趨勢圖直接拿去畫，折線就掉到零、右側摘要寫「全日尖峰 0 PCU/hr」——看起來像那一季流量歸零，事實是這份調查根本算不出全日尖峰。0 會被抄進報告，「－」不會。系統其他地方（統計範圍切換、路口明細）本來就用 hasDayPeak 顯示「－」，只有趨勢圖漏了；現在折線在算不出來的季度**斷開**、不畫資料點，右側摘要與增減率都顯示「－」，判斷統一走新的 hasScopeValue（內部即 hasDayPeak），不另寫第二套。上午／下午尖峰完全不受影響。**二、品質異常明細的欄位標籤由「四車種分類合計」改為「各車種分類合計」**：v2.1.31 已把品質訊息改成「各車種合計」，卻漏了顯示同一個數字的欄位標籤，同一個數字上一行叫「各車種合計」、下一行叫「四車種分類合計」，等於把要消滅的說法留在使用者看到的最後一個字。`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30。",
+  },
   {
     version: "v2.1.31",
     date: "2026-08-28",
@@ -1118,6 +1128,38 @@ export function ensureRecordScopes(record: TrafficRecord): TrafficRecord {
 /** 這筆紀錄算得出全日尖峰小時嗎？（有 24 小時資料，而且真的挑到了一個視窗） */
 export function hasDayPeak(record: TrafficRecord): boolean {
   return coversFullDay(record.survey) && Boolean(record.peaks?.DAY?.start);
+}
+
+/**
+ * 這一筆紀錄、這個統計範圍，**有沒有值可以顯示**。
+ *
+ * 只有 DAY 會「算不出來」：調查不足 24 小時，或舊備份還沒重新匯入。
+ * 那種情況底層資料是 **0**（`ensureRecordScopes` 補的是空值），不是 null——
+ * 畫面若照 0 呈現，折線會掉到零、摘要會寫「全日尖峰 0 PCU/hr」，
+ * 看起來像「那一季流量歸零」，事實是「這份調查根本算不出全日尖峰」。
+ * **0 會被抄進報告，「－」不會。**
+ *
+ * ⚠️ 全系統要用同一支判斷。歷季趨勢圖在 v2.1.30／v2.1.31 就是因為自己
+ * 沒判斷、直接畫 recordTotal，才把 0 畫了出來；統計範圍切換與路口明細
+ * 用的是 hasDayPeak，兩邊講的話不一樣。v2.1.32 起一律走這裡。
+ */
+export function hasScopeValue(record: TrafficRecord, scope: ScopeKey): boolean {
+  return scope !== "DAY" || hasDayPeak(record);
+}
+
+/**
+ * 把統計範圍的數值轉成可安全呈現在表格／圖表的值。
+ *
+ * DAY 無法計算時，底層相容欄位仍是 0；匯出若直接寫入 0，Excel 會把它
+ * 當成真正的資料點。回傳 null 可讓儲存格保持空白，原生折線圖也會依
+ * `dispBlanksAs=gap` 正確斷線。真正算得出的 0 則必須保留。
+ */
+export function scopeValueOrNull(
+  record: TrafficRecord,
+  scope: ScopeKey,
+  value: number,
+): number | null {
+  return hasScopeValue(record, scope) ? value : null;
 }
 
 /**

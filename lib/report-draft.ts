@@ -75,6 +75,8 @@ export type ReportDraftContext = {
     peaks: {
       label: string;
       hour: string;
+      /** false 代表這個範圍無法計算；不得把相容欄位的 0 當成真值。 */
+      available?: boolean;
       /** 路口轉向總量（PCU/hr）。 */
       total: number;
       arms: { name: string; outbound: number; inbound: number }[];
@@ -190,6 +192,10 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
       for (const site of c.siteSummaries) {
         lines.push(`【${site.name}】`);
         for (const peak of site.peaks) {
+          if (peak.available === false) {
+            lines.push(`・${peak.label}（${peak.hour}）：無法計算。`);
+            continue;
+          }
           const arms = peak.arms.length
             ? `各支線駛出／駛入：${peak.arms
                 .map(

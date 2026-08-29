@@ -36,6 +36,8 @@ import {
   scopeWindowLabel,
   coversFullDay,
   hasDayPeak,
+  hasScopeValue,
+  scopeValueOrNull,
   fullDayUnavailableReason,
   formatSurveyHours,
   emptyMovement,
@@ -4279,6 +4281,7 @@ export default function TrafficApp() {
                 }, 0);
                 return {
                   label: SCOPE_LABELS[peakKey],
+                  available: hasScopeValue(record, peakKey),
                   hour:
                     scopeWindowLabel(record, peakKey),
                   total: recordTotal(record, peakKey),
@@ -5625,7 +5628,7 @@ export default function TrafficApp() {
               return [
                 [
                   `${SCOPE_SHORT_LABELS[key]}（${scopeUnit(key)}）`,
-                  recordTotal(record, key),
+                  scopeValueOrNull(record, key, recordTotal(record, key)),
                 ],
               ];
             }),
@@ -10735,7 +10738,14 @@ export default function TrafficApp() {
                                 </dd>
                               </div>
                               <div>
-                                <dt>四車種分類合計</dt>
+                                {/*
+                                  「各車種」不是「四車種」——調查檔可以有第五種以上
+                                  的自訂車種，系統本來就會一起加總。v2.1.31 已經把上面
+                                  那句品質訊息改掉了，卻漏了這個欄位標籤；同一個數字
+                                  上一行叫「各車種合計」、下一行叫「四車種分類合計」，
+                                  等於把要消滅的說法留在使用者看到的最後一個字。
+                                */}
+                                <dt>各車種分類合計</dt>
                                 <dd>
                                   {selectedIssue.details.classifiedVehicleTotal.toLocaleString()}{" "}
                                   {selectedIssue.details.unit}
@@ -11589,14 +11599,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.31-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.33-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.31-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.33-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
@@ -12627,10 +12637,28 @@ function TrendView(props: {
       return Math.abs(gap) > Math.abs(inner) ? gap : inner;
     }, worst);
   }, 0);
+  /*
+   * 這一筆、這個尖峰，到底有沒有值？
+   *
+   * ⚠️ 只有 DAY 會「算不出來」：不足 24 小時的調查，或舊備份還沒重新匯入。
+   * 那種情況 recordTotal 回的是 **0**，不是 null——趨勢圖若照 0 畫，折線會掉到
+   * 零、右側摘要會寫「全日尖峰 0 PCU/hr」，看起來像「那一季流量歸零」，
+   * 而事實是「這份調查根本算不出全日尖峰」。0 會被抄進報告，「－」不會。
+   *
+   * 系統其他地方（統計範圍切換、路口明細）本來就是用 hasDayPeak 顯示「－」，
+   * 只有歷季趨勢圖漏了這一條。這裡補上，用的是同一支函式，不另寫判斷。
+   */
+  const hasPeakValue = function (record: TrafficRecord, peak: PeakKey) {
+    return hasScopeValue(record, peak);
+  };
   const values = rows.flatMap(function (record) {
-    return trendPeaks.map(function (peak) {
-      return totalOf(record, peak);
-    });
+    return trendPeaks
+      .filter(function (peak) {
+        return hasPeakValue(record, peak);
+      })
+      .map(function (peak) {
+        return totalOf(record, peak);
+      });
   });
   const max = Math.max(...values, 1) * 1.12;
   const chartWidth = Math.max(780, 180 + rows.length * 100);
@@ -12645,17 +12673,30 @@ function TrendView(props: {
     DAY: "全日尖峰",
   };
   const series = trendPeaks.map(function (peak) {
-    return {
-      peak,
-      color: peakColors[peak],
-      points: rows.map(function (record, index) {
-        return {
-          x: 100 + (index * (chartWidth - 170)) / Math.max(1, rows.length - 1),
-          y: 310 - (totalOf(record, peak) / max) * 235,
-          record,
-        };
-      }),
-    };
+    const points = rows.map(function (record, index) {
+      return {
+        x: 100 + (index * (chartWidth - 170)) / Math.max(1, rows.length - 1),
+        y: 310 - (totalOf(record, peak) / max) * 235,
+        record,
+        has: hasPeakValue(record, peak),
+      };
+    });
+    /*
+     * 折線要「斷開」，不能把沒有值的季度連過去——連過去就等於宣稱中間那一季
+     * 有一個介於兩端之間的值。切成一段一段連續有值的區間各畫一條。
+     */
+    const segments: (typeof points)[] = [];
+    let current: typeof points = [];
+    points.forEach(function (point) {
+      if (point.has) {
+        current.push(point);
+      } else if (current.length) {
+        segments.push(current);
+        current = [];
+      }
+    });
+    if (current.length) segments.push(current);
+    return { peak, color: peakColors[peak], points, segments };
   });
   async function exportChart() {
     const svg = document.getElementById("trend-svg");
@@ -12684,14 +12725,27 @@ function TrendView(props: {
       /* 匯出要跟畫面同一個視角，否則折線圖與附表會給出兩組數字。 */
       const totals = Object.fromEntries(
         PEAK_KEYS.map(function (key) {
-          return [key, totalOf(record, key)];
+          return [
+            key,
+            scopeValueOrNull(record, key, totalOf(record, key)),
+          ];
         }),
-      ) as Record<PeakKey, number>;
+      ) as Record<PeakKey, number | null>;
       const prior = Object.fromEntries(
         PEAK_KEYS.map(function (key) {
-          return [key, index ? totalOf(rows[index - 1], key) : 0];
+          const priorRecord = index ? rows[index - 1] : null;
+          return [
+            key,
+            priorRecord
+              ? scopeValueOrNull(
+                  priorRecord,
+                  key,
+                  totalOf(priorRecord, key),
+                )
+              : null,
+          ];
         }),
-      ) as Record<PeakKey, number>;
+      ) as Record<PeakKey, number | null>;
       return {
         季度: record.quarter,
         資料別: record.surveyType || "待設定",
@@ -12708,7 +12762,9 @@ function TrendView(props: {
           PEAK_KEYS.map(function (key) {
             return [
               `${SCOPE_SHORT_LABELS[key]} 較前季（%）`,
-              prior[key] ? totals[key] / prior[key] - 1 : null,
+              totals[key] !== null && prior[key] !== null && prior[key] !== 0
+                ? totals[key] / prior[key] - 1
+                : null,
             ];
           }),
         ),
@@ -13097,19 +13153,26 @@ function TrendView(props: {
                 {series.map(function (item) {
                   return (
                     <g key={item.peak}>
-                      <polyline
-                        points={item.points
-                          .map(function (p) {
-                            return p.x + "," + p.y;
-                          })
-                          .join(" ")}
-                        fill="none"
-                        stroke={item.color}
-                        strokeWidth="4"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                      {item.points.map(function (p) {
+                      {item.segments.map(function (segment, segmentIndex) {
+                        return (
+                          <polyline
+                            key={item.peak + "-seg" + segmentIndex}
+                            points={segment
+                              .map(function (p) {
+                                return p.x + "," + p.y;
+                              })
+                              .join(" ")}
+                            fill="none"
+                            stroke={item.color}
+                            strokeWidth="4"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        );
+                      })}
+                      {item.points.filter(function (p) {
+                        return p.has;
+                      }).map(function (p) {
                         return (
                           <g key={item.peak + "-" + p.record.id}>
                             <circle
@@ -13185,12 +13248,19 @@ function TrendView(props: {
           {rows.map(function (record, index) {
             /* 右側摘要必須與左側實際畫出的數列一對一；新增 DAY 後不能只寫 AM／PM。 */
             const summaries = trendPeaks.map(function (peak) {
+              const has = hasPeakValue(record, peak);
               const value = totalOf(record, peak);
+              /*
+               * 增減率也要看「上一季有沒有值」。拿 0 當基準算出來的
+               * 百分比不是任何真實的變化。
+               */
+              const priorHas = index && hasPeakValue(rows[index - 1], peak);
               const prior = index ? totalOf(rows[index - 1], peak) : 0;
               return {
                 peak,
+                has,
                 value,
-                pct: prior ? (value / prior - 1) * 100 : null,
+                pct: has && priorHas && prior ? (value / prior - 1) * 100 : null,
               };
             });
             const active = summaries[0];
@@ -13203,7 +13273,10 @@ function TrendView(props: {
                       {summaries.map(function (item) {
                         return (
                           <span key={item.peak}>
-                            {peakLegendLabels[item.peak]} {item.value.toLocaleString()} PCU/hr
+                            {peakLegendLabels[item.peak]}{" "}
+                            {item.has
+                              ? item.value.toLocaleString() + " PCU/hr"
+                              : "－"}
                           </span>
                         );
                       })}
@@ -13222,11 +13295,13 @@ function TrendView(props: {
                             }
                           >
                             {item.peak}{" "}
-                            {item.pct == null
-                              ? "基準"
-                              : (item.pct >= 0 ? "+" : "") +
-                                item.pct.toFixed(1) +
-                                "%"}
+                            {!item.has
+                              ? "－"
+                              : item.pct == null
+                                ? "基準"
+                                : (item.pct >= 0 ? "+" : "") +
+                                  item.pct.toFixed(1) +
+                                  "%"}
                           </i>
                         );
                       })}
@@ -13234,7 +13309,12 @@ function TrendView(props: {
                   </>
                 ) : (
                   <>
-                    <b>{active.value.toLocaleString()} PCU/hr</b>
+                    {/* 單獨選「全日尖峰」時，算不出來的季度同樣顯示「－」。 */}
+                    <b>
+                      {active.has
+                        ? active.value.toLocaleString() + " PCU/hr"
+                        : "－"}
+                    </b>
                     <i
                       className={
                         active.pct == null
@@ -13244,11 +13324,13 @@ function TrendView(props: {
                             : "down"
                       }
                     >
-                      {active.pct == null
-                        ? "基準"
-                        : (active.pct >= 0 ? "+" : "") +
-                          active.pct.toFixed(1) +
-                          "%"}
+                      {!active.has
+                        ? "－"
+                        : active.pct == null
+                          ? "基準"
+                          : (active.pct >= 0 ? "+" : "") +
+                            active.pct.toFixed(1) +
+                            "%"}
                     </i>
                   </>
                 )}
