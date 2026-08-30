@@ -7,6 +7,7 @@ import { launchOptions } from "../chrome-path.mjs";
 import { chromium } from "playwright";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   AlignmentType,
@@ -30,7 +31,18 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = join(here, "manual.html");
-const out = join(here, "..", "..", "public", "Turning-Traffic-v2.1.37-新手操作手冊.docx");
+
+/*
+ * 版號與更新日期一律從 manual.html 的封面戳記讀，不在這裡寫死。
+ * 寫死的話升版時會悄悄產生一份檔名與頁尾都還是舊版號的手冊，而且不會報錯。
+ */
+const manualHtml = readFileSync(src, "utf8");
+const stamp = manualHtml.match(/系統版本：(v[\d.]+)\s*　?更新日期：([\d-]+)/);
+if (!stamp)
+  throw new Error("manual.html 讀不到封面戳記「系統版本：vX.Y　更新日期：YYYY-MM-DD」");
+const [, MANUAL_VERSION, MANUAL_DATE] = stamp;
+
+const out = join(here, "..", "..", "public", `Turning-Traffic-${MANUAL_VERSION}-新手操作手冊.docx`);
 
 const NAVY = "17353E";
 const TEAL = "087F75";
@@ -227,7 +239,7 @@ const boxParagraphs = (block) => {
           new TableCell({
             width: { size: 9360, type: WidthType.DXA },
             shading: { type: ShadingType.CLEAR, fill, color: "auto" },
-            margins: { top: 140, bottom: 140, left: 180, right: 180 },
+            margins: { top: 120, bottom: 120, left: 180, right: 180 },
             children,
           }),
         ],
@@ -377,7 +389,7 @@ for (const block of blocks) {
       break;
     case "p":
       children.push(
-        new Paragraph({ spacing: { after: 140, line: 320 }, children: toRuns(block.runs) }),
+        new Paragraph({ spacing: { after: 120, line: 320 }, children: toRuns(block.runs) }),
       );
       break;
     case "ul":
@@ -433,7 +445,7 @@ for (const block of blocks) {
 
 const doc = new Document({
   creator: "Turning Traffic",
-  title: "Turning Traffic 新手操作手冊 v2.1.37",
+  title: `Turning Traffic 新手操作手冊 ${MANUAL_VERSION}`,
   description: "寫給完全沒有交通背景的新手：從建立計畫、匯入調查檔、核對品質，到轉向圖、報表勾選匯出與備份。",
   styles: {
     default: {
@@ -487,7 +499,7 @@ const doc = new Document({
               spacing: { before: 0 },
               children: [
                 new TextRun({
-                  text: "v2.1.37 ｜ 2026-08-30 ｜ 正式成果前請先下載備份　　第 ",
+                  text: `${MANUAL_VERSION} ｜ ${MANUAL_DATE} ｜ 正式成果前請先下載備份　　第 `,
                   font: FONT,
                   size: 15,
                   color: MUTED,

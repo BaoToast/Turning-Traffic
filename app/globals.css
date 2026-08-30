@@ -1467,6 +1467,24 @@ button {
   box-shadow: 0 12px 30px rgba(12, 38, 47, 0.28);
   font-size: 11px;
   z-index: 100;
+  cursor: pointer;
+  border: 0;
+  font-family: inherit;
+  text-align: left;
+}
+/*
+ * 逐檔說明是條列式的（每個檔一行，用 \n 分隔）。
+ * 沒有 pre-line 的話 HTML 會把換行摺成空白，整段擠成一團跑馬燈，
+ * 說明寫得再清楚也讀不出來。
+ */
+.toast-long {
+  white-space: pre-line;
+  max-width: min(560px, calc(100vw - 48px));
+  max-height: 60vh;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.75;
+  text-align: left;
 }
 .report-card button,
 .backup-grid button {
@@ -3476,3 +3494,46 @@ button,.button,.help-download{white-space:nowrap}
   font-weight: 700;
 }
 .period-display-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/*
+ * ── 匯入預覽：檔名相關的提示 ──
+ * 站號可能讀自檔案內的欄位，也可能只是從檔名推出來的；兩者可信度差很多，
+ * 所以要在視覺上分開，讓使用者知道哪些需要核對。
+ */
+.role-reason {
+  display: block;
+  margin-top: 6px;
+  max-width: 320px;
+  font-size: 10px;
+  line-height: 1.6;
+  color: #8a5a00;
+}
+.station-source {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted, #6b7280);
+}
+.station-source.warn {
+  color: #8a5a00;
+  font-weight: 600;
+}
+.station-missing {
+  color: #b42318;
+}
+.station-input {
+  display: block;
+  margin-top: 6px;
+  width: 150px;
+  padding: 5px 8px;
+  font-size: 11px;
+  border: 1px solid var(--amber, #d99a00);
+  border-radius: 6px;
+}
+.filename-rules code {
+  background: #f2f4f7;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+}

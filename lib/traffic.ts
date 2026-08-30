@@ -416,8 +416,17 @@ export function isSameSurvey(
   if (record.projectId !== context.projectId) return false;
   if (record.quarter !== context.quarter) return false;
   if (record.station !== item.station) return false;
-  const recordType = record.surveyType || "待設定";
-  const itemType = item.surveyType || "待設定";
+  /*
+   * v2.1.38 以前，日期欄括號裡寫什麼就存什麼，於是「（晴）」這種寫法會留下
+   * `surveyType` 為「晴」 的舊紀錄。那不是系統認可的資料別，也不是「待設定」，
+   * 若原樣比對，重新匯入同一個檔案會多出一筆——正是這一版要修掉的症狀，
+   * 反而被修正本身在既有資料上觸發。這裡把非平日／假日一律視同「待設定」，
+   * 讓它可以被有資料別的新匯入接手。
+   */
+  const normalizeType = (value?: string) =>
+    value === "平日" || value === "假日" ? value : "待設定";
+  const recordType = normalizeType(record.surveyType);
+  const itemType = normalizeType(item.surveyType);
   if (recordType === itemType) return true;
   return recordType === "待設定" && itemType !== "待設定";
 }
@@ -431,7 +440,7 @@ export function isSameSurvey(
  *     每一張各產生一筆，資料別由工作表名稱直接指定）。
  *
  *  2. 日期字樣裡的括號：「日期：115年05月04日(平日)」→ 平日。
- *     括號內不限平日／假日，寫什麼就存什麼（有些案子會寫「路口轉向」之類）。
+ *     括號內只認平日／假日，其餘一律回「待設定」（有些案子會寫「路口轉向」之類）。
  *
  *  3. **交通量工作表的名稱**：整份只有一張叫「平日」（或「假日」）的
  *     工作表時，那就是這份調查的資料別。
@@ -451,10 +460,23 @@ export function resolveSurveyType(input: {
   sheetNames?: string[];
 }) {
   if (input.explicit) return input.explicit;
-  const inParentheses = (input.dateText || "").match(
-    /[（(]\s*([^）)]+)\s*[）)]/,
-  )?.[1];
-  if (inParentheses) return inParentheses;
+  /*
+   * 括號裡的內容只接受「平日」「假日」。
+   *
+   * 舊版把括號內容原樣當成資料別，但調查表的日期欄常常寫的是別的東西：
+   * 「日期：115年06月03日（晴）」會得到資料別「晴」，「（第一天）」
+   * 「（星期日）」同理。而且「晴」不是「待設定」，於是 isSameSurvey 不讓
+   * 重新匯入接手它——同一個檔案再匯一次只會多出一筆，趨勢線被拆成兩條，
+   * 匯出的「資料別」欄位也印著「晴」。系統對「待設定」有整套補救機制
+   *（專屬 UI、批次補完），這條路徑卻繞過了它們。
+   * 系統認可的資料別只有平日與假日，其餘一律回「待設定」由使用者補。
+   */
+  const inParentheses = (input.dateText || "")
+    .match(/[（(]\s*([^）)]+)\s*[）)]/)?.[1]
+    ?.normalize("NFKC")
+    .trim();
+  if (inParentheses === "平日" || inParentheses === "假日")
+    return inParentheses;
   const fromSheets = Array.from(
     new Set(
       (input.sheetNames || [])
@@ -471,7 +493,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.37";
+export const VERSION = "v2.1.39";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -579,6 +601,16 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.39",
+    date: "2026-08-31",
+    note: "複查 v2.1.38 後修正三項發布前問題，沒有變更任何交通量或 PCU 計算，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30。**一、撤回試算表套件降版。** 候選包把既有的 SheetJS 0.20.3 改成 npm registry 的 0.18.5，重新引入已知安全警示；本版恢復官方 CDN 的 0.20.3，並保留既有的安全讀取邊界。**二、檔案角色與原因一致。** 只有全日路段分向車種、沒有轉向或 OD 的純代號檔名，最終角色是「非路口轉向」，但原因仍誤稱「參考計算檔」；現在原因依最終內容角色產生，避免引導使用者錯誤改名。**三、連續相同提示不會互相提早關閉。** 舊版用訊息文字識別計時器，兩則內容相同時，前一個計時器會關掉後一則；現在每則通知使用獨立序號，點擊關閉也會使舊計時器失效。",
+  },
+  {
+    version: "v2.1.38",
+    date: "2026-08-30",
+    note: "把「檔名決定行為」這件事從隱形規則改成看得見的規則，**沒有變更任何交通量計算**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30（五份真實調查檔的逐車種車輛數與 AM／PM 尖峰 PCU 與 v2.1.37 逐位相同，並已與全日交通量系統交叉驗算）。**一、讀不到站號時不再捏造一個。** `stationFromFilename()` 舊版在檔名切不出站號時回傳 `S-<雜湊值>`，那是整支程式唯一會「安靜出錯」的地方：不報錯，只給一個看起來像真站號的值，然後它會一路進到報表、匯出檔名與歷季比較，而使用者完全不會知道系統其實沒讀到站號。現在一律回傳空字串，並在匯入預覽標示「站號未判定」、提供欄位讓使用者直接填寫；沒有站號的紀錄不予寫入。**二、站號來源公開。** ImportPreview 新增 `stationSource`（workbook／filename／none）。站號本來就優先讀檔案內的「站號：」欄位、讀不到才退回檔名，但畫面上看不出來是哪一種；現在預覽逐列標示，由檔名推定時明確請使用者核對。**三、匯入失敗要說得出原因。** 舊版一律只丟「沒有可寫入的原始交通量檔。」，而使用者最常撞到的情形是檔名被判成參考計算檔——畫面上只有一個藍色標籤，訊息又不提檔名，於是完全無從得知「改個檔名就好了」。現在逐檔說明「哪個檔、為什麼、怎麼辦」，並區分是檔名造成的還是內容造成的（兩者處理方式完全不同）。ImportPreview 新增 `roleReason`。**四、部分檔案未寫入時要指名道姓。** 舊版成功訊息只算使用者自己選擇略過的數量，因角色或版面被濾掉的檔案完全不會出現在任何地方；五個檔進來、四個寫入時，畫面只說「已寫入 4 個路口」。**五、參考計算檔標籤由藍色改為警示色**並附上原因說明——藍色在本介面代表中性資訊，使用者不會意識到那代表「這個檔不會被寫入」。**六、匯入頁新增「檔名會決定什麼？」說明區塊**，在上傳前就看得到，含正例反例與建議命名。**七、移除轉向圖摘要卡寫死的「本系統只彙整尖峰轉向流量。」**——同一頁的時段選單就提供全日尖峰小時與全日時段，且上方已有一句會依資料涵蓋時數變動的正確說明，兩者並存自相矛盾；系統目前也不只彙整轉向流量。新增 7 項守門測試涵蓋角色判定、原因訊息、站號來源與「不得再出現 S- 開頭假站號」。**九、另修三處同類的「安靜失敗」**（發布前再稽核一次找到的）：（1）資料別原本把日期欄括號裡的**任何**內容都當成資料別，「日期：115年06月03日（晴）」會得到資料別「晴」；而「晴」不是「待設定」，isSameSurvey 不讓重新匯入接手它，同一個檔案再匯一次只會多出一筆、趨勢線被拆成兩條，且完全繞過系統為「待設定」準備的整套補救機制——現在只接受平日與假日，其餘一律回「待設定」。（2）表頭讀不到「路口編號：」時，支線代碼會被推定成 A1、A2…，與真實代碼（正規式允許 A1 這種寫法）在畫面與匯出上分不出來；它是跨季幾何繼承、轉向繼承與參考轉向表比對的鍵，同一路口若一季讀得到、一季讀不到，兩季支線會靜靜對不起來——推定行為保留（全給空字串會讓多支線模型建不起來），但改為列出推定的代碼並提醒確認。（3）有內容但不是數字的儲存格（「-」「休」「N/A」）原本一律當成 0 輛，而「0」與「沒測到」在統計上意義不同，且這個轉換讓品質檢查的 `Number.isFinite` 規則在匯入路徑上永遠不會觸發——現在逐格記錄並在預覽列出原文。**十、修正六處與實際行為不符的說明文字**：摘要卡那句被移除文案的孿生句、當量「只用於尖峰」（實際上也決定尖峰挑在哪一小時、也套用於全日時段）、總覽儀表板與轉向進階分析與核對工作台寫死的 PCU/hr（選全日時段時實際單位是 PCU/調查日）、以及要使用者「以 v1.4.0 重新匯入」的訊息（v1.4.0 的計算口徑已過時）。**十一、手冊修正七處**：尖峰搜尋範圍仍寫 05:00～12:00／12:00～23:00（v2.1.30 起已放寬為 00:00～12:00／12:00～24:00，使用者會用錯門檻判斷警示是否合理）、「四車種分類合計」（實際加總所有車種含自訂車種）、選單 17 項（實為 18 項）、支線上限 A～G、轉向圖只能切 AM／PM，以及手冊前面引用了本版已移除的那句文案。三項安靜失敗各補守門測試，並實測對未修正版本會失敗（4 項紅字）。**十二、交付前對抗性複查再修五項**：（1）**日期格式或布林值的儲存格會把 1.78 兆輛塞進資料**——`cellDates: true` 讓日期格的 `.v` 是 Date，`Number(Date)` 是有限的 epoch 毫秒會通過 `|| 0`，然後進尖峰挑選、PCU 與全日累計；這是 v2.1.37 就存在、且完全沒有提示的資料損毀，修法是讓判斷與寫入共用同一個運算式。（2）匯入失敗的逐檔說明一律 2.8 秒消失、`.toast` 沒有 `white-space: pre-line` 使條列擠成一團，等於說明寫了也看不到；改為依字數延長顯示（上限 20 秒）、保留換行、可點擊關閉。（3）使用者補填的站號未正規化，照訊息填 `11017T14-02` 會與另一季由檔名推出的 `T14-02` 對不起來，改走 `stationFromFilename()`。（4）補填站號後覆蓋／版本判斷不重算，會沒問過就覆蓋既有紀錄，改為一律建立新版本。（5）v2.1.37 以前存下的 `surveyType` 為「晴」的紀錄既非平日假日也非「待設定」，重新匯入會多出一筆——正是本版要修的症狀被修正本身觸發；`isSameSurvey` 改為把非平日／假日視同待設定。另新增 `tests/calculation-golden.test.ts` 黃金值鎖：在此之前**沒有任何測試在守「不得變更計算口徑」**，值取自 v2.1.37 實測。",
+  },
   {
     version: "v2.1.37",
     date: "2026-08-30",
@@ -1035,14 +1067,15 @@ export function stationFromFilename(name: string): string {
   if (run && run.length >= 3)
     return `T${run.slice(0, -2)}-${run.slice(-2)}`;
   if (run && run.length === 2) return `T${run[0]}-${run[1].padStart(2, "0")}`;
-  return `S-${Math.abs(hash(name)) % 999}`;
-}
-
-function hash(value: string) {
-  return [...value].reduce(
-    (sum, char) => ((sum << 5) - sum + char.charCodeAt(0)) | 0,
-    0,
-  );
+  /*
+   * 切不出站號時回傳空字串，由呼叫端決定怎麼處理。
+   *
+   * 舊版在這裡回傳 `S-<雜湊值>`。那是這支程式裡唯一會「安靜出錯」的地方：
+   * 它不會失敗，只會產生一個看起來像真站號的值（S-372），然後那個值會一路
+   * 進到報表、匯出檔名與歷季比較，而使用者完全不會知道系統其實根本沒讀到
+   * 站號。判讀不出來就要說判讀不出來，不能拿一個假的頂替。
+   */
+  return "";
 }
 
 export function totalMovement(
@@ -1401,7 +1434,12 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
         station: record.station,
         quarter: record.quarter,
         message:
-          "此筆由舊版匯入器建立，缺少可追溯的起點→終點流向；請刪除本筆後，以 v1.4.0 重新匯入原始 Excel。",
+          /*
+           * 舊版寫「以 v1.4.0 重新匯入」。v1.4.0 是 2026-08-11 的版本，
+           * 使用者既拿不到、也不該用：計算口徑在 v2.1.30 已經改過
+           *（LAST_CALC_CHANGE_VERSION），真照做反而會得到舊口徑的數字。
+           */
+          "此筆由舊版匯入器建立，缺少可追溯的起點→終點流向；請刪除本筆後，以目前版本重新匯入原始 Excel。",
       });
     }
     for (const peak of PEAK_KEYS) {
@@ -1680,8 +1718,17 @@ function parseTime(value: unknown): number | null {
 export type ImportPreview = {
   file: string;
   station: string;
+  /**
+   * 站號是從哪裡判定的。
+   * `workbook` 讀自檔案內的「站號：」欄位（可靠）；`filename` 是檔案裡沒有
+   * 站號欄位、退而從檔名推出來的（需要人工核對）；`none` 是兩邊都讀不到。
+   * 匯入預覽要據此提醒使用者哪些站號需要確認。
+   */
+  stationSource: "workbook" | "filename" | "none";
   name: string;
   role: "原始交通量" | "參考計算檔" | "非路口轉向" | "無法辨識";
+  /** 為什麼判成這個角色，以及使用者可以怎麼處理。用於匯入失敗時的說明。 */
+  roleReason?: string;
   sheets: {
     traffic: string[];
     log: string[];
@@ -1806,9 +1853,8 @@ function movementFromHeader(label: string): MovementKey | null {
  * 這一行就會改寫到 Object.prototype，之後全站每一個物件都會多出那個屬性
  * ——症狀千奇百怪而且極難追。
  *
- * 這也是對 xlsx（SheetJS 0.18.5）已知原型污染警示的一層防禦：
- * npm 上沒有修好的版本可用（修正版只在 SheetJS 自己的 CDN 上），
- * 所以在**我們自己的邊界**擋一次，不完全依賴上游。
+ * 系統使用 SheetJS 官方 CDN 的 0.20.3；這層防禦仍保留，避免安全性只依賴
+ * 第三方套件版本，也保護後續以檔案文字建立物件鍵的應用程式程式碼。
  */
 export function safeObjectKey(key: string): string {
   return key === "__proto__" || key === "constructor" || key === "prototype"
@@ -1818,12 +1864,12 @@ export function safeObjectKey(key: string): string {
 
 /*
  * ────────────────────────────────────────────────────────────────
- *  對 xlsx（SheetJS 0.18.5）上游安全警示的實際處置
+ *  試算表解析的額外安全邊界
  * ────────────────────────────────────────────────────────────────
  *
- * 狀況：npm 上的 xlsx 停在 0.18.5，那一版有一則原型污染的警示
- * （prototype pollution），而**修正版只發在 SheetJS 自己的 CDN**，
- * npm 沒有可以直接升上去的版本（`npm audit` 也回報 fixAvailable: false）。
+ * 套件使用 SheetJS 官方 CDN 的 0.20.3，不應為了改用 npm registry 而降回
+ * 0.18.5。即使使用修正版，使用者上傳的工作表名稱與欄位文字仍是不可信輸入，
+ * 所以在應用程式邊界保留下列兩層檢查。
  *
  * 「請只匯入可信來源的檔案」本身沒有錯，但那是把責任推回使用者，
  * 而且這支程式的使用情境正好是「收別人給的調查檔」。所以在我們自己的
@@ -1836,7 +1882,7 @@ export function safeObjectKey(key: string): string {
  *     刪掉、中止這次匯入，並明講是哪一個檔案、多了什麼。
  *     （安靜地清掉更危險——使用者會以為那個檔案沒問題。）
  *
- * 這不能取代升級，但它把「無聲被污染」變成「當場中止並告知」。
+ * 這不能取代套件維護，但可把「無聲被污染」變成「當場中止並告知」。
  */
 export const SAFE_XLSX_READ_OPTIONS = {
   type: "array",
@@ -2229,6 +2275,12 @@ export async function inspectWorkbook(
   const intervalMap = new Map<number, IntervalRow>();
   const detectedColumns: ImportPreview["columns"] = [];
   const originOrder: string[] = [];
+  /* 從檔案讀不到、由系統依出現順序推定的支線代碼，匯入預覽要提醒使用者確認。 */
+  const inferredApproachCodes = new Set<string>();
+  /* 有內容但不是數字的格子（空白格不算）。舊版一律當 0，使用者不會知道。 */
+  const nonNumericCells: string[] = [];
+  /* 同一種原文歸併計數，避免整欄寫「-」時警告被同一句洗版。 */
+  const nonNumericTexts = new Map<string, number>();
   let sawOd = false;
   let sawTurning = false;
   let positionalVehicleBlocks = 0;
@@ -2270,14 +2322,23 @@ export async function inspectWorkbook(
     timeColumns.forEach(function (timeColumn, blockIndex) {
       const blockEnd =
         (timeColumns[blockIndex + 1]?.column ?? used.e.c + 1) - 1;
-      const origin =
-        sourceCode(
-          sheet,
-          timeColumn.firstDataRow - 1,
-          timeColumn.column,
-          blockEnd,
-          sheetName,
-        ) || `A${originOrder.length + 1}`;
+      /*
+       * 支線代碼讀不到時仍要給一個值——全部給空字串的話多支線模型會塌成
+       * 一支，整個路口建不起來。但**不能悄悄捏造**：推定出來的 A1、A2 和
+       * 真實代碼（正規式是 [A-Z0-9]+，本來就允許 A1 這種寫法）在畫面與匯出
+       * 上分不出來，而它是跨季幾何繼承、轉向繼承與參考轉向表比對的鍵。
+       * 同一路口兩季若一季讀得到、一季讀不到，兩季的支線會對不起來而靜靜
+       * 繼承失敗。所以推定歸推定，但要記下來並在預覽提醒使用者確認。
+       */
+      const readCode = sourceCode(
+        sheet,
+        timeColumn.firstDataRow - 1,
+        timeColumn.column,
+        blockEnd,
+        sheetName,
+      );
+      const origin = readCode || `A${originOrder.length + 1}`;
+      if (!readCode) inferredApproachCodes.add(origin);
       if (!originOrder.includes(origin)) originOrder.push(origin);
       const blockColumns: ImportPreview["columns"] = [];
       const candidates: Array<{
@@ -2391,7 +2452,43 @@ export async function inspectWorkbook(
            * PCU 換算、全日累計全部自動吃到整數，不必在下游各補一次
            * （補在下游就會變成同一件事在 N 個地方各做各的）。
            */
-          interval.values[column.valueIndex] = Math.round(Number(value) || 0);
+          /*
+           * 有內容但不是數字的格子，要記下來告訴使用者。
+           *
+           * `Number("-")`、`Number("休")`、`Number("N/A")` 都是 NaN，
+           * 舊版 `|| 0` 直接當成 0 輛繼續算。在交通量統計上「0」與
+           * 「沒測到」意義完全不同：0 會進加總、進尖峰視窗挑選、進全日
+           * 累計與 PCU 換算，而使用者不會知道那一格其實沒有數字。
+           * 更糟的是這個轉換讓既有的防線失效——品質檢查的
+           * `Number.isFinite(value)`（見 collectIssues）拿到的一律是被
+           * 補過的有限數，那條 error 規則在匯入路徑上永遠不會觸發，
+           * 等於對使用者謊稱「已經檢查過而且沒問題」。
+           * 空白格不算：稀疏區塊本來就會有空格，那是正常的。
+           */
+          const rawText =
+            value === undefined || value === null ? "" : String(value).trim();
+          /*
+           * 判斷與寫入必須用**同一個運算式**，否則訊息會說謊。
+           *
+           * 舊版寫入用 `Number(value) || 0`。`SAFE_XLSX_READ_OPTIONS` 帶
+           * `cellDates: true`，所以日期／時間格式的儲存格 `.v` 是 Date 物件，
+           * `Number(Date)` 是**有限的** epoch 毫秒，通過 `|| 0` 之後
+           * 一格就把 1,780,444,800,000 輛塞進那個時距，然後一路進尖峰視窗
+           * 挑選、PCU 換算與全日累計。布林 true 同理會變成 1 輛。
+           * Excel 對「7:00」這種輸入會自動套時間格式，承辦很容易踩到。
+           * v2.1.37 以前完全沒有任何提示。
+           */
+          const numeric = typeof value === "number" ? value : Number(rawText);
+          const usable = Number.isFinite(numeric);
+          if (rawText && !usable) {
+            const label = rawText.length > 24 ? rawText.slice(0, 24) + "…" : rawText;
+            nonNumericTexts.set(label, (nonNumericTexts.get(label) || 0) + 1);
+            if (nonNumericCells.length < 8)
+              nonNumericCells.push(
+                `${sheetName}!${XLSX.utils.encode_cell({ r: row, c: column.sourceColumn })}=「${label}」`,
+              );
+          }
+          interval.values[column.valueIndex] = usable ? Math.round(numeric) : 0;
         });
         intervalMap.set(start, interval);
       }
@@ -2479,12 +2576,19 @@ export async function inspectWorkbook(
   const weights = detectedColumns.map(function (column) {
     return pceFactor(pce, column.vehicle, column.movement || "through");
   });
-  const baseRole: ImportPreview["role"] =
-    /^T\d+[-_.]?\d+\.(xls|xlsx|xlsm)$/i.test(file.name.normalize("NFKC"))
-      ? "參考計算檔"
-      : intervalRows.length
-        ? "原始交通量"
-        : "無法辨識";
+  /*
+   * 純代號檔名（T14-02.xls）視為承辦附的參考計算檔，只拿來對帳、不寫入資料。
+   * 這條規則只看檔名，因此**必須**把原因一併帶出去：使用者看到的不能只是
+   * 「沒有匯入」，而要知道是檔名造成的、以及改檔名就能解決。
+   */
+  const looksLikeReferenceFile = /^T\d+[-_.]?\d+\.(xls|xlsx|xlsm)$/i.test(
+    file.name.normalize("NFKC"),
+  );
+  const baseRole: ImportPreview["role"] = looksLikeReferenceFile
+    ? "參考計算檔"
+    : intervalRows.length
+      ? "原始交通量"
+      : "無法辨識";
   const warnings: string[] = [];
   if (!buckets.log.length)
     warnings.push("未找到監測日誌；道路名稱與幾何仍可人工補正。");
@@ -2518,6 +2622,19 @@ export async function inspectWorkbook(
     layout === "unknown" && intervalRows.length && detectedVehicles.length
       ? "非路口轉向"
       : baseRole;
+  /*
+   * 原因必須依「最終角色」產生。全日路段表可能同時符合純代號檔名規則，
+   * 但內容判定會把最終角色改成「非路口轉向」；若沿用 baseRole 的原因，畫面
+   * 會一面說非路口轉向、一面叫使用者改檔名解除參考檔判定，兩者互相矛盾。
+   */
+  const roleReason =
+    role === "非路口轉向"
+      ? `已辨識 ${detectedVehicles.length} 個車種與 ${intervalRows.length} 個時間區間，但未找到左轉、直行、右轉或起訖（OD）欄位；這是內容判定結果，不是檔名造成，且不會寫入路口轉向資料。`
+      : looksLikeReferenceFile
+        ? `檔名「${file.name}」只有站號代號、沒有其他文字，依檔名規則判定為參考計算檔，不會寫入資料。若這是原始調查資料，請在檔名加上路口名稱（例如 ${file.name.replace(/\.(xls|xlsx|xlsm)$/i, "_路口名稱.$1")}）後重新匯入。`
+        : role === "無法辨識"
+          ? "檔案中找不到可辨識的逐時距車種計數。這不是檔名的問題，請確認工作表內容是否為路口轉向調查表。"
+          : undefined;
   const resolvedDetectedVehicles = detectedColumns.length
     ? [
         ...new Map(
@@ -2557,13 +2674,53 @@ export async function inspectWorkbook(
     );
   if (/\.xls$/i.test(file.name))
     warnings.push("已使用舊版 Excel 97–2003（.xls）相容讀取模式。");
+  const stationValue = workbookStation
+    ? stationFromFilename(workbookStation)
+    : stationFromFilename(file.name);
+  if (!workbookStation && stationValue)
+    warnings.push(
+      `檔案中沒有「站號：」欄位，站號 ${stationValue} 是從檔名推出來的，請於預覽確認。`,
+    );
+  if (!stationValue)
+    warnings.push(
+      "檔案與檔名都讀不到站號，請在預覽列直接填寫，或將檔名改為含 T<站號> 的格式後重新匯入。",
+    );
+  if (nonNumericTexts.size) {
+    const total = [...nonNumericTexts.values()].reduce((a, b) => a + b, 0);
+    const kinds = [...nonNumericTexts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([text, count]) => `「${text}」${count} 格`)
+      .join("、");
+    warnings.push(
+      `有 ${total} 個儲存格有內容但不是數字，已一律計為 0 輛：${kinds}` +
+        `${nonNumericTexts.size > 4 ? " 等" : ""}` +
+        `（例如 ${nonNumericCells.slice(0, 3).join("、")}）。` +
+        "「0」與「沒測到」在統計上意義不同，請確認這些格子是否真的代表零流量。",
+    );
+  }
+  if (inferredApproachCodes.size)
+    warnings.push(
+      `有 ${inferredApproachCodes.size} 支支線在表頭讀不到「路口編號：」，` +
+        `代碼由系統依出現順序推定為 ${[...inferredApproachCodes].join("、")}。` +
+        "支線代碼是跨季比對幾何與轉向的依據，推定值與其他季度可能對不起來，" +
+        "請於「道路與流向管理」確認，或在原始檔補上路口編號後重新匯入。",
+    );
   return {
     file: options?.fileLabel || file.name,
-    station: workbookStation
-      ? stationFromFilename(workbookStation)
-      : stationFromFilename(file.name),
+    /*
+     * 站號優先讀檔案內的「站號：」欄位，讀不到才退回檔名。
+     * 一併記下來源，讓匯入預覽能提醒使用者哪些站號是猜出來的、需要核對。
+     */
+    station: stationValue,
+    stationSource: workbookStation
+      ? "workbook"
+      : stationValue
+        ? "filename"
+        : "none",
     name: normalizeIntersectionName(workbookName || file.name),
     role,
+    roleReason,
     sheets: buckets,
     intervals: intervalRows.length,
     intervalMinutes,

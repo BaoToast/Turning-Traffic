@@ -109,6 +109,28 @@ test("版號在每一個寫著它的檔案裡都一致", () => {
     );
 });
 
+test("SheetJS 固定使用官方修正版，不得降回 npm registry 的 0.18.5", () => {
+  const expected = "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz";
+  const pkg = JSON.parse(read("package.json"));
+  const lock = JSON.parse(read("package-lock.json"));
+  assert.equal(pkg.dependencies?.xlsx, expected, "package.json 的 xlsx 被降版或改來源");
+  assert.equal(
+    lock.packages?.[""]?.dependencies?.xlsx,
+    expected,
+    "package-lock.json 根套件的 xlsx 來源不一致",
+  );
+  assert.equal(
+    lock.packages?.["node_modules/xlsx"]?.version,
+    "0.20.3",
+    "實際鎖定的 SheetJS 不是 0.20.3",
+  );
+  assert.match(
+    lock.packages?.["node_modules/xlsx"]?.resolved || "",
+    /^https:\/\/cdn\.sheetjs\.com\/xlsx-0\.20\.3\//,
+    "SheetJS 必須從官方 CDN 取得修正版",
+  );
+});
+
 test("更新紀錄的最新一則就是目前版本", () => {
   /*
    * CHANGELOG.md 曾經漏掉 v2.1.5～v2.1.25 共 21 個版本而沒有人發現。
@@ -141,22 +163,44 @@ test("手冊的版號與日期只有一個來源，封面與頁尾不會對不�
    * 內容都對，只是兩處日期不同——而當時沒有任何檢查在看日期，
    * 版號檢查照樣全綠。
    */
+  /*
+   * 建置腳本現在直接從 manual.html 的封面戳記讀版號與日期（v2.1.38 起），
+   * 所以「封面與頁尾對不上」在結構上就不可能發生，比事後檢查更可靠。
+   *
+   * 這裡因此改成守住更強的性質：腳本裡**不可以再出現任何寫死的版號**，
+   * 而且必須真的去讀那個戳記。舊版寫死時，升版只要漏改腳本就會靜靜產生
+   * 一份檔名與頁尾都還是舊版號的手冊，而且不會有任何錯誤訊息。
+   */
   for (const script of [
     "scripts/manual/build-pdf.mjs",
     "scripts/manual/build-docx.mjs",
   ]) {
     const text = read(script);
-    const footers = [...text.matchAll(/(v[\d.]+)\s*｜\s*(\d{4}-\d{2}-\d{2})/g)];
-    assert.ok(footers.length, `${script} 找不到頁尾的「版號 ｜ 日期」字樣`);
-    for (const [, foundVersion, foundDate] of footers) {
-      assert.equal(foundVersion, v, `${script} 頁尾版號與程式不一致`);
-      assert.equal(
-        foundDate,
-        date,
-        `${script} 頁尾日期與手冊封面戳記不一致（封面 ${date}）`,
-      );
-    }
+    assert.match(
+      text,
+      /manual\.html 讀不到封面戳記|系統版本：\(v\[/,
+      `${script} 必須從 manual.html 的封面戳記讀版號，不可自行寫死`,
+    );
+    assert.match(
+      text,
+      /MANUAL_VERSION/,
+      `${script} 必須使用從戳記讀到的版號組合檔名與頁尾`,
+    );
+    const hardcoded = [...text.matchAll(/["'`](v\d+\.\d+(?:\.\d+)?)\s*｜/g)];
+    assert.equal(
+      hardcoded.length,
+      0,
+      `${script} 頁尾仍寫死版號 ${hardcoded.map((m) => m[1]).join("、")}`,
+    );
+    assert.doesNotMatch(
+      text,
+      new RegExp(`["'\`][^"'\`]*${v.replace(/\./g, "\\.")}[^"'\`]*["'\`]`),
+      `${script} 仍有寫死的版號字串`,
+    );
   }
+  /* 封面戳記的日期就是手冊日期，兩者同源後仍要確認戳記本身格式正確。 */
+  assert.match(read("scripts/manual/manual.html"), /更新日期：\d{4}-\d{2}-\d{2}/);
+  assert.ok(date, "manual.html 封面戳記缺少更新日期");
 });
 
 test("手冊裡有本版的更新說明，而且沒有留著舊版的手冊檔", () => {

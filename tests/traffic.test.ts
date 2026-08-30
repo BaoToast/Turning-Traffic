@@ -273,6 +273,20 @@ test("recognizes a five-vehicle full-day road sheet without inventing turning fl
   assert.equal(preview.columns.length, 0);
   assert.equal(preview.templateId, "full-day-road-vehicle-v1");
   assert.equal(preview.detectedVehicles.length, 5);
+  assert.match(preview.roleReason || "", /內容判定結果/);
+
+  /*
+   * 純代號檔名通常是參考計算檔，但內容若明確是全日路段表，最終角色應以
+   * 內容為準；原因也不能仍叫使用者改檔名，否則角色與說明會互相矛盾。
+   */
+  const pureCodeFile = new File(
+    [XLSX.write(workbook, { type: "array", bookType: "xlsx" })],
+    "T510.xlsx",
+  );
+  const pureCodePreview = await inspectWorkbook(pureCodeFile, DEFAULT_PCE);
+  assert.equal(pureCodePreview.role, "非路口轉向");
+  assert.match(pureCodePreview.roleReason || "", /內容判定結果/);
+  assert.doesNotMatch(pureCodePreview.roleReason || "", /請在檔名加上路口名稱/);
 });
 
 test("splits weekday and holiday hourly workbooks into independent previews", async () => {
@@ -444,10 +458,21 @@ test("站號：沒有分隔符號時取後兩碼當子編號", () => {
   assert.equal(stationFromFilename("120507T501縣142彰鹿路.xls"), "T5-01");
 });
 
-test("站號：完全讀不到時給穩定的替代值，同一個名稱永遠得到同一個", () => {
-  const first = stationFromFilename("沒有站號的檔名.xlsx");
-  assert.match(first, /^S-\d+$/);
-  assert.equal(stationFromFilename("沒有站號的檔名.xlsx"), first);
+/*
+ * ── 讀不到站號時不可以捏造一個 ──
+ *
+ * 舊版在這裡回傳 `S-<雜湊值>`，那是整支程式唯一會「安靜出錯」的地方：
+ * 不報錯，只給一個看起來像真站號的值，然後它會一路進到報表、匯出檔名與
+ * 歷季比較，使用者永遠不會知道系統其實沒讀到站號。
+ * 現在一律回傳空字串，由呼叫端負責提醒使用者補填。
+ */
+test("站號：完全讀不到時回傳空字串，不得捏造代號", () => {
+  assert.equal(stationFromFilename("沒有站號的檔名.xlsx"), "");
+  assert.equal(stationFromFilename("114Q1.xlsx"), "");
+  assert.equal(stationFromFilename("副本 (1).xlsx"), "");
+  /* 尤其不可以再出現 S- 開頭的假站號 */
+  for (const name of ["第一季調查成果.xlsx", "複本.xlsx", ""])
+    assert.doesNotMatch(stationFromFilename(name), /^S-/);
 });
 
 /*
@@ -634,7 +659,7 @@ test("組不成一小時的格距（45、120 分鐘）回報資料不足，不�
  * 工作表名稱直接來自使用者上傳的檔案，而程式有好幾處是
  * `object[名稱] = 值`。一個工作表如果真的叫 `__proto__`，那一行就會改寫到
  * Object.prototype，之後全站每一個物件都會多出那個屬性。
- * 這同時也是對 xlsx（SheetJS 0.18.5）已知原型污染警示的一層自我防禦。
+ * 即使使用 SheetJS 0.20.3，檔案內文字仍是不可信輸入；這也是一層額外防禦。
  */
 test("safeObjectKey 擋掉 __proto__、constructor、prototype", () => {
   assert.equal(safeObjectKey("平日"), "平日");
@@ -682,9 +707,9 @@ test("工作表叫 __proto__ 的檔案不會污染 Object.prototype", async () =
 });
 
 /*
- * ── xlsx 上游安全警示的防禦措施 ──
- * npm 上的 xlsx 停在 0.18.5，沒有修好的版本可以升。這三項測試釘住
- * 我們自己這一層做了什麼：關掉用不到的解析路徑、偵測到污染就中止匯入。
+ * ── 試算表解析的額外安全邊界 ──
+ * 系統使用 SheetJS 官方 CDN 的 0.20.3；這三項測試仍釘住我們自己的邊界：
+ * 關掉用不到的解析路徑、偵測到污染就中止匯入。
  */
 test("解析選項關掉了公式、內嵌 HTML 與 VBA", () => {
   assert.equal(SAFE_XLSX_READ_OPTIONS.cellFormula, false);

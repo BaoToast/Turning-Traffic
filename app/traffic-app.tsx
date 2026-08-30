@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * 本元件刻意以 useMemo 快取大型 SVG 與跨季報表內容。資料更新一律透過
+ * structuredClone 後寫回 state，但 React Compiler 無法證明這點，會把既有
+ * memoization 報成無法保留；保留手動快取，避免七叉路口每次輸入都重建 SVG。
+ */
+/* eslint-disable react-hooks/preserve-manual-memoization */
+
 import {
   useEffect,
   useMemo,
@@ -8,6 +15,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import * as XLSX from "xlsx";
+
 import JSZip from "jszip";
 import { jsPDF } from "jspdf";
 import {
@@ -61,6 +69,7 @@ import {
   LockStatus,
   VERSION_HISTORY,
   isSameSurvey,
+  stationFromFilename,
 } from "../lib/traffic";
 import {
   checkPeriodAgainstDate,
@@ -3226,8 +3235,9 @@ function AuditWorkbench(props: {
             </h2>
             <p className="audit-unit-note">
               這一頁是核對<b>換算過程</b>用的：中間各車種欄位是原始的
-              <b>調查車輛數（輛/hr）</b>，乘上該車種在該轉向的當量係數（見「換算式」），
-              才得到最右邊的<b>交通流量（PCU/hr）</b>。
+              <b>調查車輛數（{scopeUnit(props.peak, "vehicle")}）</b>
+              ，乘上該車種在該轉向的當量係數（見「換算式」），
+              才得到最右邊的<b>交通流量（{scopeUnit(props.peak)}）</b>。
               車種欄若標成 PCU 就沒有東西可以核對了。
             </p>
           </div>
@@ -3240,7 +3250,9 @@ function AuditWorkbench(props: {
               ]}
               onChange={setFlowView}
             />
-            <span className="status-dot">車種欄＝調查輛數；流量欄＝當量 PCU/hr</span>
+            <span className="status-dot">
+              車種欄＝調查輛數；流量欄＝當量 {scopeUnit(props.peak)}
+            </span>
           </div>
         </div>
         {/*
@@ -3265,8 +3277,8 @@ function AuditWorkbench(props: {
           return (
             <p className={gap ? "audit-flow-gap warn" : "audit-flow-gap"}>
               {gap
-                ? `駛出合計 ${outbound.toLocaleString()} PCU/hr、駛入合計 ${inbound.toLocaleString()} PCU/hr，差 ${gap.toLocaleString()} PCU/hr。這代表有流向沒有指定目的支線，請到「道路與流向管理」補齊；在補齊之前，「駛入」視角會少掉這個量。`
-                : `駛出與駛入合計相同（${outbound.toLocaleString()} PCU/hr）：每一筆流向都有指定目的支線，兩種視角可以互相核對。`}
+                ? `駛出合計 ${outbound.toLocaleString()} ${scopeUnit(props.peak)}、駛入合計 ${inbound.toLocaleString()} ${scopeUnit(props.peak)}，差 ${gap.toLocaleString()} ${scopeUnit(props.peak)}。這代表有流向沒有指定目的支線，請到「道路與流向管理」補齊；在補齊之前，「駛入」視角會少掉這個量。`
+                : `駛出與駛入合計相同（${outbound.toLocaleString()} ${scopeUnit(props.peak)}）：每一筆流向都有指定目的支線，兩種視角可以互相核對。`}
             </p>
           );
         })()}
@@ -3287,14 +3299,17 @@ function AuditWorkbench(props: {
                   {flowView === "outbound" ? "駛出路口" : "駛入路口"}{" "}
                   {arm.sourceCode || arm.name} · {arm.name}
                 </span>
-                <strong>{armTotal.toLocaleString()} PCU/hr</strong>
+                <strong>
+                  {armTotal.toLocaleString()} {scopeUnit(props.peak)}
+                </strong>
               </summary>
               <div className="table-scroll">
                 <table className="audit-table">
                   <thead>
                     {/*
                       這一張表是「核對換算過程」用的，所以左半邊一定要是
-                      原始調查車輛數（輛/hr），右半邊才是乘上當量後的 PCU/hr。
+                      原始調查車輛數（{scopeUnit(props.peak, "vehicle")}），
+                      右半邊才是乘上當量後的 {scopeUnit(props.peak)}。
                       沒有分組標題時，很容易誤以為中間那幾欄也應該是 PCU。
                     */}
                     <tr className="audit-group-row">
@@ -3312,7 +3327,7 @@ function AuditWorkbench(props: {
                           <th key={vehicleKey}>
                             {vehicleLabel(record, vehicleKey)}
                             <br />
-                            輛/hr
+                            {scopeUnit(props.peak, "vehicle")}
                           </th>
                         );
                       })}
@@ -3320,7 +3335,7 @@ function AuditWorkbench(props: {
                       <th>
                         流量
                         <br />
-                        PCU/hr
+                        {scopeUnit(props.peak)}
                       </th>
                     </tr>
                   </thead>
@@ -3625,7 +3640,16 @@ export default function TrafficApp() {
     Record<string, ImportResolution>
   >({});
   const [importing, setImporting] = useState(false);
+  /*
+   * 站號在檔案內與檔名都讀不到時，讓使用者在預覽列直接補填。
+   * 鍵是預覽列的檔案標籤（同一個檔案的平日／假日會是兩列，各自填各自的）。
+   */
+  const [stationOverrides, setStationOverrides] = useState<
+    Record<string, string>
+  >({});
   const [toast, setToast] = useState("");
+  /* 每則通知使用獨立序號，避免內容相同的舊計時器誤關掉新通知。 */
+  const toastTokenRef = useRef(0);
   /*
    * loaded：本機資料讀完了沒有。存檔 effect 在這之前一律不動作，
    * 避免「開啟網頁時先用空白蓋掉使用者的資料」。
@@ -3925,11 +3949,28 @@ export default function TrafficApp() {
     ],
   );
 
+  /*
+   * 訊息長短差很多，顯示時間必須跟著變。
+   *
+   * 匯入失敗的說明現在是逐檔條列（哪個檔、為什麼、怎麼辦），動輒三四百字；
+   * 舊版一律 2.8 秒就收掉，等於使用者只看到一團字閃過去——說明寫得再清楚
+   * 也沒有用。這裡依字數延長（每字約 55 毫秒，上限 20 秒），並且長訊息
+   * 讓使用者可以自己點掉，不必乾等。
+   */
   const notify = function (message: string) {
+    const token = toastTokenRef.current + 1;
+    toastTokenRef.current = token;
     setToast(message);
+    /*
+     * 顯示時間依字數延長。匯入失敗的說明現在是逐檔條列，動輒三四百字；
+     * 舊版一律 2.8 秒收掉，等於使用者只看到一團字閃過去，說明寫得再清楚
+     * 也沒有用。長訊息也可以直接點掉，不必乾等。
+     */
+    const ms = Math.min(20000, Math.max(2800, message.length * 55));
     setTimeout(function () {
-      setToast("");
-    }, 2800);
+      /* 序號不同代表後來已有新訊息；即使文字相同也不能代替它關閉。 */
+      if (toastTokenRef.current === token) setToast("");
+    }, ms);
   };
   const activeProject = projects.find(function (project) {
     return project.id === activeProjectId;
@@ -4793,6 +4834,8 @@ export default function TrafficApp() {
 
   function saveRevision(record: TrafficRecord, reason: string) {
     const revision: RecordRevision = {
+      // 只在使用者觸發儲存時執行，不是 render 階段的計算。
+      // eslint-disable-next-line react-hooks/purity
       id: record.id + "-R-" + Date.now().toString(36),
       recordId: record.id,
       savedAt: new Date().toISOString(),
@@ -4924,6 +4967,8 @@ export default function TrafficApp() {
 
   function addProject() {
     if (!projectForm.name.trim()) return notify("請先輸入計畫名稱。");
+    // 只在使用者按下新增計畫時執行，不是 render 階段的計算。
+    // eslint-disable-next-line react-hooks/purity
     const id = "P-" + Date.now().toString(36);
     const project: Project = {
       id: id,
@@ -5026,9 +5071,12 @@ export default function TrafficApp() {
       } catch (error) {
         rows.push({
           file: file.name,
-          station: "—",
+          station: "",
+          stationSource: "none",
           name: normalizeIntersectionName(file.name),
           role: "無法辨識",
+          roleReason:
+            "這個檔案讀取失敗，系統沒有機會判斷內容。這不是檔名的問題。",
           sheets: { traffic: [], log: [], phase: [], ignored: [] },
           intervals: 0,
           peakWindows: { AM: null, PM: null, DAY: null },
@@ -5184,9 +5232,28 @@ export default function TrafficApp() {
     if (!activeProjectId) return notify("請先建立並選擇計畫。");
     const q = importPeriod;
     if (!q) return notify("請先選擇調查年度與季度。");
-    const originals = importRows.filter(function (row) {
+    /*
+     * 站號在檔案與檔名都讀不到時，使用者可以在預覽列補填；這裡把補填的值
+     * 併回去再判斷。沒有站號的紀錄不能寫入——站號是覆蓋更新的比對鍵之一，
+     * 讓它空著會讓同一個路口的兩季資料對不起來。
+     */
+    const withStation = importRows.map(function (row) {
+      const raw = (stationOverrides[row.file] || "").trim();
+      /*
+       * 使用者填的站號要走與系統其他地方相同的正規化。
+       *
+       * 訊息本身就叫他「改成含 T<站號> 的格式（例如 11017T14-02_路口名稱.xls）」，
+       * 所以他很自然會照樣填 `11017T14-02`。若原樣存下去，同一路口另一季由
+       * 檔名推出來的是 `T14-02`，兩季的站號對不起來，覆蓋更新與歷季比較就失效
+       * ——等於換一種方式重現我們正要修掉的那個問題。
+       */
+      const override = raw ? stationFromFilename(raw) || raw : "";
+      return row.station || !override ? row : { ...row, station: override };
+    });
+    const originals = withStation.filter(function (row) {
       return (
         row.role === "原始交通量" &&
+        Boolean(row.station) &&
         PEAK_KEYS.some(function (key) {
           return Boolean(row.peakWindows?.[key]);
         }) &&
@@ -5195,7 +5262,34 @@ export default function TrafficApp() {
         importResolutions[row.file]?.action !== "skip"
       );
     });
-    if (!originals.length) return notify("沒有可寫入的原始交通量檔。");
+    /*
+     * 一個檔都寫不進去時，要說出「哪一個檔、為什麼、怎麼辦」。
+     *
+     * 舊版只丟一句「沒有可寫入的原始交通量檔。」，使用者最常撞到的情形是
+     * 檔名被判成參考計算檔——畫面上只有一個藍色標籤，訊息又不提檔名，
+     * 於是完全無從得知「改個檔名就好了」。
+     */
+    if (!originals.length) {
+      /* 使用者沒有主動略過、卻仍然寫不進去的列，要逐一說明原因。 */
+      const notSkipped = withStation.filter(function (row) {
+        return importResolutions[row.file]?.action !== "skip";
+      });
+      const reasons = notSkipped.map(function (row) {
+        if (row.roleReason) return `・${row.file}：${row.roleReason}`;
+        if (!row.station)
+          return `・${row.file}：檔案內沒有「站號：」欄位，檔名也讀不到站號，因此無法寫入。請在預覽列填寫站號，或將檔名改為含 T<站號> 的格式（例如 11017T14-02_路口名稱.xls）後重新匯入。`;
+        if (row.layout === "unknown" || !row.columns.length)
+          return `・${row.file}：讀到資料，但無法辨識路口支線與轉向欄位，因此不能寫入。這不是檔名的問題，請確認工作表格式。`;
+        if (!PEAK_KEYS.some((key) => Boolean(row.peakWindows?.[key])))
+          return `・${row.file}：讀到資料，但算不出任何尖峰時段（可能時間欄格式不符或資料筆數不足）。這不是檔名的問題。`;
+        return `・${row.file}：無法寫入。`;
+      });
+      return notify(
+        reasons.length
+          ? "沒有任何檔案被寫入：\n" + reasons.join("\n")
+          : "沒有可寫入的原始交通量檔。請先選取檔案。",
+      );
+    }
     /* 比對規則見 lib/traffic.ts 的 isSameSurvey（含「待設定」為何要特別處理）。 */
     const sameSurvey = function (
       record: TrafficRecord,
@@ -5290,7 +5384,19 @@ export default function TrafficApp() {
         pce,
         vehicleMappings,
       );
-      const conflictMode = importConflictModes[item.file] || "overwrite";
+      /*
+       * 衝突模式是在 handleFiles 當下算的，那時使用者還沒補填站號。
+       * 補填之後才對上既有紀錄的話，預覽不會顯示「已存在第 N 版」，
+       * 這裡也會拿到預設的 overwrite——結果是沒問過就覆蓋掉既有資料。
+       * 所以補填造成的新對應，一律改走建立新版本而不是覆蓋。
+       */
+      const stationWasFilled =
+        !importRows.find(function (row) {
+          return row.file === item.file;
+        })?.station && Boolean(item.station);
+      const conflictMode = stationWasFilled
+        ? "version"
+        : importConflictModes[item.file] || "overwrite";
       if (found >= 0 && conflictMode === "skip") {
         skipped += 1;
         return;
@@ -5344,12 +5450,44 @@ export default function TrafficApp() {
      */
     if (fileRef.current) fileRef.current.value = "";
     setPreviewAddedVehicles([]);
+    setStationOverrides({});
+    /*
+     * 部分檔案寫不進去時也要指名道姓。
+     *
+     * 舊版訊息只算「使用者自己選擇略過」的數量；因為角色、版面或尖峰判讀
+     * 而被 originals 濾掉的檔案完全不會出現在任何地方，五個檔進來、四個
+     * 寫入時，畫面只會說「已寫入 4 個路口」——少掉的那個沒有人提。
+     */
+    const rejected = withStation.filter(function (row) {
+      return (
+        importResolutions[row.file]?.action !== "skip" &&
+        !originals.some(function (item) {
+          return item.file === row.file;
+        })
+      );
+    });
     notify(
       "已寫入 " +
         written +
         " 個路口" +
         (skipped ? "（另有 " + skipped + " 個依您的選擇略過）" : "") +
         "；同計畫、同季度、同站號採覆蓋更新。" +
+        (rejected.length
+          ? "\n\n以下 " +
+            rejected.length +
+            " 個檔案未寫入：\n" +
+            rejected
+              .map(function (row) {
+                return `・${row.file}：${
+                  row.roleReason ||
+                  (!row.station
+                    ? "讀不到站號，未寫入。請於預覽列填寫站號後重新匯入。"
+                    : "無法辨識為可寫入的原始交通量資料。")
+                }`;
+              })
+              .join("\n") +
+            "\n"
+          : "") +
         (upgraded
           ? "其中 " +
             upgraded +
@@ -7679,7 +7817,10 @@ export default function TrafficApp() {
                     {activeProject?.name || "尚未選擇計畫"} ·{" "}
                     {quarter || "尚無季度"}
                   </h1>
-                  <p>所有流量值均標示為 PCU/hr；百分比為相對變化或方向組成。</p>
+                  <p>
+                    流量值單位隨所選時段變動（目前為 {scopeUnit(peak)}）；
+                    百分比為相對變化或方向組成。
+                  </p>
                 </div>
                 <div className="head-buttons">
                   <button
@@ -8072,6 +8213,60 @@ export default function TrafficApp() {
                       : "年度與季度為必填"}
                   </small>
                 </article>
+                {/*
+                 * 檔名規則說明。
+                 *
+                 * 系統確實會用檔名判斷兩件事，這本身沒有問題；有問題的是規則
+                 * 只存在於程式碼裡。使用者撞到「按了確認寫入卻什麼都沒進去」
+                 * 的時候，必須自己猜到問題出在檔名——所以規則要寫在上傳前
+                 * 就看得到的地方，而不是只寫在手冊裡。
+                 */}
+                <article className="panel import-rules filename-rules">
+                  <span className="eyebrow">FILE NAMING</span>
+                  <h2>檔名會決定什麼？</h2>
+                  <p>
+                    系統<b>優先讀取檔案內容</b>
+                    ：站號讀「站號：」欄位、路口名稱讀「站名：」或「地點：」欄位。
+                    這兩個欄位齊全時，檔名叫什麼都不影響匯入結果。
+                    以下規則只在<b>檔案內讀不到</b>時才會用到。
+                  </p>
+                  <ol>
+                    <li>
+                      <b>純代號檔名不會被匯入</b>
+                      <span>
+                        整個檔名剛好是「T＋數字」而沒有其他文字時（
+                        <code>T1402.xls</code>、<code>T14-02.xls</code>
+                        ），會被視為承辦附的參考計算檔，只用於對帳、不寫入資料。
+                        <b>
+                          若這是原始調查資料，請在檔名加上路口名稱
+                        </b>
+                        （<code>T1402_岡山北路育才路口.xls</code>）即可正常匯入。
+                      </span>
+                    </li>
+                    <li>
+                      <b>檔名如何推定站號</b>
+                      <span>
+                        有分隔符時照切：<code>T15-04</code> → T15-04。
+                        沒有分隔符時<b>以最後兩碼為子編號</b>：
+                        <code>06525T2503</code> → T25-03、<code>T501</code> →
+                        T5-01。這條規則最不直覺，請於預覽核對。
+                      </span>
+                    </li>
+                    <li>
+                      <b>兩邊都讀不到站號時不會亂猜</b>
+                      <span>
+                        系統會在預覽標示「站號未判定」並請您直接填寫，
+                        不會自動產生代號頂替。
+                      </span>
+                    </li>
+                  </ol>
+                  <p className="source-note">
+                    建議命名：
+                    <code>&lt;案號&gt;T&lt;站號&gt;_&lt;路口名稱&gt;.xlsx</code>
+                    ，例如
+                    <code>11017T14-02_岡山北路育才路口.xlsx</code>。
+                  </p>
+                </article>
                 <article className="panel import-rules">
                   <span className="eyebrow">CALCULATION RULE</span>
                   <h2>尖峰小時計算</h2>
@@ -8412,15 +8607,27 @@ export default function TrafficApp() {
                                     "tag " +
                                     (row.role === "無法辨識"
                                       ? "red"
-                                      : row.role === "參考計算檔"
-                                        ? "blue"
-                                        : row.role === "非路口轉向"
-                                          ? "amber"
-                                          : "green")
+                                      : /*
+                                         * 參考計算檔原本是藍色。藍色在這個介面
+                                         * 代表中性資訊，使用者不會意識到那其實
+                                         * 是「這個檔不會被寫入」，於是按下確認
+                                         * 之後才發現什麼都沒進去。會導致資料
+                                         * 不被寫入的狀態一律用警示色。
+                                         */
+                                        row.role === "參考計算檔" ||
+                                          row.role === "非路口轉向"
+                                        ? "amber"
+                                        : "green")
                                   }
+                                  title={row.roleReason || undefined}
                                 >
                                   {row.role}
                                 </span>
+                                {row.roleReason && (
+                                  <small className="role-reason">
+                                    {row.roleReason}
+                                  </small>
+                                )}
                               </td>
                               <td>
                                 {existingImport ? (
@@ -8481,8 +8688,41 @@ export default function TrafficApp() {
                                 )}
                               </td>
                               <td>
-                                {row.station}
+                                {/*
+                                 * 站號優先讀檔案內的「站號：」欄位，讀不到才
+                                 * 從檔名推。來源不同，可信度差很多，所以要讓
+                                 * 使用者一眼看出這個站號需不需要核對。
+                                 */}
+                                {row.station || (
+                                  <b className="station-missing">站號未判定</b>
+                                )}
                                 <small>{row.name}</small>
+                                <small
+                                  className={
+                                    row.stationSource === "workbook"
+                                      ? "station-source"
+                                      : "station-source warn"
+                                  }
+                                >
+                                  {row.stationSource === "workbook"
+                                    ? "站號讀自檔案內的「站號：」欄位"
+                                    : row.stationSource === "filename"
+                                      ? "⚠ 檔案內沒有站號欄位，此站號由檔名推定，請確認無誤"
+                                      : "⚠ 檔案與檔名都讀不到站號；請於下方填寫，或將檔名改為含 T<站號> 的格式"}
+                                </small>
+                                {row.stationSource === "none" && (
+                                  <input
+                                    className="station-input"
+                                    placeholder="例如 T14-02"
+                                    value={stationOverrides[row.file] || ""}
+                                    onChange={function (event) {
+                                      setStationOverrides({
+                                        ...stationOverrides,
+                                        [row.file]: event.target.value,
+                                      });
+                                    }}
+                                  />
+                                )}
                                 <small>
                                   {row.date
                                     ? "調查日 " +
@@ -8680,7 +8920,11 @@ export default function TrafficApp() {
                 <div>
                   <span className="eyebrow">PARAMETER LIBRARY</span>
                   <h1>車種與轉向當量參數</h1>
-                  <p>當量只用於將原始車輛數換算成尖峰轉向 PCU。</p>
+                  <p>
+                      當量用於把原始車輛數換算成
+                      PCU，四個統計範圍（上午尖峰、下午尖峰、全日尖峰小時、全日時段）都會套用；
+                      它同時是<b>挑選尖峰小時的依據</b>，因此修改係數會連帶重挑尖峰。
+                    </p>
                 </div>
                 <button
                   className="secondary"
@@ -8808,7 +9052,7 @@ export default function TrafficApp() {
                       PCU/hr，並保留實際車輛數（輛/hr）。
                     </p>
                     <p>
-                      本系統專注尖峰轉向流量彙整，不加入未由本次調查取得的容量相關假設。
+                      本系統不加入未由本次調查取得的容量相關假設（不做號誌時制或容量計算）。
                     </p>
                   </div>
                 </article>
@@ -9761,9 +10005,13 @@ export default function TrafficApp() {
                             路口總量不受影響。
                           </p>
                         )}
-                        <p className="source-note">
-                          本系統只彙整尖峰轉向流量。
-                        </p>
+                        {/*
+                          此處原有一句寫死的「本系統只彙整尖峰轉向流量。」已移除。
+                          同一頁的時段選單就提供「全日尖峰小時」與「全日時段」，
+                          而且上方已有一句會依該筆資料涵蓋時數變動的正確說明，
+                          兩者並存會自相矛盾（滿 24 小時的資料上面說可算全日、
+                          下面說只有尖峰）。系統目前也不只彙整轉向流量。
+                        */}
                       </article>
                     </aside>
                   </section>
@@ -10894,7 +11142,7 @@ export default function TrafficApp() {
                   <h1>轉向進階分析</h1>
                   <p>
                     以已確認的原始 OD 流向計算矩陣、各支線駛入／駛出平衡與連續
-                    60 分鐘尖峰候選；所有流量均標示 PCU/hr。
+                    60 分鐘尖峰候選；流量單位隨所選時段變動（目前為 {scopeUnit(peak)}）。
                   </p>
                 </div>
                 {selected && (
@@ -10945,7 +11193,7 @@ export default function TrafficApp() {
                                 <span className="eyebrow">OD MATRIX</span>
                                 <h2>來源支線 → 目的支線</h2>
                               </div>
-                              <span className="status-dot">PCU/hr</span>
+                              <span className="status-dot">{scopeUnit(peak)}</span>
                             </div>
                             <div className="table-scroll">
                               <table className="od-table">
@@ -10998,7 +11246,7 @@ export default function TrafficApp() {
                                 <span className="eyebrow">BRANCH BALANCE</span>
                                 <h2>各支線流量平衡</h2>
                               </div>
-                              <span className="status-dot">PCU/hr</span>
+                              <span className="status-dot">{scopeUnit(peak)}</span>
                             </div>
                             <div className="table-scroll">
                               <table>
@@ -11041,7 +11289,7 @@ export default function TrafficApp() {
                                 </span>
                                 <h2>連續 60 分鐘候選排行</h2>
                               </div>
-                              <span className="status-dot">PCU/hr</span>
+                              <span className="status-dot">{scopeUnit(peak)}</span>
                             </div>
                             {sensitivity.length ? (
                               <div className="table-scroll">
@@ -12069,14 +12317,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.37-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.39-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.37-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.39-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
@@ -12156,8 +12404,7 @@ export default function TrafficApp() {
                   <div>
                     <h2>查看並整理轉向圖</h2>
                     <p>
-                      可切換
-                      AM／PM、駛入／駛出、車種及版型。圖卡或「路口A」標籤重疊時，直接用滑鼠拖到想要的位置即可，放開才存檔。
+                      可切換四種時段（上午尖峰／下午尖峰／全日尖峰小時／全日時段）、駛入／駛出、車種、五種顯示模式與版型。圖卡或「路口A」標籤重疊時，直接用滑鼠拖到想要的位置即可，放開才存檔。
                     </p>
                     <button
                       onClick={function () {
@@ -12288,7 +12535,19 @@ export default function TrafficApp() {
           )}
         </div>
       </main>
-      {toast && <div className="toast">✓ {toast}</div>}
+      {toast && (
+        <button
+          type="button"
+          className={"toast" + (toast.length > 60 ? " toast-long" : "")}
+          onClick={function () {
+            toastTokenRef.current += 1;
+            setToast("");
+          }}
+          title="點一下關閉"
+        >
+          ✓ {toast}
+        </button>
+      )}
     </div>
   );
 }
@@ -13571,7 +13830,10 @@ function TrendView(props: {
               }{" "}
               · {trendMode === "ALL" ? "AM／PM／全日尖峰整體" : SCOPE_SHORT_LABELS[trendMode]}
             </h2>
-            <span className="status-dot">PCU/hr</span>
+            {/* 單位跟著這張圖自己的統計範圍走，不是跟著全域的 peak。 */}
+            <span className="status-dot">
+              {scopeUnit(trendMode === "ALL" ? "AM" : trendMode)}
+            </span>
           </div>
           {rows.length >= 2 ? (
             <div className="trend-svg-scroll">
