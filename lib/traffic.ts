@@ -22,6 +22,9 @@ export type PeakKey = "AM" | "PM" | "DAY";
  */
 export type ScopeKey = PeakKey | "FULL";
 export type MovementKey = "left" | "through" | "right";
+
+/** 三個轉向的固定順序。要逐轉向套當量時一律走這一個，不要各處自己寫陣列。 */
+export const MOVEMENT_KEYS: MovementKey[] = ["left", "through", "right"];
 export type PceVehicle = string;
 export type VehicleKey = "all" | PceVehicle;
 export type LaneClass = "fast" | "slow" | "motorcycle" | "other";
@@ -468,7 +471,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.33";
+export const VERSION = "v2.1.35";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -576,6 +579,16 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.35",
+    date: "2026-08-30",
+    note: "複查 v2.1.34 後修正兩項新功能缺陷，沒有變更既有尖峰選擇、轉向分類、當量係數或路口總量計算，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30。**一、單一車種 PCU 改用實際 OD 轉向資料**：v2.1.34 的 `pcuBreakdown()` 以支線左／直／右總 PCU 比例反推每個車種的轉向分布；當不同車種及轉向的當量不同時，會把個別車種 PCU 分錯，總量甚至可能剛好對得上而不觸發警告。現在有 routes 時直接逐筆加總「車種 × 實際轉向 × 匯入時當量」，圖與右側摘要使用相同 OD 路徑；只有沒有 routes 的舊備份才保留比例估算，並繼續以 reconciled 提醒不可靠。**二、日期檢查不再接受不存在的日期**：新增實際曆日驗證，會正確拒絕 115 年 2 月 29 日、4 月 31 日等日期，並正確接受 113 年 2 月 29 日。新增單元與瀏覽器守門測試。",
+  },
+  {
+    version: "v2.1.34",
+    date: "2026-08-30",
+    note: "修正右側摘要與圖說不同話，新增第五種顯示模式，並新增「調查日期 × 期別」檢查與期別月份顯示。**沒有變更任何交通量計算**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30。**一、轉向圖右側摘要現在跟著「顯示 × 時段 × 車種」走**：以前那一格寫死 recordTotal() ＋文字「PCU/hr」，完全不看使用者選了什麼。於是顯示切成「車輛數」時，圖的抬頭寫「全路口流量 10,779 輛/調查日」、右邊摘要寫「10,469.5 PCU/hr」——同一張畫面兩個數字兩種單位。現在圖與摘要**共用同一組判斷**：值要用 PCU 還是輛由新的 displayValueKind() 決定、單位由 scopeUnit() 決定，兩邊都走這兩支，不各自再猜一次。**二、新增第五種顯示模式「車輛數＋百分比」**，並修正單一車種的單位謊報：以前車種只要不是「全部車種」就一律改報輛數（因為系統沒有存每個車種各自的 PCU），但選單還寫著 PCU。現在單一車種的 PCU 用 vehiclePcuFor() 現算，用的是匯入當時存下來的當量矩陣、和建立 movements PCU 時同一支 pceFactor，不是另寫一套公式；另外 pcuBreakdown() 會逐支線對帳，各車種 PCU 加總若與已存的總 PCU 對不起來（舊紀錄沒存當量矩陣時可能發生），畫面上會明白標示這一筆的單一車種 PCU 不可靠。**三、摘要新增車種組成**：百分比模式列各車種的百分比，車輛數＋百分比模式連車輛數一起列；選單一車種時改報該車種的數值與它占路口總量的百分比。**四、總覽儀表板與跨計畫比較的同類問題一併修好**：單位不再寫死 PCU/hr（全日時段會變成 /調查日）、標籤不再把內部代碼印成「最高流量路口 · FULL」、算不出的全日尖峰不再以相容欄位的 0 參與排名；跨計畫比較的時段選單補齊為四個，不再出現「選單只有 AM／PM 卻用著全日時段的數字」。**五、新增「調查日期 × 期別」一致性檢查**：匯入前輸入的期別與檔案表頭寫的調查日期如果對不起來，預覽面板顯眼標示，按「確認寫入」時再跳一次確認框；日期從表頭整塊文字判讀，不看固定欄位位置，優先採用有「日期：」標示的儲存格並排除「製表日期」這類非調查日期；**讀不到日期一律不阻擋匯入**，只提醒使用者自行確認。判斷邏輯集中在新檔 lib/period-date.ts——路口轉向、全日交通量、交通服務水準三支程式同一份程式、同一份測試表。**六、新增「期別顯示」切換（季別 ⇄ 實際調查月份）**：平常顯示 115Q1，按一下改顯示這一季實際做調查的月份（例：115年2、3月），季度下拉、已匯入季度清單、歷季趨勢圖 X 軸與右側摘要一起換；只換顯示文字，資料仍以季別分組與計算。ImportPreview 新增唯讀欄位 dateCandidates，既有的 date／dateSource 取法與值完全沒變。",
+  },
   {
     version: "v2.1.33",
     date: "2026-08-29",
@@ -1055,6 +1068,90 @@ export function totalMovement(
     return Math.round((vehicleTotal * row[movementKey]) / overall);
   }
   return movementKey ? row[movementKey] : row.left + row.through + row.right;
+}
+
+/*
+ * ── 單一車種的 PCU ──────────────────────────────────────────────
+ *
+ * 系統只存「每個轉向的總 PCU」與「每個車種的車輛數」，沒有存每個車種各自的
+ * PCU。所以車種篩成單一車種時，以前一律改報車輛數——這是對的，但畫面上的
+ * 「顯示」選單仍寫著 PCU，講一套做一套。
+ *
+ * v2.1.34 起改成現算：**用的是 syncRouteTotals 建立 movements PCU 時完全
+ * 同一支 pceFactor、同一組係數（record.pceUsed）**，不是另寫一套公式。
+ * 有逐條流向的紀錄，各車種算出來的 PCU 加總本來就會等於已存的總 PCU。
+ *
+ * 但舊紀錄若沒有存下當量矩陣就會退回 DEFAULT_PCE，那時兩者可能對不起來。
+ * 對不起來的時候不可以默默顯示——`pcuBreakdown()` 會回報 reconciled: false，
+ * 呼叫端必須在畫面上標明這一筆的單一車種 PCU 不可靠。
+ */
+export function vehiclePcuFor(
+  record: TrafficRecord,
+  vehicle: PceVehicle,
+  movement: MovementKey,
+  count: number,
+) {
+  return count * pceFactor(record.pceUsed || DEFAULT_PCE, vehicle, movement);
+}
+
+/**
+ * 一支支線在某個統計範圍下，逐車種的車輛數與 PCU，外加一次對帳。
+ *
+ * reconciled 為 false 代表「各車種 PCU 加總」與「已存的轉向 PCU」對不起來，
+ * 這一筆的單一車種 PCU 不可靠，畫面上必須講出來。
+ */
+export function pcuBreakdown(
+  record: TrafficRecord,
+  approach: Approach,
+  scope: ScopeKey,
+) {
+  const row = approach.movements[scope] || emptyMovement();
+  const storedPcu = roundedPcu(row.left + row.through + row.right);
+  const perVehicle: Record<string, { count: number; pcu: number }> = {};
+  let derivedPcu = 0;
+  const sourceRoutes = (record.routes || []).filter(
+    (route) => route.fromApproachId === approach.id,
+  );
+  const vehicleIds = new Set(Object.keys(row.vehicle || {}));
+  for (const route of sourceRoutes)
+    for (const id of Object.keys(route.volumes?.[scope]?.vehicle || {})) vehicleIds.add(id);
+  const overall = row.left + row.through + row.right || 1;
+  for (const id of vehicleIds) {
+    let count = Number(row.vehicle?.[id]) || 0;
+    let pcu = 0;
+    if (sourceRoutes.length) {
+      /*
+       * 新格式與現行 OD 紀錄已存有「逐車種 × 實際轉向」數量，必須直接使用。
+       * 不可用左／直／右的總 PCU 比例反推：各車種及各轉向當量不同時，
+       * 反推會把個別車種 PCU 分錯，甚至可能在總量恰好相等時逃過對帳。
+       */
+      count = 0;
+      for (const route of sourceRoutes) {
+        const routeCount = Number(route.volumes?.[scope]?.vehicle?.[id]) || 0;
+        count += routeCount;
+        pcu += vehiclePcuFor(record, id, route.movement, routeCount);
+      }
+    } else {
+      /*
+       * 僅供沒有 routes 的舊備份相容：舊資料只存支線總車種數及總 PCU，
+       * 無法還原精確轉向，只能依既有比例估算並由 reconciled 明確揭露差異。
+       */
+      pcu = MOVEMENT_KEYS.reduce(function (sum, movement) {
+        const share = (count * row[movement]) / overall;
+        return sum + vehiclePcuFor(record, id, movement, share);
+      }, 0);
+    }
+    perVehicle[id] = { count, pcu: roundedPcu(pcu) };
+    derivedPcu += pcu;
+  }
+  /* 容差取 1%＋0.5，吸收逐格四捨五入；差得更多就是係數對不起來。 */
+  const tolerance = Math.max(0.5, storedPcu * 0.01);
+  return {
+    perVehicle,
+    storedPcu,
+    derivedPcu: roundedPcu(derivedPcu),
+    reconciled: Math.abs(roundedPcu(derivedPcu) - storedPcu) <= tolerance,
+  };
 }
 
 /** PCU 一律留一位小數。全系統只有這一支，畫面與匯出才不會差在小數點。 */
@@ -1537,6 +1634,11 @@ export type ImportPreview = {
   peakWindows: Record<PeakKey, ReturnType<typeof rollingPeak>>;
   date: string;
   dateSource: { sheet: string; cell: string; raw: string } | null;
+  /**
+   * 表頭裡所有「像日期」的儲存格（本工作表優先）。只給期別檢查用。
+   * date／dateSource 的意義與取法完全不變，這一欄是額外附上的候選清單。
+   */
+  dateCandidates?: Array<{ text: string; sheet: string; cell: string }>;
   surveyType: string;
   layout: "turning" | "od" | "unknown";
   approaches: string[];
@@ -2019,6 +2121,32 @@ export async function inspectWorkbook(
     }) ||
     null;
   const dateText = dateCell?.text || "";
+  /*
+   * 期別檢查用的日期候選清單。**不影響上面的 dateCell／date**——那兩個維持
+   * 原樣（先本工作表、再全活頁簿的第一個像日期的儲存格），既有畫面與紀錄
+   * 的 date 欄位一個字都沒變。
+   *
+   * 這裡另外把「表頭裡所有像日期的儲存格」按同樣的順序（本工作表優先）收起來，
+   * 交給 lib/period-date.ts 的 findSurveyDate() 去挑：它會優先選有「日期：」
+   * 標示的那一格，並排除「製表日期」這類非調查日期。分開兩條路，是為了讓
+   * 期別檢查讀得更準，同時保證既有行為零變動。
+   */
+  const dateCandidateCells = cells.filter(function (item) {
+    return Boolean(rocDate(item.text));
+  });
+  const scopedCandidates = dateCandidateCells.filter(function (item) {
+    return !options?.trafficSheets || options.trafficSheets.includes(item.sheet);
+  });
+  const dateCandidates = [
+    ...scopedCandidates,
+    ...dateCandidateCells.filter(function (item) {
+      return !scopedCandidates.includes(item);
+    }),
+  ]
+    .slice(0, 60)
+    .map(function (item) {
+      return { text: item.text, sheet: item.sheet, cell: item.cell };
+    });
   const intervalMap = new Map<number, IntervalRow>();
   const detectedColumns: ImportPreview["columns"] = [];
   const originOrder: string[] = [];
@@ -2376,6 +2504,7 @@ export async function inspectWorkbook(
     dateSource: dateCell
       ? { sheet: dateCell.sheet, cell: dateCell.cell, raw: dateCell.text }
       : null,
+    dateCandidates: dateCandidates,
     surveyType: resolveSurveyType({
       explicit: options?.surveyType,
       dateText,

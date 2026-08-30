@@ -403,7 +403,24 @@ test("轉向圖上的數字只有一支取值函式（含新增的車輛數模�
     appSource,
     /const unit = vehicle === "all" \? "PCU\/hr" : "輛\/hr";/,
   );
-  assert.match(appSource, /const countMode = mode === "count";/);
+  /*
+   * v2.1.34：「這個模式要報 PCU 還是輛」只能有一支判斷。以前寫成
+   * `const countMode = mode === "count"` 藏在轉向圖產生器的區域變數裡，
+   * 右側摘要拿不到、只好自己再猜一次，於是猜錯（選車輛數仍報 PCU）。
+   * 現在統一走 displayValueKind()，圖與摘要都用它。
+   */
+  assert.match(appSource, /function displayValueKind\(mode: DisplayMode\)/);
+  assert.match(appSource, /const valueKind = displayValueKind\(mode\);/);
+  assert.match(appSource, /const unit = scopeUnit\(peak, valueKind\);/);
+  assert.doesNotMatch(appSource, /const countMode = mode === "count";/);
+  /* 摘要的單位與值也必須走同一組判斷，不可以再寫死 PCU/hr。 */
+  const summaryBlock = appSource.slice(
+    appSource.indexOf("const summary = useMemo("),
+    appSource.indexOf("const geometrySchematicHtml = useMemo("),
+  );
+  assert.match(summaryBlock, /displayValueKind\(displayMode\)/);
+  assert.match(summaryBlock, /scopeUnit\(peak, kind\)/);
+  assert.doesNotMatch(appSource, /<small>PCU\/hr<\/small>/);
 });
 
 test("全日時段不另外存檔，每次載入由 survey 現算", () => {

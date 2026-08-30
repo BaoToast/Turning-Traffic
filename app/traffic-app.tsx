@@ -51,6 +51,9 @@ import {
   peakWindowsFor,
   RouteFlow,
   totalMovement,
+  vehiclePcuFor,
+  pcuBreakdown,
+  MOVEMENT_KEYS,
   TrafficRecord,
   VehicleKey,
   VERSION,
@@ -59,6 +62,16 @@ import {
   VERSION_HISTORY,
   isSameSurvey,
 } from "../lib/traffic";
+import {
+  checkPeriodAgainstDate,
+  findSurveyDate,
+  periodDisplayLabel,
+  periodMismatchPrompt,
+  periodUnknownNotice,
+  PERIOD_DISPLAY_LABELS,
+  type PeriodDateCheck,
+  type PeriodDisplayMode,
+} from "../lib/period-date";
 import {
   branchBalance,
   conservationCheck,
@@ -127,7 +140,41 @@ type DiagramStyle = "formal" | "standard" | "simple";
  *   percent ＝佔比
  *   both    ＝交通量＋佔比
  */
-type DisplayMode = "volume" | "count" | "percent" | "both";
+/*
+ * 轉向圖的「顯示」五種模式。
+ *   volume        交通量（PCU）
+ *   count         車輛數（輛）
+ *   percent       百分比
+ *   both          交通量＋百分比
+ *   countPercent  車輛數＋百分比（v2.1.34 新增）
+ *
+ * 「這個模式要報 PCU 還是輛」全系統只由 displayValueKind() 說了算，
+ * 圖、摘要、單位標籤都走它——以前這個判斷寫在轉向圖產生器的區域變數裡，
+ * 外面拿不到，右側摘要只好自己再猜一次，於是猜錯。
+ */
+type DisplayMode = "volume" | "count" | "percent" | "both" | "countPercent";
+
+const DISPLAY_MODE_KIND: Record<DisplayMode, "pcu" | "vehicle"> = {
+  volume: "pcu",
+  both: "pcu",
+  percent: "pcu",
+  count: "vehicle",
+  countPercent: "vehicle",
+};
+
+function displayValueKind(mode: DisplayMode) {
+  return DISPLAY_MODE_KIND[mode];
+}
+
+/** 這個模式要不要在數值旁邊附百分比。 */
+function displayShowsPercent(mode: DisplayMode) {
+  return mode === "percent" || mode === "both" || mode === "countPercent";
+}
+
+/** 這個模式要不要顯示數值本身（「百分比」模式只報比例）。 */
+function displayShowsValue(mode: DisplayMode) {
+  return mode !== "percent";
+}
 type ArrowMode = "all" | "focus";
 // 顯示模式同時也是版面保存的單位，直接沿用 lib 的型別避免兩邊定義漂移
 type FlowSummaryMode = FlowLayoutMode;
@@ -982,24 +1029,23 @@ export function diagramMarkup(
     cx = width / 2,
     cy = expandedCanvas ? 470 : 430;
   /*
-   * 「車輛數」顯示模式（v2.1.30）。
+   * 「這張圖要報 PCU 還是輛」——v2.1.34 起完全由顯示模式決定，不再受車種
+   * 篩選影響。
    *
-   * 車種選「全部車種」時，原本的「交通量」給的是各車種乘上 PCU 當量後的
-   * 總和（PCU/hr），這一版新增的「車輛數」給的是各車種輛數**直接相加**。
-   * 兩者差很多——一輛大型車等於好幾個小客車當量——所以單位一定要跟著換，
-   * 否則圖上會出現標著 PCU/hr 的輛數。
-   * 車種選單一車種時兩種模式的數字相同：單一車種本來就是報輛數。
+   * 舊行為：車種只要不是「全部車種」就一律改報輛數，因為系統沒有存每個
+   * 車種各自的 PCU。行為本身沒錯，錯的是**上面的選單還寫著 PCU**——
+   * 使用者選「PCU/hr＋百分比」＋「機車」，圖上卻是「輛/hr」。
    *
-   * 單位也跟著統計範圍走：尖峰是某一小時的流率（PCU/hr、輛/hr），
+   * 現在單一車種的 PCU 用 vehiclePcuFor() 現算，用的是匯入當時存下來的
+   * 當量矩陣、和建立 movements PCU 時同一支 pceFactor，不是另寫一套公式。
+   *
+   * 單位一樣跟著統計範圍走：尖峰是某一小時的流率（PCU/hr、輛/hr），
    * 全日時段是一整天的累計（PCU/調查日、輛/調查日）。
    */
-  const countMode = mode === "count";
-  const unit = scopeUnit(
-    peak,
-    countMode || vehicle !== "all" ? "vehicle" : "pcu",
-  );
+  const valueKind = displayValueKind(mode);
+  const unit = scopeUnit(peak, valueKind);
   const countVehicleIds =
-    countMode && vehicle === "all" ? recordVehicleIds(record) : [];
+    valueKind === "vehicle" && vehicle === "all" ? recordVehicleIds(record) : [];
   const sumOverVehicles = function (pick: (id: string) => number) {
     return countVehicleIds.reduce(function (sum, id) {
       return sum + pick(id);
@@ -1010,32 +1056,98 @@ export function diagramMarkup(
     approach: Approach,
     movementKey?: MovementKey,
   ) {
-    return countMode && vehicle === "all"
-      ? sumOverVehicles(function (id) {
-          return totalMovement(approach, peak, movementKey, id, record.routes);
-        })
-      : totalMovement(approach, peak, movementKey, vehicle, record.routes);
+    if (valueKind === "vehicle")
+      return vehicle === "all"
+        ? sumOverVehicles(function (id) {
+            return totalMovement(approach, peak, movementKey, id, record.routes);
+          })
+        : totalMovement(approach, peak, movementKey, vehicle, record.routes);
+    /*
+     * PCU 模式。全部車種時 totalMovement 回的本來就是 PCU；
+     * 單一車種時它回的是輛數，要再套當量換成 PCU。
+     */
+    if (vehicle === "all")
+      return totalMovement(approach, peak, movementKey, "all", record.routes);
+    const count = totalMovement(
+      approach,
+      peak,
+      movementKey,
+      vehicle,
+      record.routes,
+    );
+    return roundedPcu(
+      movementKey
+        ? vehiclePcuFor(record, vehicle, movementKey, count)
+        : MOVEMENT_KEYS.reduce(function (sum, key) {
+            return (
+              sum +
+              vehiclePcuFor(
+                record,
+                vehicle,
+                key,
+                totalMovement(approach, peak, key, vehicle, record.routes),
+              )
+            );
+          }, 0),
+    );
   };
   /* 一條 OD 流向的值。 */
   const routeValueOf = function (route: RouteFlow) {
-    if (countMode && vehicle === "all")
-      return Object.values(route.volumes[peak]?.vehicle || {}).reduce(
-        function (sum, value) {
-          return sum + (Number(value) || 0);
-        },
-        0,
-      );
+    if (valueKind === "vehicle")
+      return vehicle === "all"
+        ? Object.values(route.volumes[peak]?.vehicle || {}).reduce(
+            function (sum, value) {
+              return sum + (Number(value) || 0);
+            },
+            0,
+          )
+        : Number(route.volumes[peak]?.vehicle[vehicle] || 0);
+    /* PCU：全部車種有現成的；單一車種要套當量現算。 */
     return vehicle === "all"
       ? Number(route.volumes[peak]?.pcu || 0)
-      : Number(route.volumes[peak]?.vehicle[vehicle] || 0);
+      : roundedPcu(
+          vehiclePcuFor(
+            record,
+            vehicle,
+            route.movement,
+            Number(route.volumes[peak]?.vehicle[vehicle] || 0),
+          ),
+        );
   };
   /* 駛入某一支支線的合計。 */
   const destinationValue = function (destinationIndex: number) {
-    return countMode && vehicle === "all"
-      ? sumOverVehicles(function (id) {
-          return destinationFlowTotal(record, peak, destinationIndex, id);
+    if (valueKind === "vehicle")
+      return vehicle === "all"
+        ? sumOverVehicles(function (id) {
+            return destinationFlowTotal(record, peak, destinationIndex, id);
+          })
+        : destinationFlowTotal(record, peak, destinationIndex, vehicle);
+    /*
+     * PCU：全部車種走既有的 destinationFlowTotal（本來就回 PCU）。
+     * 單一車種沒有現成的 PCU，改用逐條流向套當量加總——和 routeValueOf
+     * 同一支公式，不另立第二種算法。
+     */
+    if (vehicle === "all")
+      return destinationFlowTotal(record, peak, destinationIndex, "all");
+    const target = record.approaches[destinationIndex];
+    if (!target) return 0;
+    return roundedPcu(
+      (record.routes || [])
+        .filter(function (route) {
+          return route.toApproachId === target.id;
         })
-      : destinationFlowTotal(record, peak, destinationIndex, vehicle);
+        .reduce(function (sum, route) {
+          return (
+            sum +
+            vehiclePcuFor(
+              record,
+              vehicle,
+              route.movement,
+              Number(route.volumes[peak]?.vehicle[vehicle] || 0),
+            )
+          );
+        }, 0),
+    );
   };
   const total = Math.max(
     1,
@@ -1273,11 +1385,10 @@ export function diagramMarkup(
       const pct = sectionTotal
         ? Math.round((value / sectionTotal) * 100) + "%"
         : "0%";
-      if (mode === "percent") return pct;
+      if (!displayShowsValue(mode)) return pct;
       /* 交通量與車輛數都是「一個數字＋單位」，差別在 unit 與取值來源。 */
-      if (mode === "volume" || mode === "count")
-        return value.toLocaleString() + " " + unit;
-      return value.toLocaleString() + " " + unit + " | " + pct;
+      const text = value.toLocaleString() + " " + unit;
+      return displayShowsPercent(mode) ? text + " | " + pct : text;
     };
     const destinationLabels = names.map(function (key, movementIndex) {
       const explicit = explicitRoutes
@@ -1414,8 +1525,9 @@ export function diagramMarkup(
               section === "inbound"
                 ? "←" + (labels[moveIndex] || "－")
                 : "→" + (labels[moveIndex] || "－");
+            /* 數值＋百分比的兩種模式都要上下兩行；只報百分比或只報數值的走單行。 */
             const valueMarkup =
-              mode === "both"
+              displayShowsValue(mode) && displayShowsPercent(mode)
                 ? '<text x="' +
                   cell * (moveIndex + 0.5) +
                   '" y="65" class="value">' +
@@ -3370,6 +3482,14 @@ export default function TrafficApp() {
   const [activeProjectId, setActiveProjectId] = useState("");
   const [records, setRecords] = useState<TrafficRecord[]>([]);
   const [quarter, setQuarter] = useState("");
+  /*
+   * 期別要顯示成「季別」還是「實際調查月份」。
+   * **只影響畫面上的文字**——分組、排序、鍵值、計算與匯出的數值一律仍以
+   * 季別為準（quarter 這個字串本身完全沒動）。使用者一季分兩個月做完時，
+   * 這個切換讓他一眼看出 115Q1 實際是「115年2、3月」。
+   */
+  const [periodDisplay, setPeriodDisplay] =
+    useState<PeriodDisplayMode>("quarter");
   const [importYear, setImportYear] = useState("");
   const [importQuarterNo, setImportQuarterNo] = useState("");
   const [selectedIntersection, setSelectedIntersection] = useState("");
@@ -3871,6 +3991,31 @@ export default function TrafficApp() {
     },
     [quarters, quarter],
   );
+  /*
+   * 每一個季別在畫面上要顯示成什麼。切到「調查月份」時，取那一季底下所有
+   * 紀錄的調查日期，列出實際做調查的月份（例：「115年2、3月」）。
+   * 那一季完全沒有日期就原樣顯示季別——不編、也不留空白。
+   */
+  const quarterLabels = useMemo(
+    function () {
+      const dates: Record<string, string[]> = {};
+      for (const record of projectRecords)
+        if (record.date)
+          dates[record.quarter] = [
+            ...(dates[record.quarter] || []),
+            record.date,
+          ];
+      const labels: Record<string, string> = {};
+      for (const key of quarters)
+        labels[key] = periodDisplayLabel(key, dates[key] || [], periodDisplay);
+      return { labels, anyDate: Object.keys(dates).length > 0 };
+    },
+    [projectRecords, quarters, periodDisplay],
+  );
+  const quarterLabel = function (value: string) {
+    return quarterLabels.labels[value] || value;
+  };
+  const anySurveyDate = quarterLabels.anyDate;
   const allQuarterKeys = useMemo(
     function () {
       return Array.from(
@@ -4463,8 +4608,15 @@ export default function TrafficApp() {
     currentIssues.find(function (issue) {
       return issue.id === selectedIssueId;
     }) || null;
+  /*
+   * 排名：算不出這個統計範圍的紀錄一律排到最後，不可以拿相容欄位的 0
+   * 去跟真正的流量比大小——那會讓「最高流量路口」在全日尖峰模式下被一筆
+   * 「其實算不出來」的紀錄擠掉，畫面上還寫著 0。
+   */
   const ranked = [...current].sort(function (a, b) {
-    return recordTotal(b, peak) - recordTotal(a, peak);
+    const av = hasScopeValue(a, peak) ? recordTotal(a, peak) : -1;
+    const bv = hasScopeValue(b, peak) ? recordTotal(b, peak) : -1;
+    return bv - av;
   });
   const top = ranked[0];
   const previousQuarter = quarters[quarters.indexOf(quarter) - 1];
@@ -4519,6 +4671,42 @@ export default function TrafficApp() {
   );
   const importPeriod =
     importYear && importQuarterNo ? importYear + "Q" + importQuarterNo : "";
+  /*
+   * ── 調查日期 × 期別檢查 ──────────────────────────────────────
+   * 只讀 ImportPreview 已經解析好的表頭文字，不重新讀檔、不碰任何數值，
+   * 也不會修改任何一筆紀錄。判斷邏輯集中在 lib/period-date.ts
+   *（路口轉向／全日交通量／交通服務水準三支同一份）。
+   */
+  const importDateChecks = useMemo(
+    function (): PeriodDateCheck[] {
+      return importRows.map(function (row) {
+        const candidates =
+          row.dateCandidates && row.dateCandidates.length
+            ? row.dateCandidates
+            : row.dateSource
+              ? [
+                  {
+                    text: row.dateSource.raw,
+                    sheet: row.dateSource.sheet,
+                    cell: row.dateSource.cell,
+                  },
+                ]
+              : [];
+        return checkPeriodAgainstDate(
+          importPeriod,
+          findSurveyDate(candidates),
+          row.file,
+        );
+      });
+    },
+    [importRows, importPeriod],
+  );
+  const importDateMismatches = importDateChecks.filter(function (item) {
+    return item.status === "mismatch";
+  });
+  const importDateUnknowns = importDateChecks.filter(function (item) {
+    return item.status === "unknown";
+  });
   const importVehicleDefinitions = [
     ...new Map(
       importRows
@@ -5053,6 +5241,21 @@ export default function TrafficApp() {
       );
       return;
     }
+    /*
+     * 調查日期與所選期別對不起來時，寫入前顯眼提示並要求二次確認。
+     * 只比對這次真的會寫入的檔案（originals）；使用者選擇略過的不算。
+     * 讀不到日期一律**不阻擋**，只在預覽面板提醒使用者自行確認。
+     */
+    const writingFiles = new Set(
+      originals.map(function (item) {
+        return item.file;
+      }),
+    );
+    const dateProblems = importDateChecks.filter(function (item) {
+      return item.status === "mismatch" && writingFiles.has(item.file);
+    });
+    if (dateProblems.length && !confirm(periodMismatchPrompt(dateProblems)))
+      return;
     if (!authorizeLockedChange(overwriteTargets, "重新匯入")) return;
     const next = [...records];
     /* 有幾筆原本是「待設定」、這次被讀出的資料別補上了 */
@@ -5301,6 +5504,111 @@ export default function TrafficApp() {
       focusIndex,
       flowSummaryMode,
     ],
+  );
+  /*
+   * ── 轉向圖右側摘要 ──────────────────────────────────────────
+   *
+   * v2.1.33 以前這一格寫死 `recordTotal(selected, peak)` ＋ 文字「PCU/hr」，
+   * 完全不看使用者選的「顯示」與「車種」，單位也不跟統計範圍走。於是同一張
+   * 畫面上，圖的抬頭寫「全路口流量 10,779 輛/調查日」，右邊摘要寫
+   * 「10,469.5 PCU/hr」——兩個數字、兩種單位，講的是同一件事。
+   *
+   * 現在摘要與圖**共用同一組判斷**：值要用 PCU 還是輛由 displayValueKind()
+   * 決定、單位由 scopeUnit() 決定，兩邊都走這兩支，不各自再猜一次。
+   */
+  const summary = useMemo(
+    function () {
+      const kind = displayValueKind(displayMode);
+      const unit = scopeUnit(peak, kind);
+      const empty = {
+        value: 0,
+        unit,
+        share: null as number | null,
+        breakdown: [] as Array<{
+          id: string;
+          label: string;
+          value: number;
+          percent: number;
+        }>,
+        showsValue: displayShowsValue(displayMode),
+        isBase: false,
+        reconciled: true,
+        derivedPcu: 0,
+        storedPcu: 0,
+      };
+      if (view !== "diagram" || !selected) return empty;
+      /* 逐支線對帳一次，任何一支對不起來就整筆標為不可靠。 */
+      const breakdowns = selected.approaches.map(function (approach) {
+        return pcuBreakdown(selected, approach, peak);
+      });
+      const reconciled = breakdowns.every(function (item) {
+        return item.reconciled;
+      });
+      const derivedPcu = roundedPcu(
+        breakdowns.reduce(function (sum, item) {
+          return sum + item.derivedPcu;
+        }, 0),
+      );
+      const storedPcu = roundedPcu(
+        breakdowns.reduce(function (sum, item) {
+          return sum + item.storedPcu;
+        }, 0),
+      );
+      /* 各車種的值：PCU 模式用現算的 PCU，車輛數模式用實際輛數。 */
+      const ids = recordVehicleIds(selected);
+      const perVehicle = ids.map(function (id) {
+        const value = breakdowns.reduce(function (sum, item) {
+          const cell = item.perVehicle[id];
+          return sum + (cell ? (kind === "pcu" ? cell.pcu : cell.count) : 0);
+        }, 0);
+        return {
+          id,
+          label: vehicleLabel(selected, id),
+          value: kind === "pcu" ? roundedPcu(value) : value,
+        };
+      });
+      const grandTotal = perVehicle.reduce(function (sum, item) {
+        return sum + item.value;
+      }, 0);
+      const pct = function (value: number) {
+        return grandTotal ? (value / grandTotal) * 100 : 0;
+      };
+      /*
+       * 「全部車種」時報整個路口；選了單一車種就報那一個車種，另外給它
+       * 占路口總量的百分比——那正是使用者篩選之後最想知道的一個數字。
+       */
+      const picked =
+        vehicle === "all"
+          ? null
+          : perVehicle.find(function (item) {
+              return item.id === vehicle;
+            }) || null;
+      return {
+        ...empty,
+        value:
+          vehicle === "all"
+            ? kind === "pcu"
+              ? roundedPcu(recordTotal(selected, peak))
+              : roundedPcu(grandTotal)
+            : picked?.value ?? 0,
+        share: picked ? pct(picked.value) : null,
+        /*
+         * 車種組成只在「全部車種」時才有意義（選了單一車種，組成就只有它
+         * 自己一列）。百分比模式只列比例，車輛數＋百分比模式連數值一起列。
+         */
+        breakdown:
+          vehicle === "all" && displayShowsPercent(displayMode)
+            ? perVehicle.map(function (item) {
+                return { ...item, percent: pct(item.value) };
+              })
+            : [],
+        isBase: displayMode === "percent" && vehicle === "all",
+        reconciled: kind === "pcu" ? reconciled : true,
+        derivedPcu,
+        storedPcu,
+      };
+    },
+    [view, selected, peak, displayMode, vehicle],
   );
   const geometrySchematicHtml = useMemo(
     function () {
@@ -7179,10 +7487,41 @@ export default function TrafficApp() {
                 */}
                 {quarters.length === 0 && <option value="">尚無季度</option>}
                 {quarters.map(function (q) {
-                  return <option key={q}>{q}</option>;
+                  return (
+                    <option key={q} value={q}>
+                      {quarterLabel(q)}
+                    </option>
+                  );
                 })}
               </select>
             </label>
+            {/*
+              期別顯示切換。只換畫面上的文字，資料仍以季別分組與計算。
+              一季都讀不到調查日期時停用，並在 title 說明原因，
+              而不是給一顆按了沒反應的按鈕。
+            */}
+            <button
+              type="button"
+              className={
+                periodDisplay === "month"
+                  ? "period-display-toggle is-on"
+                  : "period-display-toggle"
+              }
+              data-testid="period-display-toggle"
+              disabled={!anySurveyDate}
+              title={
+                anySurveyDate
+                  ? "切換期別顯示方式：季別（115Q1）／實際調查月份（115年2、3月）。只換顯示文字，不影響分組與計算。"
+                  : "目前的資料沒有調查日期可用，無法顯示調查月份。重新匯入原始檔之後就會有。"
+              }
+              onClick={function () {
+                setPeriodDisplay(
+                  periodDisplay === "month" ? "quarter" : "month",
+                );
+              }}
+            >
+              期別顯示：{PERIOD_DISPLAY_LABELS[periodDisplay]}
+            </button>
             <span className="demo-pill">
               {allRecordsEmpty ? "空白正式環境" : projects.length + " 個計畫"}
             </span>
@@ -7371,17 +7710,30 @@ export default function TrafficApp() {
                       }
                     />
                     <Kpi
-                      label={"最高流量路口 · " + peak}
+                      /*
+                       * 以前這裡直接把內部代碼印出來，畫面上會出現
+                       * 「最高流量路口 · FULL」；單位也寫死 PCU/hr，
+                       * 但時段是全系統共用的，選了全日時段就變成錯的單位。
+                       */
+                      label={"最高流量路口 · " + SCOPE_LABELS[peak]}
                       value={
-                        top
-                          ? recordTotal(top, peak).toLocaleString() + " PCU/hr"
+                        top && hasScopeValue(top, peak)
+                          ? recordTotal(top, peak).toLocaleString() +
+                            " " +
+                            scopeUnit(peak)
                           : "—"
                       }
-                      note={top ? top.station + " " + top.name : "尚無資料"}
+                      note={
+                        top
+                          ? hasScopeValue(top, peak)
+                            ? top.station + " " + top.name
+                            : "這一季算不出" + SCOPE_LABELS[peak]
+                          : "尚無資料"
+                      }
                       accent="blue"
                     />
                     <Kpi
-                      label={`較上季 ${peak} 尖峰`}
+                      label={`較上季 ${SCOPE_LABELS[peak]}`}
                       value={
                         change == null
                           ? "—"
@@ -7441,17 +7793,20 @@ export default function TrafficApp() {
                                 <span>
                                   <i
                                     style={{
-                                      width:
-                                        (recordTotal(record, peak) / maxRank) *
-                                          100 +
-                                        "%",
+                                      width: hasScopeValue(record, peak)
+                                        ? (recordTotal(record, peak) / maxRank) *
+                                            100 +
+                                          "%"
+                                        : 0,
                                     }}
                                   />
                                 </span>
                               </div>
                               <b>
-                                {recordTotal(record, peak).toLocaleString()}
-                                <small> PCU/hr</small>
+                                {hasScopeValue(record, peak)
+                                  ? recordTotal(record, peak).toLocaleString()
+                                  : "－"}
+                                <small> {scopeUnit(peak)}</small>
                               </b>
                             </button>
                           );
@@ -7932,6 +8287,49 @@ export default function TrafficApp() {
                     )}
                   </div>
                 )}
+                {importRows.length > 0 &&
+                  (importDateMismatches.length > 0 ||
+                    importDateUnknowns.length > 0) && (
+                    <div
+                      className={
+                        importDateMismatches.length
+                          ? "period-date-alert period-date-alert-bad"
+                          : "period-date-alert"
+                      }
+                      data-testid="period-date-alert"
+                    >
+                      {importDateMismatches.length > 0 && (
+                        <>
+                          <strong>
+                            ⚠️ 有 {importDateMismatches.length}{" "}
+                            份檔案的調查日期與你選的「{importPeriod}」不一致
+                          </strong>
+                          <ul>
+                            {importDateMismatches.map(function (item) {
+                              return (
+                                <li key={item.file}>
+                                  <b>{item.file}</b>：檔案裡是 {item.date}（屬{" "}
+                                  {item.dateLabel}），你選的是{" "}
+                                  {item.periodLabel}。
+                                  <small>
+                                    來源 {item.source}「{item.raw}」
+                                  </small>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                          <small>
+                            按「確認寫入」時會再問一次；確認無誤才會以你選的期別寫入。
+                          </small>
+                        </>
+                      )}
+                      {importDateUnknowns.length > 0 && (
+                        <p className="source-note">
+                          {periodUnknownNotice(importDateUnknowns)}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 {!importRows.length ? (
                   <Empty
                     title="尚未選取檔案"
@@ -8204,7 +8602,7 @@ export default function TrafficApp() {
                     return (
                       <div className="imported-quarter" key={q}>
                         <div>
-                          <strong>{q}</strong>
+                          <strong>{quarterLabels.labels[q] || q}</strong>
                           <span>{rows.length} 個路口</span>
                         </div>
                         <div>
@@ -8536,7 +8934,7 @@ export default function TrafficApp() {
                         {quarters.map(function (q) {
                           return (
                             <option key={q} value={q}>
-                              {q}（
+                              {quarterLabel(q)}（
                               {
                                 projectRecords.filter(function (record) {
                                   return record.quarter === q;
@@ -8890,7 +9288,7 @@ export default function TrafficApp() {
                         {quarters.map(function (item) {
                           return (
                             <option key={item} value={item}>
-                              {item}
+                              {quarterLabel(item)}
                             </option>
                           );
                         })}
@@ -9088,7 +9486,7 @@ export default function TrafficApp() {
                         {quarters.map(function (q) {
                           return (
                             <option key={q} value={q}>
-                              {q}（
+                              {quarterLabel(q)}（
                               {
                                 projectRecords.filter(function (record) {
                                   return record.quarter === q;
@@ -9248,6 +9646,9 @@ export default function TrafficApp() {
                         <option value="both">
                           {scopeUnit(peak)}＋百分比
                         </option>
+                        <option value="countPercent">
+                          {scopeUnit(peak, "vehicle")}＋百分比
+                        </option>
                       </select>
                     </label>
                     <label>
@@ -9297,17 +9698,60 @@ export default function TrafficApp() {
                             <dd>{scopeWindowLabel(selected, peak)}</dd>
                           </div>
                           <div>
-                            <dt>路口總流量</dt>
+                            <dt>
+                              {vehicle === "all"
+                                ? "路口總流量"
+                                : vehicleLabel(selected, vehicle) + "流量"}
+                            </dt>
                             <dd>
-                              {recordTotal(selected, peak).toLocaleString()}{" "}
-                              <small>PCU/hr</small>
+                              {summary.value.toLocaleString()}{" "}
+                              <small>{summary.unit}</small>
+                              {summary.isBase && <small>（＝100%）</small>}
                             </dd>
                           </div>
+                          {vehicle !== "all" && summary.share !== null && (
+                            <div>
+                              <dt>占路口總量</dt>
+                              <dd>{summary.share.toFixed(1)}%</dd>
+                            </div>
+                          )}
+                          {summary.breakdown.length > 0 && (
+                            <div className="summary-breakdown">
+                              <dt>車種組成</dt>
+                              <dd>
+                                <ul>
+                                  {summary.breakdown.map(function (item) {
+                                    return (
+                                      <li key={item.id}>
+                                        <span>{item.label}</span>
+                                        {summary.showsValue && (
+                                          <b>
+                                            {item.value.toLocaleString()}{" "}
+                                            {summary.unit}
+                                          </b>
+                                        )}
+                                        <i>{item.percent.toFixed(1)}%</i>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </dd>
+                            </div>
+                          )}
                           <div>
                             <dt>道路支線</dt>
                             <dd>{selected.approaches.length} 叉</dd>
                           </div>
                         </dl>
+                        {!summary.reconciled && (
+                          <p className="summary-warning">
+                            ⚠️
+                            這一筆的各車種 PCU 加總（{summary.derivedPcu.toLocaleString()}）
+                            與已存的路口總 PCU（{summary.storedPcu.toLocaleString()}）對不起來。
+                            單一車種的 PCU 是用匯入當時的轉向當量現算的，這一筆可能沒有存下當量矩陣，
+                            **請不要直接引用單一車種的 PCU**；車輛數不受影響。
+                          </p>
+                        )}
                         <p className="source-note">
                           本系統只彙整尖峰轉向流量。
                         </p>
@@ -9345,7 +9789,7 @@ export default function TrafficApp() {
                           {quarters.map(function (q) {
                             return (
                               <option key={q} value={q}>
-                                {q}
+                                {quarterLabel(q)}
                               </option>
                             );
                           })}
@@ -9894,7 +10338,7 @@ export default function TrafficApp() {
                     {quarters.map(function (q) {
                       return (
                         <option key={q} value={q}>
-                          {q}
+                          {quarterLabel(q)}
                         </option>
                       );
                     })}
@@ -10286,12 +10730,18 @@ export default function TrafficApp() {
                         {activeProject.name} · {quarter} 多路口排名
                       </h2>
                     </div>
+                    {/*
+                      時段是全系統共用的一個設定。這裡以前只列 AM／PM，
+                      使用者從轉向圖帶著「全日時段」進來時，選單顯示不出目前
+                      的值，下面的卡片卻是用全日時段的數字在算；動一下這個
+                      選單還會把轉向圖的時段一起改掉。四個選項一次列全，
+                      在哪一頁看到的都是同一件事。
+                    */}
                     <Segmented
                       value={peak}
-                      options={[
-                        ["AM", "AM"],
-                        ["PM", "PM"],
-                      ]}
+                      options={SCOPE_KEYS.map(function (key): [ScopeKey, string] {
+                        return [key, SCOPE_LABELS[key]];
+                      })}
                       onChange={setPeak}
                     />
                   </section>
@@ -10303,8 +10753,10 @@ export default function TrafficApp() {
                           <span>{record.station}</span>
                           <h2>{record.name}</h2>
                           <strong>
-                            {recordTotal(record, peak).toLocaleString()}{" "}
-                            <small>PCU/hr</small>
+                            {hasScopeValue(record, peak)
+                              ? recordTotal(record, peak).toLocaleString()
+                              : "－"}{" "}
+                            <small>{scopeUnit(peak)}</small>
                           </strong>
                           <div className="mini-bar">
                             <i
@@ -10334,6 +10786,7 @@ export default function TrafficApp() {
               notify={notify}
               pendingCount={pendingSurveyTypeRecords().length}
               assignPendingSurveyType={assignPendingSurveyType}
+              quarterLabels={quarterLabels.labels}
             />
           )}
 
@@ -11291,7 +11744,11 @@ export default function TrafficApp() {
                         }}
                       >
                         {quarters.map(function (item) {
-                          return <option key={item}>{item}</option>;
+                          return (
+                            <option key={item} value={item}>
+                              {quarterLabel(item)}
+                            </option>
+                          );
                         })}
                       </select>
                     </label>
@@ -11304,7 +11761,11 @@ export default function TrafficApp() {
                         }}
                       >
                         {quarters.map(function (item) {
-                          return <option key={item}>{item}</option>;
+                          return (
+                            <option key={item} value={item}>
+                              {quarterLabel(item)}
+                            </option>
+                          );
                         })}
                       </select>
                     </label>
@@ -11599,14 +12060,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.33-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.35-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.33-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.35-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
@@ -12508,6 +12969,12 @@ function TrendView(props: {
   /** 這個計畫裡還掛著「待設定」的紀錄筆數。 */
   pendingCount: number;
   assignPendingSurveyType: (value: string, intersectionKey?: string) => void;
+  /**
+   * 每一個季別在畫面上要顯示成什麼（季別或實際調查月份）。
+   * 由上層統一算好傳進來，趨勢圖不自己再寫一套——同一個季別在季度下拉、
+   * 摘要與 X 軸上必須是同一個字。查不到就原樣用季別。
+   */
+  quarterLabels: Record<string, string>;
 }) {
   const [trendMode, setTrendMode] = useState<PeakKey | "ALL">(props.peak);
   const intersectionKey = function (record: TrafficRecord) {
@@ -13226,7 +13693,7 @@ function TrendView(props: {
                     (index * (chartWidth - 170)) / Math.max(1, rows.length - 1);
                   return (
                     <text key={record.id} x={x} y="355" className="x-label">
-                      {record.quarter}
+                      {props.quarterLabels[record.quarter] || record.quarter}
                     </text>
                   );
                 })}
@@ -13266,7 +13733,9 @@ function TrendView(props: {
             const active = summaries[0];
             return (
               <div key={record.id}>
-                <span>{record.quarter}</span>
+                <span>
+                  {props.quarterLabels[record.quarter] || record.quarter}
+                </span>
                 {trendMode === "ALL" ? (
                   <>
                     <b className="trend-pair">
