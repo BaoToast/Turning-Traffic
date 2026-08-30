@@ -175,6 +175,48 @@ ok(
   breakdown2.slice(0, 140),
 );
 
+/*
+ * ── 車輛數來源分歧時，圖與摘要仍必須一致（v2.1.36）──────────────
+ *
+ * AM／PM／全日尖峰的 row.vehicle 是匯入時由尖峰視窗算的，syncRouteTotals
+ * 刻意不重建（重建會蓋掉使用者在核對工作台改過的值），所以它和逐條流向的
+ * 加總本來就可能不一樣。v2.1.35 讓摘要改讀流向加總，圖仍讀 row.vehicle，
+ * 於是在既有品質檢查容許的 5% 落差內，兩邊會靜靜地各講各的。
+ * 這一段直接把資料改成分歧狀態，再確認畫面上兩個數字仍然相同。
+ */
+const patched = await page.evaluate(() => {
+  const raw = localStorage.getItem("turning-traffic-state-v2");
+  if (!raw) return null;
+  const state = JSON.parse(raw);
+  const record = state.records?.[0];
+  const approach = record?.approaches?.[0];
+  const bag = approach?.movements?.AM?.vehicle;
+  if (!bag) return null;
+  const id = Object.keys(bag)[0];
+  if (!id) return null;
+  /* 把第一個車種的數量改掉，模擬使用者在核對工作台調整過。 */
+  bag[id] = Math.round(Number(bag[id] || 0) * 1.3) + 7;
+  localStorage.setItem("turning-traffic-state-v2", JSON.stringify(state));
+  return { station: record.station, id, value: bag[id] };
+});
+ok("能做出「車輛數來源分歧」的狀態", Boolean(patched), JSON.stringify(patched));
+if (patched) {
+  await page.reload();
+  await page.waitForTimeout(1300);
+  await page.locator('nav button:has-text("路口轉向圖")').first().click();
+  await page.waitForTimeout(900);
+  await pick("時段", "AM");
+  await pick("顯示", "count");
+  await pick("車種", patched.id);
+  const d = await diagramTotal();
+  const s2 = await summaryTotal();
+  ok(
+    "來源分歧時，圖與摘要的車輛數仍然一致",
+    Boolean(d && s2) && d.value === s2.value,
+    `圖 ${d?.value ?? "?"} / 摘要 ${s2?.value ?? "?"}`,
+  );
+}
+
 ok("沒有 JS 例外", errors.length === 0, errors.slice(0, 2).join(" | "));
 
 await browser.close();

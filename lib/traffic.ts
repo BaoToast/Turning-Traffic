@@ -471,7 +471,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.35";
+export const VERSION = "v2.1.37";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -579,6 +579,16 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.37",
+    date: "2026-08-30",
+    note: "發布前複查 v2.1.36 後補上一項對帳漏報，不改交通量計算，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30。v2.1.36 已讓摘要車輛數與轉向圖同讀 `row.vehicle`，並保留 PCU 依實際 OD 逐筆加總；但車輛數對帳只比較『全部車種總數』。若機車多 7 輛、小型車少 7 輛，兩者會互相抵銷，全部車種總數及總 PCU 都可能相同，系統便誤判為一致，單一車種的輛數與 PCU 明細其實仍分歧。本版改為逐車種比較 `row.vehicle` 與 OD 車種數，各車種分別沿用 5 輛或 5% 門檻；有差異時警告會列出車種及兩邊數值。若 PCU 與車輛數同時不一致，兩項原因會完整並列，不再只顯示其中一項。新增『各車種差異互相抵銷』反例守門測試。另補齊與現有 Cloudflare 外掛相符的 Worker／D1 官方型別及 `DB` 綁定宣告，讓乾淨原始碼可完成 TypeScript 驗證；不影響公開靜態網站或交通計算。v2.1.36、v2.1.35 的修正與曆日驗證均完整保留。",
+  },
+  {
+    version: "v2.1.36",
+    date: "2026-08-30",
+    note: "複查 v2.1.35 後修正一項它引進的新不一致，沒有變更任何交通量計算，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30。**摘要的車輛數改回與轉向圖同源。** v2.1.35 把單一車種 PCU 改用實際 OD 逐筆加總是對的（那修掉了 v2.1.34 用支線總 PCU 比例反推的錯誤），但它連「車輛數」也一起改成從 OD 加總，而轉向圖的車輛數讀的是 row.vehicle[id]。AM／PM／全日尖峰的 row.vehicle 是匯入時由尖峰視窗的原始格子算出來的，syncRouteTotals **刻意不重建**（重建會蓋掉使用者在核對工作台改過的值），所以它和 OD 加總本來就可能不一樣——而且系統既有的「車種統計異常」品質檢查容許 5 輛或 5% 的落差不報警。落在那個範圍裡，轉向圖會顯示一個數字、右側摘要顯示另一個，兩邊都不吭聲，正是 v2.1.34 要修掉的那個病。本版：**車輛數一律用 row.vehicle（與圖同源），PCU 一律走實際 OD**（保留 v2.1.35 的正確作法），兩者若對不起來由 reconciled 明講，並在摘要下方寫出實際原因，不靠任何一邊悄悄改寫另一邊。車輛數的對帳門檻沿用既有「車種統計異常」的 5 輛或 5%，不另外發明第三套標準。新增守門測試：摘要與轉向圖的車輛數必須相同（對 v2.1.35 實測紅字）、差很多時要講出來、小幅落差不濫報、一致時不誤報，以及瀏覽器層的「把資料改成來源分歧狀態後，圖與摘要仍必須顯示同一個數字」。v2.1.35 的兩項修正（實際 OD 拆解、曆日驗證）完整保留。",
+  },
   {
     version: "v2.1.35",
     date: "2026-08-30",
@@ -1114,27 +1124,55 @@ export function pcuBreakdown(
   );
   const vehicleIds = new Set(Object.keys(row.vehicle || {}));
   for (const route of sourceRoutes)
-    for (const id of Object.keys(route.volumes?.[scope]?.vehicle || {})) vehicleIds.add(id);
+    for (const id of Object.keys(route.volumes?.[scope]?.vehicle || {}))
+      vehicleIds.add(id);
   const overall = row.left + row.through + row.right || 1;
+  /*
+   * 車輛數的唯一來源是 row.vehicle——**轉向圖也是讀這一個**
+   * （totalMovement(approach, scope, undefined, id) 回的就是 row.vehicle[id]）。
+   *
+   * v2.1.35 把 count 改成從 OD 逐筆加總，PCU 那一半是對的，但車輛數這一半
+   * 讓摘要與圖又分成兩個來源：AM／PM／全日尖峰的 row.vehicle 是匯入時由尖峰
+   * 視窗的原始格子算出來的，syncRouteTotals **刻意不重建**（重建會蓋掉使用者
+   * 在核對工作台改過的值），所以它和 OD 加總本來就可能不一樣——而且系統既有的
+   * 「車種統計異常」品質檢查容許 5% 的落差不報警。落在那個範圍裡，圖會顯示
+   * 一個數字、摘要顯示另一個，兩邊都不吭聲。
+   *
+   * 所以：**車輛數一律用 row.vehicle（與圖同源），PCU 一律走實際 OD**，
+   * 兩者若對不起來就由 reconciled 講出來，不靠任何一邊悄悄改寫另一邊。
+   */
+  const hasRowVehicles = Object.keys(row.vehicle || {}).length > 0;
+  let routeCountTotal = 0;
+  let rowCountTotal = 0;
+  const countMismatches: Array<{
+    id: string;
+    routeCount: number;
+    rowCount: number;
+  }> = [];
   for (const id of vehicleIds) {
-    let count = Number(row.vehicle?.[id]) || 0;
+    let routeCount = 0;
     let pcu = 0;
     if (sourceRoutes.length) {
       /*
-       * 新格式與現行 OD 紀錄已存有「逐車種 × 實際轉向」數量，必須直接使用。
+       * OD 紀錄已存有「逐車種 × 實際轉向」數量，PCU 必須直接照它加總。
        * 不可用左／直／右的總 PCU 比例反推：各車種及各轉向當量不同時，
        * 反推會把個別車種 PCU 分錯，甚至可能在總量恰好相等時逃過對帳。
        */
-      count = 0;
       for (const route of sourceRoutes) {
-        const routeCount = Number(route.volumes?.[scope]?.vehicle?.[id]) || 0;
-        count += routeCount;
-        pcu += vehiclePcuFor(record, id, route.movement, routeCount);
+        const value = Number(route.volumes?.[scope]?.vehicle?.[id]) || 0;
+        routeCount += value;
+        pcu += vehiclePcuFor(record, id, route.movement, value);
       }
-    } else {
+    }
+    /*
+     * row.vehicle 完全是空的（很舊的備份）才退而用 OD 加總當車輛數，
+     * 否則整張摘要會變成 0。
+     */
+    const count = hasRowVehicles ? Number(row.vehicle?.[id]) || 0 : routeCount;
+    if (!sourceRoutes.length) {
       /*
-       * 僅供沒有 routes 的舊備份相容：舊資料只存支線總車種數及總 PCU，
-       * 無法還原精確轉向，只能依既有比例估算並由 reconciled 明確揭露差異。
+       * 僅供沒有 OD 明細的舊備份：只存支線總車種數與總 PCU，無法還原精確
+       * 轉向，只能依既有比例估算，並由 reconciled 明確揭露這是估算值。
        */
       pcu = MOVEMENT_KEYS.reduce(function (sum, movement) {
         const share = (count * row[movement]) / overall;
@@ -1143,14 +1181,55 @@ export function pcuBreakdown(
     }
     perVehicle[id] = { count, pcu: roundedPcu(pcu) };
     derivedPcu += pcu;
+    routeCountTotal += routeCount;
+    rowCountTotal += count;
+    if (sourceRoutes.length && hasRowVehicles) {
+      /*
+       * 必須逐車種核對，不能只核對全部車種總數。否則「機車多 7 輛、
+       * 小型車少 7 輛」會互相抵銷，摘要仍會把同一車種的輛數與 PCU
+       * 分別取自兩套不一致的明細，卻完全沒有警告。
+       */
+      const vehicleCountTolerance = Math.max(5, Math.abs(count) * 0.05);
+      if (Math.abs(routeCount - count) > vehicleCountTolerance)
+        countMismatches.push({ id, routeCount, rowCount: count });
+    }
   }
-  /* 容差取 1%＋0.5，吸收逐格四捨五入；差得更多就是係數對不起來。 */
-  const tolerance = Math.max(0.5, storedPcu * 0.01);
+  /* PCU 容差取 1%＋0.5，吸收逐格四捨五入；差得更多就是係數對不起來。 */
+  const pcuTolerance = Math.max(0.5, storedPcu * 0.01);
+  const pcuMatches = Math.abs(roundedPcu(derivedPcu) - storedPcu) <= pcuTolerance;
+  /*
+   * 車輛數容差沿用既有「車種統計異常」品質檢查的門檻（5 輛或 5%），
+   * 不另外發明第三套標準。
+   */
+  const countMatches =
+    !sourceRoutes.length ||
+    !hasRowVehicles ||
+    countMismatches.length === 0;
+  const reasons: string[] = [];
+  if (!pcuMatches)
+    reasons.push(
+      `各車種 PCU 加總 ${roundedPcu(derivedPcu).toLocaleString()} 與已存的路口總 PCU ${storedPcu.toLocaleString()} 對不起來`,
+    );
+  if (!countMatches) {
+    const details = countMismatches
+      .slice(0, 3)
+      .map(function (item) {
+        const label = record.vehicleLabels?.[item.id] || CORE_VEHICLE_LABELS[item.id] || item.id;
+        return `${label}（逐條流向 ${Math.round(item.routeCount).toLocaleString()} 輛、各車種 ${Math.round(item.rowCount).toLocaleString()} 輛）`;
+      })
+      .join("、");
+    const remainder = countMismatches.length > 3 ? `等 ${countMismatches.length} 種` : "";
+    reasons.push(`各車種車輛數明細對不起來：${details}${remainder}`);
+  }
+  const reason = reasons.join("；");
   return {
     perVehicle,
     storedPcu,
     derivedPcu: roundedPcu(derivedPcu),
-    reconciled: Math.abs(roundedPcu(derivedPcu) - storedPcu) <= tolerance,
+    routeCountTotal: Math.round(routeCountTotal),
+    rowCountTotal: Math.round(rowCountTotal),
+    reconciled: pcuMatches && countMatches,
+    reason,
   };
 }
 

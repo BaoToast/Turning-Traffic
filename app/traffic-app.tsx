@@ -5533,6 +5533,7 @@ export default function TrafficApp() {
         showsValue: displayShowsValue(displayMode),
         isBase: false,
         reconciled: true,
+        reason: "",
         derivedPcu: 0,
         storedPcu: 0,
       };
@@ -5603,7 +5604,15 @@ export default function TrafficApp() {
               })
             : [],
         isBase: displayMode === "percent" && vehicle === "all",
-        reconciled: kind === "pcu" ? reconciled : true,
+        /*
+         * 車輛數模式也要看對帳結果：車輛數與 PCU 用的是不同來源
+         *（row.vehicle vs 實際流向），對不起來時兩種模式都該講出來。
+         */
+        reconciled,
+        reason:
+          breakdowns.find(function (item) {
+            return !item.reconciled;
+          })?.reason || "",
         derivedPcu,
         storedPcu,
       };
@@ -9745,11 +9754,11 @@ export default function TrafficApp() {
                         </dl>
                         {!summary.reconciled && (
                           <p className="summary-warning">
-                            ⚠️
-                            這一筆的各車種 PCU 加總（{summary.derivedPcu.toLocaleString()}）
-                            與已存的路口總 PCU（{summary.storedPcu.toLocaleString()}）對不起來。
-                            單一車種的 PCU 是用匯入當時的轉向當量現算的，這一筆可能沒有存下當量矩陣，
-                            **請不要直接引用單一車種的 PCU**；車輛數不受影響。
+                            ⚠️ 這一筆的車種明細對不起來：{summary.reason}。
+                            單一車種的 PCU 是用匯入當時的轉向當量、依實際流向現算的；
+                            對不起來時<b>請不要直接引用單一車種的數字</b>，
+                            先到「流量核對工作台」確認這一筆的流向與車種資料。
+                            路口總量不受影響。
                           </p>
                         )}
                         <p className="source-note">
@@ -12060,14 +12069,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.35-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.37-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.35-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.37-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
