@@ -216,3 +216,48 @@ test("整欄都是「-」時，警告要歸併同一種原文而不是逐格洗�
   assert.match(warning, /有 5 個儲存格/, "要報出真實筆數，不能被上限截斷");
   assert.match(warning, /「-」5 格/, "同一種原文要歸併計數");
 });
+
+/* ── 「製表日期」不可以被當成調查日期 ── */
+test("非調查日期、普通日期與無效日期排在前面時，仍要取明確標示的有效調查日期", async () => {
+  /*
+   * 舊寫法取「第一個看起來像日期的儲存格」，於是 date 記成製表日，
+   * 而 resolveSurveyType() 讀同一格的括號 → 資料別被記成「假日」。
+   * 資料別是 isSameSurvey 的識別鍵，判錯會讓重新匯入不接手、靜靜多出一筆。
+   * 三支共用的 period-date 早就有這份排除清單，只是這條路徑沒套用。
+   */
+  const rows: unknown[][] = Array.from({ length: 14 }, () => Array(20).fill(null));
+  rows[0][0] = "彙整日期：115年03月01日(假日)";
+  rows[0][1] = "輸出日期：115年03月02日(假日)";
+  rows[0][2] = "115年02月15日";
+  rows[0][3] = "製表日期：115年03月03日(假日)";
+  rows[0][4] = "日期：115年02月29日(假日)";
+  rows[1][0] = "站號：11017T14-02";
+  rows[1][4] = "日期：115年01月26日 (平日)";
+  rows[2][0] = "站名：測試路－驗證路口";
+  rows[3][0] = "路口編號：路口A";
+  rows[4][0] = "時間";
+  ["機車", "小型車", "大型車", "特種車"].forEach((v, vi) => {
+    rows[4][1 + vi * 3] = v;
+    ["左轉", "直進", "右轉"].forEach((m, mi) => {
+      rows[5][1 + vi * 3 + mi] = m;
+    });
+  });
+  ["07:00~07:15", "07:15~07:30", "07:30~07:45", "07:45~08:00", "08:00~08:15"].forEach(
+    (t, ri) => {
+      rows[6 + ri][0] = t;
+      for (let c = 1; c <= 12; c++) rows[6 + ri][c] = 10;
+    },
+  );
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!merges"] = ["機車", "小型車", "大型車", "特種車"].map((_, vi) => ({
+    s: { r: 4, c: 1 + vi * 3 },
+    e: { r: 4, c: 3 + vi * 3 },
+  }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "平日");
+  const preview = await inspectWorkbook(
+    new File([XLSX.write(wb, { type: "array", bookType: "xlsx" })], "路口_製表日期.xlsx"),
+  );
+  assert.equal(preview.date, "2026-01-26", "應取真正的調查日期，不是製表日");
+  assert.equal(preview.surveyType, "平日", "資料別不可以被製表日期的括號帶偏");
+});

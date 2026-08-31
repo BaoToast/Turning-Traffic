@@ -1,4 +1,6 @@
 import * as XLSX from "xlsx";
+/* 調查日期的標籤優先、排除清單與曆日驗證只由共用模組判定。 */
+import { findSurveyDate } from "./period-date.ts";
 
 /**
  * 尖峰時段。三個都是「某一小時的流率」，PCU 欄位的單位是 PCU/hr。
@@ -493,7 +495,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.39";
+export const VERSION = "v2.1.40";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -601,6 +603,11 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.40",
+    date: "2026-08-31",
+    note: "複查後修正調查日期選取，**沒有變更任何交通量或 PCU 計算**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30，固定計算黃金值完全相同。**「製表日期」不會再被當成調查日期。** 舊版實際紀錄日期取第一個像日期的儲存格，期別檢查卻另外使用會優先辨認『調查／監測日期』的共用選擇器，因此同一份檔案可能得到兩個日期；若製表日期括號寫『假日』，資料別也會被帶偏，重新匯入便可能不接手而多出一筆。現在紀錄日期、資料別與期別檢查全部使用 `findSurveyDate()`：優先採用明確標示且有效的調查日期，排除製表、列印、彙整、輸出、建檔與產製日期等非調查日期，讀不到時仍維持待確認而不阻擋匯入。規則只留在共用 `period-date` 模組。",
+  },
   {
     version: "v2.1.39",
     date: "2026-08-31",
@@ -2076,18 +2083,6 @@ function workbookCells(workbook: XLSX.WorkBook) {
   return values;
 }
 
-function rocDate(value: string) {
-  const match = value
-    .normalize("NFKC")
-    .match(
-      /(\d{2,4})\s*(?:年\s*|[./-]\s*)(\d{1,2})\s*(?:月\s*|[./-]\s*)(\d{1,2})\s*(?:日)?/,
-    );
-  if (!match) return "";
-  const sourceYear = Number(match[1]);
-  const year = sourceYear < 1911 ? sourceYear + 1911 : sourceYear;
-  return `${year}-${String(Number(match[2])).padStart(2, "0")}-${String(Number(match[3])).padStart(2, "0")}`;
-}
-
 function sourceCode(
   sheet: XLSX.WorkSheet,
   headerEnd: number,
@@ -2233,45 +2228,20 @@ export async function inspectWorkbook(
         return text.match(/地\s*點\s*[：:]?\s*(.+)$/)?.[1];
       })
       .find(Boolean);
-  const dateCell =
-    cells.find(function (item) {
-      return (
-        (!options?.trafficSheets ||
-          options.trafficSheets.includes(item.sheet)) &&
-        Boolean(rocDate(item.text))
-      );
-    }) ||
-    cells.find(function (item) {
-      return Boolean(rocDate(item.text));
-    }) ||
-    null;
-  const dateText = dateCell?.text || "";
   /*
-   * 期別檢查用的日期候選清單。**不影響上面的 dateCell／date**——那兩個維持
-   * 原樣（先本工作表、再全活頁簿的第一個像日期的儲存格），既有畫面與紀錄
-   * 的 date 欄位一個字都沒變。
-   *
-   * 這裡另外把「表頭裡所有像日期的儲存格」按同樣的順序（本工作表優先）收起來，
-   * 交給 lib/period-date.ts 的 findSurveyDate() 去挑：它會優先選有「日期：」
-   * 標示的那一格，並排除「製表日期」這類非調查日期。分開兩條路，是為了讓
-   * 期別檢查讀得更準，同時保證既有行為零變動。
+   * 實際紀錄日期與期別檢查必須使用同一支選擇器。舊版兩條路徑分開：紀錄取
+   * 第一個像日期的格子，期別檢查卻優先取明確標示的調查日期，因此同一份檔案
+   * 可能得到兩個日期。先在本次交通工作表範圍挑選；找不到才退回整份活頁簿。
    */
-  const dateCandidateCells = cells.filter(function (item) {
-    return Boolean(rocDate(item.text));
-  });
-  const scopedCandidates = dateCandidateCells.filter(function (item) {
+  const scopedDateCells = cells.filter(function (item) {
     return !options?.trafficSheets || options.trafficSheets.includes(item.sheet);
   });
-  const dateCandidates = [
-    ...scopedCandidates,
-    ...dateCandidateCells.filter(function (item) {
-      return !scopedCandidates.includes(item);
-    }),
-  ]
-    .slice(0, 60)
-    .map(function (item) {
-      return { text: item.text, sheet: item.sheet, cell: item.cell };
-    });
+  const foundDate = findSurveyDate(scopedDateCells) || findSurveyDate(cells);
+  const dateText = foundDate?.raw || "";
+  /* 只把正式採用的同一格交給畫面做期別檢查，避免兩條路徑再次分岔。 */
+  const dateCandidates = foundDate
+    ? [{ text: foundDate.raw, sheet: foundDate.sheet, cell: foundDate.cell }]
+    : [];
   const intervalMap = new Map<number, IntervalRow>();
   const detectedColumns: ImportPreview["columns"] = [];
   const originOrder: string[] = [];
@@ -2736,9 +2706,9 @@ export async function inspectWorkbook(
       weights,
       intervalRows.length * intervalMinutes,
     ),
-    date: rocDate(dateText),
-    dateSource: dateCell
-      ? { sheet: dateCell.sheet, cell: dateCell.cell, raw: dateCell.text }
+    date: foundDate?.iso || "",
+    dateSource: foundDate
+      ? { sheet: foundDate.sheet, cell: foundDate.cell, raw: foundDate.raw }
       : null,
     dateCandidates: dateCandidates,
     surveyType: resolveSurveyType({
