@@ -480,3 +480,67 @@ test("結論草稿的換字是可選的，不傳就維持舊輸出；篩選仍�
     }
   }
 });
+
+/* ── 年度輸入的範圍把關（v2.1.43） ── */
+
+test("年度輸入超出可換算範圍時要擋下，不得原樣存成西元季度鍵", async () => {
+  /*
+   * 年度輸入原本只有「去掉非數字、截到四碼」，沒有任何範圍檢查。
+   * normalizeSurveyPeriod() 只在民國 90～200（西元 2001～2111）內換算，
+   * 窗口外的四碼年份會原樣回傳——打 2112 就把西元字串存成季度鍵，
+   * 而它和 201Q3 是同一季、排序鍵完全相同，畫面上只看得出「同一季出現兩次」。
+   */
+  const { checkSurveyPeriodInput, normalizeSurveyPeriod } = await import(
+    "../lib/period-date.ts"
+  );
+  const { quarterKey } = await import("../lib/conclusion.ts");
+
+  for (const [roc, ad] of [["201Q3", "2112Q3"], ["89Q1", "2000Q1"]]) {
+    assert.equal(quarterKey(roc), quarterKey(ad), `${roc} 與 ${ad} 是同一季`);
+    assert.notEqual(normalizeSurveyPeriod(ad), roc, "正規化窗口外，併不起來");
+    const check = checkSurveyPeriodInput(ad);
+    assert.equal(check.ok, false, `${ad} 不可以寫入`);
+    assert.equal(check.reason, "range");
+  }
+  for (const input of ["89Q1", "201Q3"]) {
+    const check = checkSurveyPeriodInput(input);
+    assert.equal(check.ok, false, `${input} 不在民國 90～200 年範圍內`);
+    assert.equal(check.reason, "range");
+  }
+  for (const [roc, ad] of [
+    ["90Q1", "2001Q1"],
+    ["99Q4", "2010Q4"],
+    ["115Q1", "2026Q1"],
+    ["200Q4", "2111Q4"],
+  ])
+    for (const input of [roc, ad]) {
+      const check = checkSurveyPeriodInput(input);
+      assert.equal(check.ok, true, `${input} 應放行`);
+      assert.equal(check.key, roc, `${input} 應存成 ${roc}`);
+    }
+});
+
+test("匯入路徑要接上範圍檢查，且不合格時不能按下選檔", () => {
+  assert.match(appSource, /const importPeriodCheck = importPeriod/);
+  assert.match(appSource, /const importPeriodReady = Boolean\(importPeriodCheck\?\.ok\)/);
+  /* 選檔按鈕要看「檢查通過」而不是只看「有沒有填」 */
+  assert.match(appSource, /disabled=\{!importPeriodReady\}/);
+  assert.doesNotMatch(appSource, /disabled=\{!importPeriod\}/);
+  /* 真的走到讀檔時再擋一次（按鈕可能被繞過） */
+  assert.match(
+    appSource,
+    /if \(importPeriodCheck && !importPeriodCheck\.ok\)\s*\n\s*return notify\(surveyPeriodInputMessage\(importPeriodCheck\.reason\)\);/,
+  );
+  /* 不合格時輸入框下方要當場說明，而不是仍顯示「將存成…」 */
+  assert.match(appSource, /surveyPeriodInputMessage\(importPeriodCheck\.reason\)}\s*\n\s*<\/small>/);
+  /* 預覽後若又把年度改成錯誤值，寫入按鈕與 commit 本身都要擋住。 */
+  assert.match(appSource, /disabled=\{!importRows\.length \|\| !importPeriodReady\}/);
+  assert.match(appSource, /function commitImport\(\) \{[\s\S]*?if \(!importPeriodCheck\?\.ok\)/);
+});
+
+test("共用期別模組必須包含本輪新增的檢查", async () => {
+  const { readFileSync } = await import("node:fs");
+  const here = readFileSync(new URL("../lib/period-date.ts", import.meta.url), "utf8");
+  assert.match(here, /export function checkSurveyPeriodInput/);
+  assert.match(here, /rocYear >= 90 && rocYear <= 200/);
+});

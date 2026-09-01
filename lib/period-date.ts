@@ -135,6 +135,51 @@ export function normalizeSurveyPeriod(input: string): string {
   return formatPeriod(period);
 }
 
+/*
+ * ── 季度輸入的最終把關 ────────────────────────────────────────
+ *
+ * normalizeSurveyPeriod() 只在「民國 90～200（西元 2001～2111）」這個窗口內
+ * 換算；超出窗口的四碼年份它會**原樣回傳**。若寫入路徑只用
+ * /^(?:\d{3}|\d{4})Q[1-4]$/ 這種形狀檢查，`2112Q3` 會通過並被原樣存進去，
+ * 於是同一季同時存在 `201Q3` 與 `2112Q3` 兩個鍵——而且兩者的排序鍵完全相同，
+ * 畫面上只看得出「同一季出現了兩次」，很難想到是寫法造成的。
+ * 這正是本系統一路在消滅的那一類問題，只是發生在換算窗口之外。
+ *
+ * 另一個方向：民國 99 年（西元 2010）是**合法的兩碼民國年**，排序鍵、
+ * 正規化與 Excel 排序一直都認得它，但形狀檢查只收 3～4 碼，於是使用者
+ * 有 99 年的資料時反而打不進去。
+ *
+ * 所以把「可不可以寫入」收斂成一支共用函式：一律先正規化，再要求結果是
+ * 2～3 碼的民國年寫法。回傳的 reason 讓呼叫端可以說清楚是哪一種不合格。
+ */
+export type SurveyPeriodCheck =
+  | { ok: true; key: string }
+  | { ok: false; key: string; reason: "format" | "range" };
+
+export function checkSurveyPeriodInput(input: string): SurveyPeriodCheck {
+  const raw = String(input ?? "").trim().toUpperCase();
+  const key = normalizeSurveyPeriod(raw);
+  /* 正規化之後必須真的落在民國 90～200 年，不能只看位數。 */
+  const normalized = key.match(/^(\d{2,3})Q[1-4]$/);
+  if (normalized) {
+    const rocYear = Number(normalized[1]);
+    if (rocYear >= 90 && rocYear <= 200) return { ok: true, key };
+    return { ok: false, key, reason: "range" };
+  }
+  /* 形狀本身就不對（沒有 Qn、季別不是 1～4、夾雜其他字元）。 */
+  if (!/^\d{2,4}Q[1-4]$/.test(raw)) return { ok: false, key, reason: "format" };
+  /* 形狀對、但年份換算不進民國 90～200 這個窗口。 */
+  return { ok: false, key, reason: "range" };
+}
+
+/** 年份不合格時給使用者看的說明，三支共用同一句。 */
+export function surveyPeriodInputMessage(reason: "format" | "range"): string {
+  return reason === "format"
+    ? "季度格式請輸入 115Q2（民國年）或 2026Q2（西元年）。"
+    : "年份超出可換算範圍：民國年請填 90～200，西元年請填 2001～2111。" +
+        "資料一律以民國年儲存，超出範圍的年份會變成一個比對不到的季度。";
+}
+
 export function samePeriod(a: ParsedPeriod | null, b: ParsedPeriod | null): boolean {
   return Boolean(a && b && a.adYear === b.adYear && a.kind === b.kind && a.num === b.num);
 }

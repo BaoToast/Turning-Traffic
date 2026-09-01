@@ -82,6 +82,8 @@ import {
   periodMismatchPrompt,
   periodUnknownNotice,
   normalizeSurveyPeriod,
+  checkSurveyPeriodInput,
+  surveyPeriodInputMessage,
   PERIOD_DISPLAY_LABELS,
   type PeriodDateCheck,
   type PeriodDisplayMode,
@@ -4766,6 +4768,17 @@ export default function TrafficApp() {
    */
   const importPeriodKey = normalizeSurveyPeriod(importPeriod);
   /*
+   * 年度輸入只有「去掉非數字、截到四碼」，完全沒有範圍檢查。
+   * normalizeSurveyPeriod() 只在民國 90～200（西元 2001～2111）這個窗口內
+   * 換算，窗口外的四碼年份會原樣回傳——打成 2112 或 1990 就會直接把西元字串
+   * 存成季度鍵。它和對應的民國寫法是同一季、排序鍵完全相同，畫面上只看得出
+   * 「同一季出現了兩次」，很難想到是年份寫法造成的。
+   */
+  const importPeriodCheck = importPeriod
+    ? checkSurveyPeriodInput(importPeriod)
+    : null;
+  const importPeriodReady = Boolean(importPeriodCheck?.ok);
+  /*
    * ── 調查日期 × 期別檢查 ──────────────────────────────────────
    * 只讀 ImportPreview 已經解析好的表頭文字，不重新讀檔、不碰任何數值，
    * 也不會修改任何一筆紀錄。判斷邏輯集中在 lib/period-date.ts
@@ -5116,6 +5129,8 @@ export default function TrafficApp() {
   async function handleFiles(files: FileList | null) {
     if (!files?.length) return;
     if (!importPeriod) return notify("請先選擇調查年度與季度，再選取檔案。");
+    if (importPeriodCheck && !importPeriodCheck.ok)
+      return notify(surveyPeriodInputMessage(importPeriodCheck.reason));
     setImporting(true);
     const rows: ImportPreview[] = [];
     for (const file of Array.from(files)) {
@@ -5283,6 +5298,12 @@ export default function TrafficApp() {
 
   function commitImport() {
     if (!activeProjectId) return notify("請先建立並選擇計畫。");
+    if (!importPeriodCheck?.ok)
+      return notify(
+        importPeriodCheck
+          ? surveyPeriodInputMessage(importPeriodCheck.reason)
+          : "請先選擇調查年度與季度。",
+      );
     const q = importPeriodKey;
     if (!q) return notify("請先選擇調查年度與季度。");
     /*
@@ -8208,7 +8229,11 @@ export default function TrafficApp() {
                     否則使用者會以為畫面上會看到 2026Q2、找不到就重打一次，
                     同一季被匯入兩遍。
                   */}
-                  {importPeriodKey && importPeriodKey !== importPeriod ? (
+                  {importPeriodCheck && !importPeriodCheck.ok ? (
+                    <small className="from-content warning-text">
+                      {surveyPeriodInputMessage(importPeriodCheck.reason)}
+                    </small>
+                  ) : importPeriodKey && importPeriodKey !== importPeriod ? (
                     <small className="from-content">
                       將存成「{importPeriodKey}」（資料一律以民國年記錄）
                     </small>
@@ -8355,7 +8380,7 @@ export default function TrafficApp() {
                   />
                   <button
                     className="primary"
-                    disabled={!importPeriod}
+                    disabled={!importPeriodReady}
                     onClick={function () {
                       fileRef.current?.click();
                     }}
@@ -8526,7 +8551,7 @@ export default function TrafficApp() {
                     </button>
                     <button
                       className="primary"
-                      disabled={!importRows.length || !importPeriod}
+                      disabled={!importRows.length || !importPeriodReady}
                       onClick={commitImport}
                     >
                       確認寫入 {importPeriod || "未選季度"}
@@ -12482,14 +12507,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.42-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.43-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.42-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.43-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
