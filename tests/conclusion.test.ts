@@ -13,108 +13,13 @@ import {
   type ConclusionRecord,
 } from "../lib/conclusion.ts";
 
-const META = {
-  projectName: "測試計畫",
-  systemVersion: "v2.1.10",
-  generatedAt: "2026-08-23 10:00",
-};
+/* 樣本紀錄與 meta 抽到 helpers，跨系統守門測試共用同一份形狀。 */
+import {
+  CONCLUSION_META as META,
+  makeRecord,
+} from "./helpers/conclusion-record.ts";
 
-function makeRecord(over: Partial<ConclusionRecord> = {}): ConclusionRecord {
-  return {
-    id: over.station + "-" + over.quarter,
-    intersectionKey: "K1",
-    station: "T15-01",
-    name: "中山北路－岡山路口",
-    quarter: "115Q2",
-    surveyType: "平日",
-    routeless: false,
-    compositionScope: "全調查時段",
-    compositionUnit: "輛/調查時段",
-    composition: [
-      { label: "機車", count: 4131 },
-      { label: "小型車", count: 1766 },
-      { label: "大型車", count: 90 },
-    ],
-    peaks: {
-      AM: {
-        window: "07:15–08:15",
-        totalPcu: 1000,
-        totalVehicles: 6012,
-        branches: [
-          {
-            name: "路口A",
-            outboundByVehicleSafe: [
-              { label: "機車", count: 3000 },
-              { label: "小型車", count: 1200 },
-            ],
-            inflowByVehicleSafe: [
-              { label: "機車", count: 3400 },
-              { label: "小型車", count: 1100 },
-            ],
-            twoWayByVehicleSafe: [
-              { label: "機車", count: 6400 },
-              { label: "小型車", count: 2300 },
-            ],
-            directionDisplay: "split",
-            inflowPcu: 400,
-            outflowPcu: 380,
-            inflowVehicles: 741,
-            outflowVehicles: 556,
-            inflowFullDayVehicles: 12000,
-            outflowFullDayVehicles: 11800,
-          },
-          {
-            name: "路口B",
-            outboundByVehicleSafe: null,
-            inflowByVehicleSafe: null,
-            twoWayByVehicleSafe: null,
-            directionDisplay: "split",
-            inflowPcu: 600,
-            outflowPcu: 620,
-            inflowVehicles: 548,
-            outflowVehicles: 1969,
-            inflowFullDayVehicles: null,
-            outflowFullDayVehicles: null,
-          },
-        ],
-      },
-      PM: {
-        window: "17:00–18:00",
-        totalPcu: 1200,
-        totalVehicles: 6500,
-        branches: [
-          {
-            name: "路口A",
-            outboundByVehicleSafe: null,
-            inflowByVehicleSafe: null,
-            twoWayByVehicleSafe: null,
-            directionDisplay: "split",
-            inflowPcu: 500,
-            outflowPcu: 490,
-            inflowVehicles: 852,
-            outflowVehicles: 853,
-            inflowFullDayVehicles: null,
-            outflowFullDayVehicles: null,
-          },
-          {
-            name: "路口B",
-            outboundByVehicleSafe: null,
-            inflowByVehicleSafe: null,
-            twoWayByVehicleSafe: null,
-            directionDisplay: "split",
-            inflowPcu: 700,
-            outflowPcu: 710,
-            inflowVehicles: 1381,
-            outflowVehicles: 686,
-            inflowFullDayVehicles: null,
-            outflowFullDayVehicles: null,
-          },
-        ],
-      },
-    },
-    ...over,
-  } as ConclusionRecord;
-}
+
 
 /*
  * v2.1.23 以前的那一個鍵。

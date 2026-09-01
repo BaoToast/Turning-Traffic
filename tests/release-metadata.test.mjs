@@ -64,3 +64,28 @@ test("畫面上的手冊連結檔名帶著目前版本", async () => {
       `手冊 ${ext} 連結沒有跟著版本更新`,
     );
 });
+
+/*
+ * 「部署完成後請確認」段落必須跟著版本走。
+ *
+ * 這一支是踩到坑才補的：那一段從 v2.1.30 起就沒再改過，之後每一次發布
+ * 都照原樣交出去。照那份說明操作的人會拿**錯的版號**去確認部署有沒有
+ * 成功——網址、手冊檔名、封面戳記三項全部對不上，而檢查清單自己不會說。
+ */
+test("更新說明的部署確認清單沒有殘留舊版號", async () => {
+  const notes = await readFile(
+    new URL("../【更新說明】請先讀我.txt", import.meta.url),
+    "utf8",
+  );
+  const start = notes.indexOf("部署完成後請確認：");
+  assert.notEqual(start, -1, "找不到「部署完成後請確認」段落");
+  const section = notes.slice(start);
+  const versions = [
+    ...new Set([...section.matchAll(/v?(\d+\.\d+\.\d+)/g)].map((m) => "v" + m[1])),
+  ];
+  assert.deepEqual(
+    versions.filter((v) => v !== VERSION),
+    [],
+    "部署確認清單殘留了舊版號",
+  );
+});

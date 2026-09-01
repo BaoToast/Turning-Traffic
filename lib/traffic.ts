@@ -495,7 +495,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.40";
+export const VERSION = "v2.1.42";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -603,6 +603,16 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.42",
+    date: "2026-08-31",
+    note: "季度輸入同時接受民國與西元年，**沒有變更任何交通量或 PCU 計算**。舊版的年度輸入框是 `max=\"999\"` 加上 `slice(0, 3)`，打西元 2026 會被靜靜截成 202 而且沒有任何提示，使用者拿到西元年標示的委託案時只能自己換算。現在兩種都收，但**寫入的季度一律正規化成民國年**（`normalizeSurveyPeriod()`，三支共用的 period-date 模組）——照打的字原樣存的話，同一季會因為寫法不同而變成兩個不同的鍵，季度清單與歷季比較都是以這個字串分組的，115Q1 與 2026Q1 會並列成兩季且永遠不會合併，而兩者的排序鍵完全相同、會相鄰出現，看起來只像同一季出現兩次。打西元時輸入框下方會即時顯示「將存成 115Q2」。",
+  },
+  {
+    version: "v2.1.41",
+    date: "2026-08-31",
+    note: "三支系統跨系統徹查後的七項修正，**沒有變更任何交通量或 PCU 計算**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30，固定計算黃金值完全相同，37 份真實檔的總車輛數與修正前逐位相同。**(1) 工作表名稱前面多一個空白時，平日與假日會被合併成一筆。** 判斷日別資料頁的規則以前只容許名稱後面有空白；37 份真實檔裡有 11 份的分頁名稱帶空白，只要空白出現在前面就數不到兩張日別分頁，於是退回整份合併讀取——不是少讀一天，而是平日的量被加進假日那一筆。實測 11535T1502 的假日量由 86,207 輛變成 194,235 輛（虛增 125%），總量守恆所以任何以總量為基礎的檢查都抓不到。現與全日交通量共用同一套前後 trim 的規則。**(2) 匯出的轉向圖檔名不帶資料別，平日圖與假日圖互相覆寫**，ZIP 同名直接覆蓋，同一站只留下一張且看不出是哪一天。**(3) 表頭寫「大貨車」「大客車」時不再依欄位位置併入內建車種。** 舊版看到第 3、4 個車種欄位就當成大型車與特種車，大客車因此拿到特種車的當量 2.5，但大客車在工程上通常算大型車。改為比照全日交通量保留成自訂車種、由使用者自行歸類；表頭寫的都是內建四車種、只是順序亂掉或有殘留舊值時（如 11017T1501 七叉路口的合併儲存格）仍用位置推定救援。**(4) 全形數字「１２３」舊版計 0 輛**，全日交通量讀成 123，同一格在兩支得到不同的數字。**(5)「--」「－」「—」「–」不再被誤報成壞資料**——這是「該轉向不存在」的標準記法，全日交通量早就視為合法，實測 11017T1502 因此跳出 192 次誤報。**(6) 算不出來的統計範圍寫「－」不寫 0**，不足 24 小時的調查沒有全日尖峰小時，舊版仍寫 0 輛/hr 與 0.0%，會被 Excel 的加總與平均吃進去。**(7) 三支共用的非調查日期清單同步**（彙整、輸出、建檔、產製）。",
+  },
   {
     version: "v2.1.40",
     date: "2026-08-31",
@@ -1055,6 +1065,32 @@ export function canonicalIntersectionKey(input: string) {
     .replace(/台(\d+)線/g, "台$1")
     .replace(/[^\p{L}\p{N}]+/gu, "")
     .toLocaleLowerCase("zh-TW");
+}
+
+/**
+ * 「該轉向不存在」的合法佔位記號。
+ *
+ * 與全日交通量 traffic-parser.ts 的 isUnusableCount() 用同一組字元
+ * （`-` `－` `—` `–`）。這些格子按 0 輛處理，但**不是**壞資料，不該警告。
+ */
+const DASH_PLACEHOLDER = /^[-－—–]+$/;
+
+/**
+ * 這張工作表是不是「平日」或「假日」的資料頁。
+ *
+ * 舊寫法是 `/^(平日|假日)\s*$/`——只容許**尾端**空白。實際收到的調查表裡
+ * 分頁名稱前後多一個空白是家常便飯（37 份真實檔就有 11 份如此），
+ * 而前導空白會讓這個判斷整組失效，後果不是少讀一天，是**兩天被合併成一筆**：
+ * daySheets 數不到 2 就退回單一 inspectWorkbook，它會把所有資料頁依時間
+ * 疊加起來，於是平日的量被加進假日那一筆。實測 11535T1502 一份真實檔，
+ * 假日由 86,207 輛變成 194,235 輛（虛增 125%），總量卻守恆，
+ * 任何以總量為基礎的檢查都抓不到，畫面只顯示匯入成功。
+ *
+ * 全日交通量的 trafficSheetNamesForDay() 一直是前後都 trim 的；
+ * 這裡改成同一套規則，三支系統對同一個檔名的判斷才會一致。
+ */
+export function isDayTypeSheetName(sheet: string): boolean {
+  return /^(平日|假日)$/.test(String(sheet ?? "").normalize("NFKC").trim());
 }
 
 export function stationFromFilename(name: string): string {
@@ -2193,9 +2229,7 @@ export async function inspectWorkbook(
     phase: [] as string[],
     ignored: [] as string[],
   };
-  const dayTypeTrafficSheets = workbook.SheetNames.filter(function (sheet) {
-    return /^(平日|假日)\s*$/.test(sheet.normalize("NFKC"));
-  });
+  const dayTypeTrafficSheets = workbook.SheetNames.filter(isDayTypeSheetName);
   const templateId =
     dayTypeTrafficSheets.length >= 2
       ? "hourly-weekday-holiday-turning-v1"
@@ -2354,10 +2388,26 @@ export async function inspectWorkbook(
           return candidate.headerVehicle.id;
         }),
       ).size;
+      /*
+       * 依「欄位位置」推定車種只用來救一種情況：表頭寫的**就是**四個內建車種、
+       * 只是順序亂掉或有殘留的舊值。實測 11017T1501 七叉路口的合併儲存格裡
+       * 就藏著沒清乾淨的「大型車」，位置推定在那裡是對的。
+       *
+       * 但表頭若寫的是「大貨車」「大客車」這種不在內建對照表裡的車種，
+       * 那是使用者自己的車種分類，不該由系統依位置替他決定歸到哪一類——
+       * 「大客車」排在第 4 欄就被當成特種車（當量 2.5），
+       * 但大客車在工程上通常算大型車（1.5），系統沒有立場替他選。
+       * 全日交通量對這種欄位是保留成自訂車種、由使用者自行歸類的，
+       * 這裡改成同一套做法：**表頭有非內建車種時就以表頭為準**。
+       */
+      const headerVehiclesAreAllCore = candidates.every(function (candidate) {
+        return Boolean(CORE_VEHICLE_LABELS[candidate.headerVehicle.id]);
+      });
       const usePositionalVehicles =
         candidates.length >= 8 &&
         candidates.length % 4 === 0 &&
-        distinctHeaderVehicles === 4;
+        distinctHeaderVehicles === 4 &&
+        headerVehiclesAreAllCore;
       const vehicleGroupSize = usePositionalVehicles
         ? candidates.length / 4
         : 0;
@@ -2448,9 +2498,24 @@ export async function inspectWorkbook(
            * Excel 對「7:00」這種輸入會自動套時間格式，承辦很容易踩到。
            * v2.1.37 以前完全沒有任何提示。
            */
-          const numeric = typeof value === "number" ? value : Number(rawText);
+          /*
+           * 全形數字與合法的橫線佔位符要與全日交通量一致。
+           *
+           * ・「１２３」：舊版 Number("１２３") 是 NaN，於是計 0 輛並且警告，
+           *   但全日交通量早就先做 NFKC 正規化、正確讀成 123。同一格資料
+           *   在兩支系統得到不同的數字。
+           * ・「--」「－」「—」「–」：這是調查表裡「該轉向不存在」的標準記法，
+           *   全日交通量的 isUnusableCount() 明確視為合法、不警告；
+           *   舊版轉向卻一律當成壞資料，實測 11017T1502 一份真實檔就跳出
+           *   「有 192 個儲存格有內容但不是數字」。192 次誤報會直接讓使用者
+           *   學會忽略這個警告，而它本來是要抓 N/A、休 這類真正的壞資料。
+           */
+          const normalizedText = rawText.normalize("NFKC");
+          const numeric =
+            typeof value === "number" ? value : Number(normalizedText);
           const usable = Number.isFinite(numeric);
-          if (rawText && !usable) {
+          const legitimatePlaceholder = DASH_PLACEHOLDER.test(normalizedText);
+          if (rawText && !usable && !legitimatePlaceholder) {
             const label = rawText.length > 24 ? rawText.slice(0, 24) + "…" : rawText;
             nonNumericTexts.set(label, (nonNumericTexts.get(label) || 0) + 1);
             if (nonNumericCells.length < 8)
@@ -2736,9 +2801,7 @@ export async function inspectWorkbookVariants(
   const fingerprint = prototypeFingerprint();
   const workbook = XLSX.read(array, SAFE_XLSX_READ_OPTIONS);
   assertNoPrototypePollution(fingerprint, file.name);
-  const daySheets = workbook.SheetNames.filter(function (sheet) {
-    return /^(平日|假日)\s*$/.test(sheet.normalize("NFKC"));
-  });
+  const daySheets = workbook.SheetNames.filter(isDayTypeSheetName);
   if (daySheets.length < 2) return [await inspectWorkbook(file, pce)];
   return Promise.all(
     daySheets.map(function (sheet) {

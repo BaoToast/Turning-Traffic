@@ -485,3 +485,59 @@ test("四大車種的名稱在 app 與 lib 兩邊一致", () => {
     "兩張表對不起來",
   );
 });
+
+/*
+ * ── 根目錄的網站建置產物必須是本版 ──────────────────────────
+ *
+ * 這個 repository 是「Deploy from a branch → main → /(root)」，所以根目錄的
+ * index.html 與 assets/ **就是線上的網站**。原始碼改了、版號改了、手冊也重出了，
+ * 但只要忘了把 `npm run build:github` 的產物複製到根目錄，線上仍然是舊版——
+ * 而且每一個版號字串（package.json、手冊、CHANGELOG）都說是新版，
+ * 沒有任何一項檢查會發現。實測本包在補上這一支之前，根目錄的
+ * assets/ 就還停在 v2.1.40。
+ *
+ * 這一支在「這台機器根本建不出可發布的產物」時會略過而不是誤報：
+ * package.json 把 xlsx 釘在 SheetJS 官方 CDN 的 0.20.3，受限網路裝不到，
+ * 換成 npm registry 的替代版本雖然跑得動測試，但**不可以拿去產生發布用的
+ * assets/**（見 DEPLOYMENT.md）。裝到的不是釘住的那一版時就略過，
+ * 並且把原因寫出來，而不是假裝通過。
+ */
+test("根目錄的網站建置產物是本版（可發布環境才檢查）", () => {
+  if (!has("assets") || !has("index.html")) return; // 只有原始碼的包沒有這一層
+
+  const VERSION = read("lib/traffic.ts").match(/export const VERSION = "(v[\d.]+)"/)?.[1];
+  assert.ok(VERSION, "lib/traffic.ts 裡找不到 VERSION");
+
+  const pkg = JSON.parse(read("package.json"));
+  const pinned = pkg.dependencies?.xlsx ?? pkg.devDependencies?.xlsx ?? "";
+  const pinnedVersion = pinned.match(/xlsx-(\d+\.\d+\.\d+)\.tgz/)?.[1] ?? null;
+  let installed = null;
+  try {
+    installed = JSON.parse(
+      readFileSync(join(root, "node_modules", "xlsx", "package.json"), "utf8"),
+    ).version;
+  } catch {
+    installed = null;
+  }
+  if (pinnedVersion && installed !== pinnedVersion) {
+    console.log(
+      `  ⚠ 略過：node_modules 的 xlsx 是 ${installed ?? "（沒安裝）"}，` +
+        `不是釘住的 ${pinnedVersion}。這台機器產生的 assets/ 不可發布` +
+        `（會把 SheetJS 降回有安全警示的版本），所以不在這裡比對。` +
+        `請在裝得到 cdn.sheetjs.com 的環境執行：npm ci && npm run build:github，` +
+        `再把 github-pages-dist/ 的 index.html 與 assets/ 複製到根目錄。`,
+    );
+    return;
+  }
+
+  const indexHtml = read("index.html");
+  const entry = indexHtml.match(/src="\.\/assets\/([^"]+)"/)?.[1];
+  assert.ok(entry, "index.html 找不到進入點 script");
+  const bundle = readFileSync(join(root, "assets", entry), "utf8");
+  assert.ok(
+    bundle.includes(VERSION),
+    `根目錄的 assets/${entry} 不含 ${VERSION}——線上網站還是舊版。` +
+      `請執行 npm run build:github，再把 github-pages-dist/ 的 index.html 與 ` +
+      `assets/ 複製到根目錄（並刪掉舊雜湊的檔案）。`,
+  );
+});

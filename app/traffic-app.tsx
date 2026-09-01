@@ -8,6 +8,7 @@
 /* eslint-disable react-hooks/preserve-manual-memoization */
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -75,8 +76,12 @@ import {
   checkPeriodAgainstDate,
   findSurveyDate,
   periodDisplayLabel,
+  quarterInYearStyle,
+  YEAR_STYLE_LABELS,
+  type YearStyle,
   periodMismatchPrompt,
   periodUnknownNotice,
+  normalizeSurveyPeriod,
   PERIOD_DISPLAY_LABELS,
   type PeriodDateCheck,
   type PeriodDisplayMode,
@@ -1030,6 +1035,12 @@ export function diagramMarkup(
   arrowMode: ArrowMode,
   focusIndex: number,
   flowSummaryMode: FlowSummaryMode = "both",
+  /*
+   * 圖上那一行說明的季度要寫成民國年還是西元年。
+   * 只換文字：record.quarter 本身與所有分組、排序、識別鍵都不受影響。
+   * 預設原樣輸出，舊呼叫端與單元測試的行為不變。
+   */
+  quarterText: (quarter: string) => string = (quarter) => quarter,
 ) {
   const n = record.approaches.length;
   const expandedCanvas = style === "formal" || (style === "standard" && n > 4);
@@ -1891,7 +1902,7 @@ export function diagramMarkup(
         unit +
         "</text>" +
         '<text x="30" y="86">季度 ' +
-        esc(record.quarter) +
+        esc(quarterText(record.quarter)) +
         "　車種 " +
         esc(vehicle === "all" ? "全部車種" : vehicleLabel(record, vehicle)) +
         "　全路口流量 " +
@@ -2833,6 +2844,8 @@ function AuditWorkbench(props: {
   peak: ScopeKey;
   setPeak: (peak: ScopeKey) => void;
   quarter: string;
+  /* 季度要顯示成民國年還是西元年。只換文字，quarter 本身仍是儲存值。 */
+  showQuarter: (value: string) => string;
   quarterRecords: TrafficRecord[];
   lockQuarter: () => void;
   unlockQuarter: () => void;
@@ -2981,11 +2994,11 @@ function AuditWorkbench(props: {
           <button onClick={downloadAuditWorkbook}>下載核對 Excel</button>
           {lockedCount === props.quarterRecords.length && lockedCount > 0 ? (
             <button className="danger-outline" onClick={props.unlockQuarter}>
-              解除 {props.quarter} 鎖定
+              解除 {props.showQuarter(props.quarter)} 鎖定
             </button>
           ) : (
             <button className="primary" onClick={props.lockQuarter}>
-              鎖定 {props.quarter} 成果
+              鎖定 {props.showQuarter(props.quarter)} 成果
             </button>
           )}
         </div>
@@ -3503,6 +3516,25 @@ export default function TrafficApp() {
    * 季別為準（quarter 這個字串本身完全沒動）。使用者一季分兩個月做完時，
    * 這個切換讓他一眼看出 115Q1 實際是「115年2、3月」。
    */
+  /*
+   * 年份顯示成民國還是西元。**純顯示**——季別一律以民國年寫法儲存，
+   * 分組、排序、識別鍵全部走儲存值，切換不會多出季度也不動任何計算。
+   * 匯出的 Excel 跟著一起換，避免畫面寫 2026Q1、交出去的報表寫 115Q1。
+   */
+  const [yearStyle, setYearStyle] = useState<YearStyle>("roc");
+  /*
+   * 顯示用的季度字串。數值欄位一律不經過它。
+   *
+   * 包成 useCallback 是必要的：好幾個 useMemo（轉向圖 SVG、幾何示意圖）
+   * 會用到它，函式每次 render 都換一個新的話，那些 memo 等於沒有效果，
+   * 每次 render 都要重新組一整張 SVG。相依只有 yearStyle。
+   */
+  const showQuarter = useCallback(
+    function (value: string) {
+      return quarterInYearStyle(value, yearStyle);
+    },
+    [yearStyle],
+  );
   const [periodDisplay, setPeriodDisplay] =
     useState<PeriodDisplayMode>("quarter");
   const [importYear, setImportYear] = useState("");
@@ -4048,10 +4080,15 @@ export default function TrafficApp() {
           ];
       const labels: Record<string, string> = {};
       for (const key of quarters)
-        labels[key] = periodDisplayLabel(key, dates[key] || [], periodDisplay);
+        labels[key] = periodDisplayLabel(
+          key,
+          dates[key] || [],
+          periodDisplay,
+          yearStyle,
+        );
       return { labels, anyDate: Object.keys(dates).length > 0 };
     },
-    [projectRecords, quarters, periodDisplay],
+    [projectRecords, quarters, periodDisplay, yearStyle],
   );
   const quarterLabel = function (value: string) {
     return quarterLabels.labels[value] || value;
@@ -4269,9 +4306,15 @@ export default function TrafficApp() {
        * 同一站同一季同時有平日與假日時無法分辨，也對不上其他段落的寫法。
        */
       const siteLabelOf = function (record: TrafficRecord) {
-        return `${record.name || record.station} ${record.quarter}（${
-          record.surveyType || "待設定"
-        }）`;
+        /*
+         * 季度跟著畫面上的年份顯示切換走。這裡直接用 quarterInYearStyle 而不是
+         * showQuarter：showQuarter 每次 render 都是新的函式，放進相依陣列會讓
+         * 這個 memo 每次重算；yearStyle 是純值，才是正確的相依。
+         */
+        return `${record.name || record.station} ${quarterInYearStyle(
+          record.quarter,
+          yearStyle,
+        )}（${record.surveyType || "待設定"}）`;
       };
       /*
        * 代表資料：優先取「使用者目前選的路口＋目前選的資料別」的最新一季；
@@ -4597,7 +4640,7 @@ export default function TrafficApp() {
         factorMatrixCount: matrixSignatures.size,
       };
     },
-    [reportExportScope, selected, activeProject, vehicleCatalog],
+    [reportExportScope, selected, activeProject, vehicleCatalog, yearStyle],
   );
   const draftSections = useMemo(
     function (): DraftSectionKey[] {
@@ -4713,6 +4756,16 @@ export default function TrafficApp() {
   const importPeriod =
     importYear && importQuarterNo ? importYear + "Q" + importQuarterNo : "";
   /*
+   * 寫進資料的季度一律用民國年寫法。
+   *
+   * 輸入框同時接受民國與西元，但如果照打的字原樣存下去，同一季會因為寫法
+   * 不同而變成兩個不同的鍵——季度清單與歷季比較都是以這個字串分組的，
+   * 115Q1 與 2026Q1 會並列成兩季且永遠不會合併（兩者的排序鍵完全相同，
+   * 所以會相鄰出現，更難聯想到是寫法問題）。
+   * 正規化規則在三支共用的 period-date 模組裡。
+   */
+  const importPeriodKey = normalizeSurveyPeriod(importPeriod);
+  /*
    * ── 調查日期 × 期別檢查 ──────────────────────────────────────
    * 只讀 ImportPreview 已經解析好的表頭文字，不重新讀檔、不碰任何數值，
    * 也不會修改任何一筆紀錄。判斷邏輯集中在 lib/period-date.ts
@@ -4734,13 +4787,13 @@ export default function TrafficApp() {
                 ]
               : [];
         return checkPeriodAgainstDate(
-          importPeriod,
+          importPeriodKey,
           findSurveyDate(candidates),
           row.file,
         );
       });
     },
-    [importRows, importPeriod],
+    [importRows, importPeriodKey],
   );
   const importDateMismatches = importDateChecks.filter(function (item) {
     return item.status === "mismatch";
@@ -5110,7 +5163,7 @@ export default function TrafficApp() {
       const existing = records.find(function (record) {
         return (
           record.projectId === activeProjectId &&
-          record.quarter === importPeriod &&
+          record.quarter === importPeriodKey &&
           record.station === row.station &&
           (record.surveyType || "待設定") === (row.surveyType || "待設定")
         );
@@ -5230,7 +5283,7 @@ export default function TrafficApp() {
 
   function commitImport() {
     if (!activeProjectId) return notify("請先建立並選擇計畫。");
-    const q = importPeriod;
+    const q = importPeriodKey;
     if (!q) return notify("請先選擇調查年度與季度。");
     /*
      * 站號在檔案與檔名都讀不到時，使用者可以在預覽列補填；這裡把補填的值
@@ -5629,6 +5682,8 @@ export default function TrafficApp() {
         arrowMode,
         focusIndex,
         flowSummaryMode,
+        /* 圖上的季度跟著畫面的年份顯示切換走。 */
+        showQuarter,
       );
     },
     [
@@ -5641,6 +5696,7 @@ export default function TrafficApp() {
       arrowMode,
       focusIndex,
       flowSummaryMode,
+      showQuarter,
     ],
   );
   /*
@@ -5768,9 +5824,12 @@ export default function TrafficApp() {
         "all",
         "focus",
         0,
+        "both",
+        /* 圖上的季度跟著畫面的年份顯示切換走。 */
+        showQuarter,
       );
     },
-    [view, selected, peak],
+    [view, selected, peak, showQuarter],
   );
   const geometryCardPreviewHtml = useMemo(
     function () {
@@ -5785,6 +5844,8 @@ export default function TrafficApp() {
         "focus",
         focusIndex,
         flowSummaryMode,
+        /* 圖上的季度跟著畫面的年份顯示切換走。 */
+        showQuarter,
       );
     },
     [
@@ -5794,6 +5855,7 @@ export default function TrafficApp() {
       peak,
       focusIndex,
       flowSummaryMode,
+      showQuarter,
     ],
   );
 
@@ -5998,11 +6060,21 @@ export default function TrafficApp() {
             arrowMode,
             focusIndex,
             flowSummaryMode,
+            /* 圖上的季度跟著畫面的年份顯示切換走。 */
+            showQuarter,
           ),
         ],
         { type: "image/svg+xml;charset=utf-8" },
       ),
-      selected.quarter + "_" + selected.station + "_" + peak + "_轉向圖.svg",
+      /* 同 ZIP：帶上資料別，否則同一站的平日與假日會下載成兩個同名檔。 */
+      selected.quarter +
+        "_" +
+        selected.station +
+        "_" +
+        selected.surveyType +
+        "_" +
+        peak +
+        "_轉向圖.svg",
     );
   }
   async function exportPng() {
@@ -6018,9 +6090,19 @@ export default function TrafficApp() {
           arrowMode,
           focusIndex,
           flowSummaryMode,
+          /* 圖上的季度跟著畫面的年份顯示切換走。 */
+          showQuarter,
         ),
       ),
-      selected.quarter + "_" + selected.station + "_" + peak + "_轉向圖.png",
+      /* 同 ZIP：帶上資料別，否則同一站的平日與假日會下載成兩個同名檔。 */
+      selected.quarter +
+        "_" +
+        selected.station +
+        "_" +
+        selected.surveyType +
+        "_" +
+        peak +
+        "_轉向圖.png",
     );
   }
   async function exportPdf(rows = selected ? [selected] : []) {
@@ -6042,6 +6124,8 @@ export default function TrafficApp() {
           "all",
           0,
           flowSummaryMode,
+          /* 圖上的季度跟著畫面的年份顯示切換走。 */
+          showQuarter,
         ),
         2,
       );
@@ -6076,7 +6160,7 @@ export default function TrafficApp() {
     const trendRows = trendSeriesRecords(exportRecords, selected).map(
       function (record) {
         return {
-          季度: record.quarter,
+          季度: showQuarter(record.quarter),
           資料別: record.surveyType || "待設定",
           ...Object.fromEntries(
             PEAK_KEYS.flatMap(function (key) {
@@ -6103,6 +6187,8 @@ export default function TrafficApp() {
     const vehicleComposition = exportRecords.flatMap(function (record) {
       return (["SURVEY", ...PEAK_KEYS] as CompositionScope[]).flatMap(
         function (scope) {
+          /* SURVEY 一定算得出來；三個尖峰範圍要有對應的視窗才算得出來。 */
+          const computable = scope === "SURVEY" || hasScopeValue(record, scope);
           const analysisVehicles = recordVehicleIds(record);
           const counts = Object.fromEntries(
             analysisVehicles.map(function (vehicleKey) {
@@ -6121,7 +6207,7 @@ export default function TrafficApp() {
             });
             return {
               計畫: recordProject?.name || activeProject?.name || "",
-              季度: record.quarter,
+              季度: showQuarter(record.quarter),
               站號: record.station,
               路口名稱: record.name,
               分析範圍: compositionScopeLabel(record, scope),
@@ -6136,8 +6222,19 @@ export default function TrafficApp() {
                   : scopeWindowLabel(record, scope),
               車種: vehicleLabel(record, vehicleKey),
               單位: scope === "SURVEY" ? "輛/調查時段" : "輛/hr",
-              數量: counts[vehicleKey],
-              組成比例: total ? counts[vehicleKey] / total : 0,
+              /*
+               * 這個統計範圍算不出來時要寫「－」，不能寫 0。
+               *
+               * 不足 24 小時的調查沒有「全日尖峰小時」（peakWindows.DAY 是
+               * null），實測 11017T1502～T1505 這幾份 4 小時的真實檔就是如此。
+               * 舊版照樣為 DAY 產生列、數量寫 0、組成比例寫 0.0%，那些 0 會被
+               * Excel 的自動篩選、加總與平均一起吃進去，看起來像「那個時段真的
+               * 沒有車」。同一支函式裡的另一張表早就是這樣處理的
+               * （見上方「算不出來的一律寫「－」，不是 0」那段註解），
+               * 車種組成這一張是唯一漏掉的。
+               */
+              數量: computable ? counts[vehicleKey] : "－",
+              組成比例: computable && total ? counts[vehicleKey] / total : "－",
             };
           });
         },
@@ -6150,7 +6247,7 @@ export default function TrafficApp() {
         });
         return {
           計畫: recordProject?.name || activeProject?.name || "",
-          季度: record.quarter,
+          季度: showQuarter(record.quarter),
           站號: record.station,
           路口名稱: record.name,
           目的支線代碼: row.approach.sourceCode || row.approach.id,
@@ -6212,7 +6309,7 @@ export default function TrafficApp() {
           return {
             計畫代碼: project?.code || "",
             計畫名稱: project?.name || "",
-            季度: record.quarter,
+            季度: showQuarter(record.quarter),
             站號: record.station,
             路口名稱: record.name,
             支線代碼: approach.sourceCode || String.fromCharCode(65 + index),
@@ -6300,7 +6397,7 @@ export default function TrafficApp() {
               })?.name ||
               activeProject?.name ||
               "",
-            季度: record.quarter,
+            季度: showQuarter(record.quarter),
             站號: record.station,
             路口名稱: record.name,
             支線代碼: row.approach.sourceCode || row.approach.id,
@@ -6374,7 +6471,7 @@ export default function TrafficApp() {
                 if (!destination || destination.id === row.originId)
                   return null;
                 return {
-                  季度: record.quarter,
+                  季度: showQuarter(record.quarter),
                   站號: record.station,
                   路口名稱: record.name,
                   時段: SCOPE_SHORT_LABELS[peakKey],
@@ -6399,7 +6496,7 @@ export default function TrafficApp() {
         return PEAK_KEYS.flatMap(function (peakKey) {
           return branchBalance(record, peakKey).map(function (row) {
             return {
-              季度: record.quarter,
+              季度: showQuarter(record.quarter),
               站號: record.station,
               路口名稱: record.name,
               時段: SCOPE_SHORT_LABELS[peakKey],
@@ -6629,6 +6726,11 @@ export default function TrafficApp() {
     if (!current.length) return notify("本季度沒有可輸出的車種組成資料。");
     const unit = compositionScopeUnit(compositionScope);
     const summaryRows = current.map(function (record) {
+      /* 選定的統計範圍算不出來時（例如不足 24 小時卻選了全日尖峰小時），
+         數量與比例一律寫「－」，不可以寫 0。 */
+      const computable =
+        compositionScope === "SURVEY" ||
+        hasScopeValue(record, compositionScope);
       const analysisVehicles = recordVehicleIds(record);
       const counts = Object.fromEntries(
         analysisVehicles.map(function (vehicleKey) {
@@ -6644,7 +6746,7 @@ export default function TrafficApp() {
       const row: Record<string, string | number> = {
         計畫代碼: activeProject?.code || "",
         計畫名稱: activeProject?.name || "",
-        季度: record.quarter,
+        季度: showQuarter(record.quarter),
         站號: record.station,
         路口名稱: record.name,
         分析範圍: compositionScopeLabel(record, compositionScope),
@@ -6653,16 +6755,23 @@ export default function TrafficApp() {
             ? formatSurveyHours(record)
             : scopeWindowLabel(record, compositionScope),
         單位: unit,
-        實際車輛合計: total,
+        /* 算不出來的統計範圍寫「－」，不是 0——理由同 vehicleComposition。 */
+        實際車輛合計: computable ? total : "－",
       };
       analysisVehicles.forEach(function (vehicleKey) {
         const label = vehicleLabel(record, vehicleKey);
-        row[label] = counts[vehicleKey];
-        row[label + "比例（%）"] = total ? counts[vehicleKey] / total : 0;
+        row[label] = computable ? counts[vehicleKey] : "－";
+        row[label + "比例（%）"] =
+          computable && total ? counts[vehicleKey] / total : "－";
       });
       return row;
     });
     const detailRows = current.flatMap(function (record) {
+      /* 選定的統計範圍算不出來時（例如不足 24 小時卻選了全日尖峰小時），
+         數量與比例一律寫「－」，不可以寫 0。 */
+      const computable =
+        compositionScope === "SURVEY" ||
+        hasScopeValue(record, compositionScope);
       const analysisVehicles = recordVehicleIds(record);
       const counts = analysisVehicles.map(function (vehicleKey) {
         return recordVehicleTotal(record, compositionScope, vehicleKey);
@@ -6672,14 +6781,14 @@ export default function TrafficApp() {
       }, 0);
       return analysisVehicles.map(function (vehicleKey, index) {
         return {
-          季度: record.quarter,
+          季度: showQuarter(record.quarter),
           站號: record.station,
           路口名稱: record.name,
           分析範圍: compositionScopeLabel(record, compositionScope),
           車種: vehicleLabel(record, vehicleKey),
           單位: unit,
-          數量: counts[index],
-          組成比例: total ? counts[index] / total : 0,
+          數量: computable ? counts[index] : "－",
+          組成比例: computable && total ? counts[index] / total : "－",
         };
       });
     });
@@ -6832,7 +6941,13 @@ export default function TrafficApp() {
     const zip = new JSZip();
     for (const record of current)
       zip.file(
-        record.station + "_" + peak + ".png",
+        /*
+         * 檔名一定要帶資料別。平日與假日是兩筆各自獨立的紀錄（record.id、
+         * isSameSurvey 都把它算進識別鍵），但 ZIP 的檔名只有站號＋時段，
+         * JSZip 遇到同名會直接覆寫——同一站的平日圖與假日圖只會留下一張，
+         * 而且從檔名看不出留下的是哪一天。過程完全沒有提示。
+         */
+        record.station + "_" + record.surveyType + "_" + peak + ".png",
         await svgToPng(
           diagramMarkup(
             record,
@@ -6843,6 +6958,8 @@ export default function TrafficApp() {
             "all",
             0,
             flowSummaryMode,
+            /* 圖上的季度跟著畫面的年份顯示切換走。 */
+            showQuarter,
           ),
           2,
         ),
@@ -6882,6 +6999,8 @@ export default function TrafficApp() {
           "all",
           0,
           flowSummaryMode,
+          /* 圖上的季度跟著畫面的年份顯示切換走。 */
+          showQuarter,
         ),
         2,
       );
@@ -6933,11 +7052,14 @@ export default function TrafficApp() {
         );
         for (const record of projectRows) {
           zip.file(
+            /* 同上：不帶資料別的話，同一站的平日與假日圖會互相覆寫。 */
             folder +
               "/PNG/" +
               record.quarter +
               "_" +
               record.station +
+              "_" +
+              record.surveyType +
               "_" +
               peak +
               ".png",
@@ -6952,6 +7074,8 @@ export default function TrafficApp() {
                 "all",
                 0,
                 flowSummaryMode,
+                /* 圖上的季度跟著畫面的年份顯示切換走。 */
+                showQuarter,
               ),
               2,
             ),
@@ -7669,6 +7793,25 @@ export default function TrafficApp() {
             >
               期別顯示：{PERIOD_DISPLAY_LABELS[periodDisplay]}
             </button>
+            {/*
+              年份顯示切換。與上面那顆是兩個獨立的軸：一個換「季別／調查月份」，
+              一個換「民國／西元」。合成一顆循環鈕會變成四種狀態，反而難用。
+            */}
+            <button
+              type="button"
+              className={
+                yearStyle === "ad"
+                  ? "period-display-toggle is-on"
+                  : "period-display-toggle"
+              }
+              data-testid="year-style-toggle"
+              title="切換年份顯示方式：民國年（115Q1）／西元年（2026Q1）。畫面與匯出的 Excel 會一起換；資料一律以民國年儲存，切換不影響分組、排序與計算。"
+              onClick={function () {
+                setYearStyle(yearStyle === "ad" ? "roc" : "ad");
+              }}
+            >
+              年份顯示：{YEAR_STYLE_LABELS[yearStyle]}
+            </button>
             <span className="demo-pill">
               {allRecordsEmpty ? "空白正式環境" : projects.length + " 個計畫"}
             </span>
@@ -7815,7 +7958,7 @@ export default function TrafficApp() {
                   <span className="eyebrow">QUARTERLY OVERVIEW</span>
                   <h1>
                     {activeProject?.name || "尚未選擇計畫"} ·{" "}
-                    {quarter || "尚無季度"}
+                    {quarter ? showQuarter(quarter) : "尚無季度"}
                   </h1>
                   <p>
                     流量值單位隨所選時段變動（目前為 {scopeUnit(peak)}）；
@@ -8041,19 +8184,35 @@ export default function TrafficApp() {
                   </div>
                 </div>
                 <label>
-                  調查年度（民國年）
+                  調查年度（民國或西元）
                   <input
                     type="number"
                     min="1"
-                    max="999"
-                    placeholder="例如 115"
+                    max="9999"
+                    placeholder="例如 115 或 2026"
                     value={importYear}
                     onChange={function (e) {
+                      /*
+                       * 民國與西元都收。舊版 max="999" 加上 slice(0, 3)，
+                       * 打 2026 會被截成 202，而且不會有任何提示——
+                       * 使用者拿到西元年標示的委託案時只能自己換算。
+                       * 全日交通量的季度輸入框一直是兩種都收的。
+                       */
                       setImportYear(
-                        e.target.value.replace(/\D/g, "").slice(0, 3),
+                        e.target.value.replace(/\D/g, "").slice(0, 4),
                       );
                     }}
                   />
+                  {/*
+                    寫入的季度一律是民國年寫法，打西元時當場說明會存成什麼，
+                    否則使用者會以為畫面上會看到 2026Q2、找不到就重打一次，
+                    同一季被匯入兩遍。
+                  */}
+                  {importPeriodKey && importPeriodKey !== importPeriod ? (
+                    <small className="from-content">
+                      將存成「{importPeriodKey}」（資料一律以民國年記錄）
+                    </small>
+                  ) : null}
                 </label>
                 <label>
                   季度
@@ -8076,7 +8235,7 @@ export default function TrafficApp() {
                       " 年第 " +
                       importQuarterNo +
                       " 季（" +
-                      importPeriod +
+                      importPeriodKey +
                       "）"
                     : "尚未完成設定"}
                 </output>
@@ -8209,7 +8368,7 @@ export default function TrafficApp() {
                   </button>
                   <small>
                     {importPeriod
-                      ? "本批次將寫入 " + importPeriod
+                      ? "本批次將寫入 " + importPeriodKey
                       : "年度與季度為必填"}
                   </small>
                 </article>
@@ -8591,7 +8750,7 @@ export default function TrafficApp() {
                             function (record) {
                               return (
                                 record.projectId === activeProjectId &&
-                                record.quarter === importPeriod &&
+                                record.quarter === importPeriodKey &&
                                 record.station === row.station &&
                                 (record.surveyType || "待設定") ===
                                   (row.surveyType || "待設定")
@@ -9436,7 +9595,7 @@ export default function TrafficApp() {
                       <div>
                         <span className="eyebrow">ALL INTERSECTIONS</span>
                         <h2>
-                          {quarter} 各路口{" "}
+                          {showQuarter(quarter)} 各路口{" "}
                           {compositionScope === "SURVEY"
                             ? "全調查時段"
                             : SCOPE_SHORT_LABELS[compositionScope]}{" "}
@@ -9940,7 +10099,7 @@ export default function TrafficApp() {
                         <span className="eyebrow">SELECTED</span>
                         <h2>{selected.name}</h2>
                         <p>
-                          資料季度 {selected.quarter} · 原始站號{" "}
+                          資料季度 {showQuarter(selected.quarter)} · 原始站號{" "}
                           {selected.station}
                         </p>
                         <dl>
@@ -10166,7 +10325,7 @@ export default function TrafficApp() {
                         <div>
                           <h2>{selected.name}</h2>
                           <small>
-                            資料季度 {selected.quarter} · 原始站號{" "}
+                            資料季度 {showQuarter(selected.quarter)} · 原始站號{" "}
                             {selected.station}
                           </small>
                         </div>
@@ -10669,7 +10828,7 @@ export default function TrafficApp() {
                         <span>{project.code}</span>
                         <h2>{project.name}</h2>
                         <strong>
-                          {quarter || "尚未選擇季度"}
+                          {quarter ? showQuarter(quarter) : "尚未選擇季度"}
                           {quarter && !selectedQuarterRows.length
                             ? " · 該季無資料"
                             : ""}
@@ -10745,7 +10904,10 @@ export default function TrafficApp() {
                   <div className="panel-head">
                     <div>
                       <span className="eyebrow">INTERSECTION COMPARISON</span>
-                      <h2>{quarter || "尚未選擇季度"} 跨計畫路口尖峰比較</h2>
+                      <h2>
+                        {quarter ? showQuarter(quarter) : "尚未選擇季度"}{" "}
+                        跨計畫路口尖峰比較
+                      </h2>
                     </div>
                   </div>
                   <div className="table-scroll">
@@ -10984,7 +11146,7 @@ export default function TrafficApp() {
                   <section className="page-head compare-subhead">
                     <div>
                       <h2>
-                        {activeProject.name} · {quarter} 多路口排名
+                        {activeProject.name} · {showQuarter(quarter)} 多路口排名
                       </h2>
                     </div>
                     {/*
@@ -11043,6 +11205,7 @@ export default function TrafficApp() {
               notify={notify}
               pendingCount={pendingSurveyTypeRecords().length}
               assignPendingSurveyType={assignPendingSurveyType}
+              showQuarter={showQuarter}
               quarterLabels={quarterLabels.labels}
             />
           )}
@@ -11053,6 +11216,7 @@ export default function TrafficApp() {
               peak={peak}
               setPeak={setPeak}
               quarter={quarter}
+              showQuarter={showQuarter}
               quarterRecords={current}
               lockQuarter={lockCurrentQuarter}
               unlockQuarter={unlockCurrentQuarter}
@@ -11389,7 +11553,7 @@ export default function TrafficApp() {
                       <div className="panel-head">
                         <div>
                           <span className="eyebrow">ISSUE LIST</span>
-                          <h2>{quarter} 檢查結果</h2>
+                          <h2>{showQuarter(quarter)} 檢查結果</h2>
                         </div>
                         <span className="status-dot">
                           {currentIssues.length} 項
@@ -11641,6 +11805,7 @@ export default function TrafficApp() {
               setEdited={setConclusionEdited}
               templateName={conclusionTemplateName}
               setTemplateName={setConclusionTemplateName}
+              showQuarter={showQuarter}
             />
           )}
 
@@ -12100,7 +12265,7 @@ export default function TrafficApp() {
                               });
                             }}
                           />
-                          {item}
+                          {showQuarter(item)}
                         </label>
                       );
                     })}
@@ -12317,14 +12482,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.40-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.42-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.40-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.42-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
@@ -12559,6 +12724,15 @@ export default function TrafficApp() {
  * 產生的文字可以直接手改，改過之後不會被自動覆蓋——只有按「重新產生」
  * 才會蓋掉，而且會先問過。條件可以存成範本重複使用。
  */
+/*
+ * 年度是「115」這種光年份的字串，沒有 Qn，showQuarter() 認不得。
+ * 借一個季度殼子換算完再把 Qn 去掉；換不成就原樣回傳。
+ */
+function showYearOnly(year: string, show: (value: string) => string) {
+  const match = String(show(String(year) + "Q1")).match(/^(\d{2,4})Q1$/);
+  return match ? match[1] : String(year);
+}
+
 function ConclusionStudio(props: {
   records: TrafficRecord[];
   projectName: string;
@@ -12580,6 +12754,11 @@ function ConclusionStudio(props: {
   setEdited: (value: boolean) => void;
   templateName: string;
   setTemplateName: (value: string) => void;
+  /*
+   * 季度要顯示成民國年還是西元年。只換看到的字：下拉選單的 value、篩選、
+   * 排序與分組一律走儲存的季度字串，切換不會挑到不同的資料。
+   */
+  showQuarter: (value: string) => string;
 }) {
   const { condition, setCondition, draft, setDraft, edited, setEdited, templateName, setTemplateName } =
     props;
@@ -12685,6 +12864,8 @@ function ConclusionStudio(props: {
         projectName: props.projectName,
         systemVersion: VERSION,
         generatedAt: stamp,
+        /* 草稿上的季度跟著畫面的年份顯示切換走；篩選與排序仍走儲存值。 */
+        showQuarter: props.showQuarter,
       }),
     );
     setEdited(false);
@@ -12786,7 +12967,7 @@ function ConclusionStudio(props: {
                     >
                       {quarters.map((q) => (
                         <option key={q} value={q}>
-                          {q}
+                          {props.showQuarter(q)}
                         </option>
                       ))}
                     </select>
@@ -12803,7 +12984,7 @@ function ConclusionStudio(props: {
                     >
                       {years.map((y) => (
                         <option key={y} value={y}>
-                          {y} 年
+                          {showYearOnly(y, props.showQuarter)} 年
                         </option>
                       ))}
                     </select>
@@ -12823,7 +13004,7 @@ function ConclusionStudio(props: {
                       >
                         {quarters.map((q) => (
                           <option key={q} value={q}>
-                            {q}
+                            {props.showQuarter(q)}
                           </option>
                         ))}
                       </select>
@@ -12844,7 +13025,7 @@ function ConclusionStudio(props: {
                       >
                         {quarters.map((q) => (
                           <option key={q} value={q}>
-                            {q}
+                            {props.showQuarter(q)}
                           </option>
                         ))}
                       </select>
@@ -13243,6 +13424,12 @@ function TrendView(props: {
    * 摘要與 X 軸上必須是同一個字。查不到就原樣用季別。
    */
   quarterLabels: Record<string, string>;
+  /**
+   * 季度字串在匯出檔裡要寫成的樣子（民國年或西元年）。
+   * 與上層的「年份顯示」切換同一個來源，避免畫面寫 2026Q1、匯出寫 115Q1。
+   * 只換顯示的字；分組與計算仍走 record.quarter 的儲存值。
+   */
+  showQuarter: (value: string) => string;
 }) {
   const [trendMode, setTrendMode] = useState<PeakKey | "ALL">(props.peak);
   const intersectionKey = function (record: TrafficRecord) {
@@ -13482,7 +13669,7 @@ function TrendView(props: {
         }),
       ) as Record<PeakKey, number | null>;
       return {
-        季度: record.quarter,
+        季度: props.showQuarter(record.quarter),
         資料別: record.surveyType || "待設定",
         /* C、D、E 欄＝三個尖峰的量；F、G、H 欄＝各自的較前季百分比。 */
         ...Object.fromEntries(
@@ -13695,7 +13882,7 @@ function TrendView(props: {
               {allQuarters.map(function (q) {
                 return (
                   <option key={q} value={q}>
-                    {q}
+                    {props.showQuarter(q)}
                   </option>
                 );
               })}
@@ -13719,7 +13906,7 @@ function TrendView(props: {
               {allQuarters.map(function (q) {
                 return (
                   <option key={q} value={q}>
-                    {q}
+                    {props.showQuarter(q)}
                   </option>
                 );
               })}

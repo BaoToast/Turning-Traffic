@@ -188,6 +188,129 @@ ok(
       .join(" "),
 );
 
+/* ── 民國年 ⇄ 西元年顯示切換（v2.1.42） ────────────────────
+ *
+ * 和期別顯示是兩個獨立的開關：期別切「季別／調查月份」，年份切「民國／西元」。
+ * 兩個都只換文字。這裡把年份切到西元之後再量一次同一份畫面：
+ * 除了年份那幾個字，每一個數字都必須逐字相同。
+ */
+const yearToggle = page.locator('[data-testid="year-style-toggle"]');
+ok("有年份顯示切換鈕", (await yearToggle.count()) > 0);
+const yearToggleText = async () =>
+  (await yearToggle.count()) ? (await yearToggle.first().innerText()).trim() : "（沒有這顆按鈕）";
+ok("預設顯示民國年", /年份顯示：民國年/.test(await yearToggleText()), await yearToggleText());
+
+/* 先切回季別，才量得到「季度字串本身」換了年份寫法。 */
+if (await toggle.count()) {
+  await toggle.first().click();
+  await page.waitForTimeout(600);
+}
+const rocText = await dashboardText();
+const rocQuarter = await headerQuarterText();
+ok("民國年模式下季度下拉是 115Q1", /115Q1/.test(rocQuarter), rocQuarter);
+
+if (await yearToggle.count()) {
+  await yearToggle.first().click();
+  await page.waitForTimeout(600);
+}
+ok("切到「西元年」", /年份顯示：西元年/.test(await yearToggleText()), await yearToggleText());
+const adQuarter = await headerQuarterText();
+ok(
+  "季度下拉改成 2026Q1，而且不再出現民國年寫法",
+  /2026Q1/.test(adQuarter) && !/115Q1/.test(adQuarter),
+  adQuarter,
+);
+const adText = await dashboardText();
+ok(
+  "切換年份寫法前後畫面上的數字完全相同（只有年份文字變了）",
+  rocText.replaceAll("115Q1", "§") === adText.replaceAll("2026Q1", "§"),
+  (() => {
+    const a = rocText.replaceAll("115Q1", "§").split(" ");
+    const b = adText.replaceAll("2026Q1", "§").split(" ");
+    for (let i = 0; i < Math.max(a.length, b.length); i += 1)
+      if (a[i] !== b[i]) return `第 ${i + 1} 個詞 ${a[i]} → ${b[i]}`;
+    return "完全相同";
+  })(),
+);
+ok("量到的畫面確實有內容（不是拿空白畫面當通過）", rocText.length > 200, `${rocText.length} 字`);
+
+/*
+ * 全分頁掃一遍。
+ *
+ * 只量儀表板是不夠的：這一輪就是這樣，儀表板過了，實際上還有五處
+ *（頁首標題、各路口組成、跨計畫比較、多路口排名、計畫卡片）沒跟著切換，
+ * 畫面上同時出現 2026Q1 與 115Q1。所以切到西元年之後，
+ * **任何一個分頁都不可以再看到民國年寫法的季度**。
+ */
+const NAV_LABELS = await page.evaluate(() =>
+  [...document.querySelectorAll("nav button")].map((b) => b.textContent.trim()),
+);
+ok("抓得到分頁清單（不是掃了 0 個分頁）", NAV_LABELS.length >= 5, NAV_LABELS.join("、"));
+const ROC_QUARTER = /(?:^|[^0-9])(\d{2,3})Q[1-4](?![0-9])/;
+/*
+ * 兩處**刻意**維持民國年寫法，掃描時要先拿掉，否則會永遠紅字：
+ *  ・匯入頁的「將存成『115Q1』」——它講的就是「會存成什麼」，
+ *    那個值本來就是民國年，跟著顯示切換走反而是錯的。
+ *  ・更新說明裡解釋儲存規則的那段文字，本身就在舉「115Q1 與 2026Q1」的例。
+ */
+const INTENTIONAL_ROC = [
+  /將存成「[^」]*」/g,
+  /\d{2,3}\s*年第\s*[1-4]\s*季（\d{2,3}Q[1-4]）/g,
+  /本批次將寫入 \d{2,3}Q[1-4]/g,
+  /確認寫入 \d{2,3}Q[1-4]/g,
+];
+/*
+ * 這兩頁整頁都是說明文字（更新說明、操作手冊），內文本來就在舉
+ *「115Q1 與 2026Q1」當例子解釋儲存規則，不是資料顯示，整頁跳過。
+ */
+const DOC_PAGES = ["備份", "手冊"];
+const leftovers = [];
+for (const label of NAV_LABELS) {
+  if (DOC_PAGES.some((word) => label.includes(word))) continue;
+  await go(label);
+  let text = (await page.locator(".content").first().innerText()).replace(/\s+/g, " ");
+  for (const pattern of INTENTIONAL_ROC) text = text.replace(pattern, "〔說明文字〕");
+  const hit = text.match(ROC_QUARTER);
+  if (hit) leftovers.push(`${label}：…${text.slice(Math.max(0, hit.index - 20), hit.index + 20)}…`);
+}
+ok(
+  "切成西元年之後，每一個分頁都看不到民國年寫法的季度",
+  leftovers.length === 0,
+  leftovers.slice(0, 3).join("  ｜  "),
+);
+/* 掃描本身要有效：至少要真的掃過大部分分頁，不能因為條件寫錯而全部跳過。 */
+ok(
+  "掃描確實跑過大部分分頁",
+  NAV_LABELS.filter((label) => !DOC_PAGES.some((w) => label.includes(w))).length >= 10,
+);
+await go("總覽儀表板");
+
+/* 兩個開關可以同時開：西元年 + 調查月份 */
+if (await toggle.count()) {
+  await toggle.first().click();
+  await page.waitForTimeout(600);
+}
+const bothText = await headerQuarterText();
+ok(
+  "西元年 + 調查月份會顯示「2026年2、3月」",
+  /2026年2、3月/.test(bothText),
+  bothText,
+);
+
+/* 切回民國年，畫面要完全回到原樣 */
+if (await yearToggle.count()) {
+  await yearToggle.first().click();
+  await page.waitForTimeout(600);
+}
+if (await toggle.count()) {
+  await toggle.first().click();
+  await page.waitForTimeout(600);
+}
+ok(
+  "兩個開關都切回原位後，畫面與一開始逐字相同",
+  (await dashboardText()) === rocText,
+);
+
 ok("沒有 JS 例外", errors.length === 0, errors.slice(0, 2).join(" | "));
 
 await browser.close();

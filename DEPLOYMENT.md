@@ -62,6 +62,30 @@ npm run build:github
 
 全部通過之後才重新產生手冊、更新版號並發布。
 
+## 建置產物一定要複製到根目錄
+
+`npm run build:github` 的產出在 `github-pages-dist/`，**但發布的是 repository
+根目錄**（見上面「只有一條發布路徑」）。建完之後必須：
+
+```bash
+cp github-pages-dist/index.html .
+rm -rf assets && cp -r github-pages-dist/assets .
+```
+
+然後把舊版的 `assets/index-<舊雜湊>.js` 從 repository 刪掉（上傳只覆蓋同名檔，
+不會刪）。
+
+> 漏掉這一步的後果是**線上網站完全沒有更新，而每一個版號字串都說更新了**：
+> `package.json`、手冊、`CHANGELOG.md`、畫面左下角的版號全部是新的，
+> 只有實際跑的那份 JS 是舊的。實測 v2.1.41 與 v2.1.42 的交付包都還帶著
+> v2.1.40 的 `assets/`。`tests/release-structure.test.mjs` 的
+> 「根目錄的網站建置產物是本版」現在會擋這件事。
+>
+> ⚠️ 這一步**必須在裝得到 `cdn.sheetjs.com` 的環境**做。用 npm registry 的
+> 替代 `xlsx` 產生的 `assets/` 會把 SheetJS 降回有安全警示的 0.18.5，
+> 而且從畫面上完全看不出來。裝到的不是釘住的版本時，那一支測試會略過
+> 並把原因印出來——**看到「略過」就代表這一份 `assets/` 還沒重建**。
+
 ## 人工上傳 GitHub 時
 
 **以點開頭的項目用網頁「拖曳上傳」會被整批濾掉，而且完全不出聲**——

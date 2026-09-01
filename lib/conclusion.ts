@@ -200,7 +200,24 @@ export type ConclusionMeta = {
   systemVersion: string;
   /** 由畫面傳入，避免這支純函式碰時間（測試才能穩定）。 */
   generatedAt: string;
+  /*
+   * 季度在草稿上要寫成民國年還是西元年。
+   *
+   * **純顯示**的換字：篩選（record.quarter === scope.quarter）、排序
+   *（quarterKey）與分組一律走傳進來的儲存值，換寫法不會挑到不同的資料、
+   * 也不會動到任何數字。不傳就照原樣輸出，舊呼叫端與單元測試的行為不變。
+   */
+  showQuarter?: (quarter: string) => string;
 };
+
+/*
+ * 季度在草稿上要寫成民國年還是西元年（見 ConclusionMeta.showQuarter）。
+ *
+ * 用模組層變數而不是一路傳參數：組字的輔助函式有七、八個，全部加一個參數
+ * 會讓每一個簽章都變髒。buildConclusion 是同步的，進入時設定、用完即可。
+ * 篩選、排序與分組一律走儲存值，這裡只換看到的字。
+ */
+let quarterText: (quarter: string) => string = (quarter) => String(quarter ?? "");
 
 const PEAK_LABEL: Record<PeakKey, string> = {
   AM: "上午尖峰",
@@ -400,16 +417,30 @@ function branchesOf(peakData: ConclusionPeakData, condition: ConclusionCondition
   });
 }
 
-function scopeLabel(scope: ConclusionScope, records: ConclusionRecord[]) {
-  if (scope.kind === "quarter") return scope.quarter;
-  if (scope.kind === "year") return scope.year + " 年度";
-  if (scope.kind === "range") return scope.from + "～" + scope.to;
+function scopeLabel(
+  scope: ConclusionScope,
+  records: ConclusionRecord[],
+  show: (quarter: string) => string,
+) {
+  if (scope.kind === "quarter") return show(scope.quarter);
+  if (scope.kind === "year") return showYear(scope.year, show) + " 年度";
+  if (scope.kind === "range")
+    return show(scope.from) + "～" + show(scope.to);
   const quarters = Array.from(new Set(records.map((r) => r.quarter))).sort(
     (a, b) => quarterKey(a) - quarterKey(b),
   );
   return quarters.length
-    ? "全計畫（" + quarters[0] + "～" + quarters.at(-1) + "）"
+    ? "全計畫（" + show(quarters[0]) + "～" + show(quarters.at(-1) as string) + "）"
     : "全計畫";
+}
+
+/*
+ * 年度是「115」這種光年份的字串，沒有 Qn，show() 認不得。
+ * 借一個季度殼子換算完再把 Qn 去掉；換不成就原樣回傳。
+ */
+function showYear(year: string, show: (quarter: string) => string) {
+  const match = String(show(String(year) + "Q1")).match(/^(\d{2,4})Q1$/);
+  return match ? match[1] : String(year);
 }
 
 /** 一個路口、一個尖峰要寫出來的那幾行。 */
@@ -670,12 +701,12 @@ function describeGrowth(
       point.value > best.value ? point : best,
     );
     lines.push(
-      `　${PEAK_LABEL[peak]}總流量由 ${first.quarter} 的 ${num(first.value, digits)} PCU/hr ` +
-        `變為 ${last.quarter} 的 ${num(last.value, digits)} PCU/hr，` +
+      `　${PEAK_LABEL[peak]}總流量由 ${quarterText(first.quarter)} 的 ${num(first.value, digits)} PCU/hr ` +
+        `變為 ${quarterText(last.quarter)} 的 ${num(last.value, digits)} PCU/hr，` +
         (change === null
           ? "起始季為 0，變動幅度無法以百分比表示"
           : `${change >= 0 ? "增加" : "減少"} ${Math.abs(change).toFixed(1)}%`) +
-        `；期間最高為 ${peakPoint.quarter}（${num(peakPoint.value, digits)} PCU/hr）。`,
+        `；期間最高為 ${quarterText(peakPoint.quarter)}（${num(peakPoint.value, digits)} PCU/hr）。`,
     );
   }
   return lines;
@@ -691,7 +722,7 @@ function describeExtremes(
   for (const peak of peaks) {
     const points = records
       .map((record) => ({
-        label: `${record.station} ${record.name}（${record.quarter}）`,
+        label: `${record.station} ${record.name}（${quarterText(record.quarter)}）`,
         value: record.peaks[peak]?.totalPcu ?? null,
       }))
       .filter((point) => point.value !== null) as {
@@ -716,7 +747,7 @@ function recordTitle(record: ConclusionRecord) {
   const type = record.surveyType && record.surveyType !== "待設定"
     ? `・${record.surveyType}`
     : "";
-  return `${record.quarter}　${record.station}　${record.name}${type}`;
+  return `${quarterText(record.quarter)}　${record.station}　${record.name}${type}`;
 }
 
 /**
@@ -731,6 +762,10 @@ export function buildConclusion(
   rawCondition: ConclusionCondition,
   meta: ConclusionMeta,
 ): string {
+  quarterText =
+    typeof meta.showQuarter === "function"
+      ? meta.showQuarter
+      : (quarter: string) => String(quarter ?? "");
   /* 舊版範本可能缺欄位，一律先補成完整形狀再用（見 normalizeCondition）。 */
   const condition = normalizeCondition(rawCondition);
   const chosen = selectRecords(records, condition);
@@ -739,7 +774,7 @@ export function buildConclusion(
   const digits = condition.digits;
   const out: string[] = [];
 
-  out.push(`【結論草稿】${scopeLabel(condition.scope, chosen)}`);
+  out.push(`【結論草稿】${scopeLabel(condition.scope, chosen, quarterText)}`);
   out.push(
     `計畫：${meta.projectName}｜產生時間：${meta.generatedAt}｜系統版本：${meta.systemVersion}`,
   );
@@ -775,7 +810,7 @@ export function buildConclusion(
       : "");
   out.push("");
   out.push(
-    `統計範圍：${quarters.length} 個季度（${quarters.join("、")}）、` +
+    `統計範圍：${quarters.length} 個季度（${quarters.map(quarterText).join("、")}）、` +
       `${intersections.length} 個路口、共 ${chosen.length} 筆調查紀錄；` +
       `資料別：${surveyTypeText2}；` +
       (peaks.length
@@ -850,7 +885,7 @@ export function buildConclusion(
       heading(`${group[0].station}　${group[0].name}`);
       for (const record of group) {
         if (group.length > 1 || quarters.length > 1)
-          out.push(`　〔${record.quarter}${quarterTag(record)}〕`);
+          out.push(`　〔${quarterText(record.quarter)}${quarterTag(record)}〕`);
         for (const peak of peaks)
           out.push(...describePeak(record, peak, condition));
         if (wants("composition")) out.push(...describeComposition(record));
@@ -871,7 +906,7 @@ export function buildConclusion(
   } else if (condition.grouping === "byQuarter") {
     for (const quarter of quarters) {
       const group = chosen.filter((record) => record.quarter === quarter);
-      heading(`${quarter}（共 ${group.length} 筆）`);
+      heading(`${quarterText(quarter)}（共 ${group.length} 筆）`);
       for (const record of group) {
         out.push(`　〔${record.station}　${record.name}〕`);
         for (const peak of peaks)
