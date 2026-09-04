@@ -543,3 +543,11 @@
   程式測試與瀏覽器端到端流程全部通過；主資產為
   assets/index-uJCCRvRT.js。完整證據與未納入驗證的範圍見
   VALIDATION_REPORT.md。
+
+部署完成後請確認：
+  ・左側欄下方顯示「v2.1.45」
+  ・https://baotoast.github.io/Turning-Traffic/?v=2.1.45 開得起來
+  ・assets/index-uJCCRvRT.js 可下載，且 SHA-256 與本版成品相同
+  ・Turning-Traffic-v2.1.45-新手操作手冊.pdf 可下載（不是 404）
+  ・Turning-Traffic-v2.1.45-新手操作手冊.docx 可下載（不是 404）
+  ・手冊封面戳記與頁尾都是 v2.1.45 ｜ 2026-09-03
