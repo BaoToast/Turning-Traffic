@@ -30,6 +30,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -110,7 +111,7 @@ test("版號在每一個寫著它的檔案裡都一致", () => {
 });
 
 test("SheetJS 固定使用官方修正版，不得降回 npm registry 的 0.18.5", () => {
-  const expected = "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz";
+  const expected = "file:./vendor/xlsx-0.20.3.tgz";
   const pkg = JSON.parse(read("package.json"));
   const lock = JSON.parse(read("package-lock.json"));
   assert.equal(pkg.dependencies?.xlsx, expected, "package.json 的 xlsx 被降版或改來源");
@@ -124,10 +125,15 @@ test("SheetJS 固定使用官方修正版，不得降回 npm registry 的 0.18.5
     "0.20.3",
     "實際鎖定的 SheetJS 不是 0.20.3",
   );
-  assert.match(
+  assert.equal(
     lock.packages?.["node_modules/xlsx"]?.resolved || "",
-    /^https:\/\/cdn\.sheetjs\.com\/xlsx-0\.20\.3\//,
-    "SheetJS 必須從官方 CDN 取得修正版",
+    "file:vendor/xlsx-0.20.3.tgz",
+    "SheetJS 必須使用包內已驗證的官方修正版",
+  );
+  assert.equal(
+    createHash("sha256").update(readFileSync(join(root, "vendor/xlsx-0.20.3.tgz"))).digest("hex"),
+    "8dc73fc3b00203e72d176e85b50938627c7b086e607c682e8d3c22c02bb99fe8",
+    "包內 SheetJS 與官方 tarball 不一致",
   );
 });
 
@@ -205,11 +211,13 @@ test("手冊的版號與日期只有一個來源，封面與頁尾不會對不�
 
 test("手冊裡有本版的更新說明，而且沒有留著舊版的手冊檔", () => {
   const v = version();
+  /*
+   * 手冊不收錄「每一版改了什麼」（見 manual-version-log.test.mjs），
+   * 所以這裡改看封面戳記——它一樣擋得住「只改了檔名、內容還是舊版」。
+   */
   assert.ok(
-    read("scripts/manual/manual.html").includes(`本版（${v}）更新內容`),
-    `manual.html 裡找不到「本版（${v}）更新內容」——` +
-      `升版時可能只改了版號、忘了寫這一版做了什麼，` +
-      `或是字串取代沒有生效（姊妹系統連續三版都這樣漏掉）。`,
+    read("scripts/manual/manual.html").includes(`系統版本：${v}　更新日期：`),
+    `manual.html 封面戳記不是「系統版本：${v}」——升版時可能只改了檔名，忘了重新產生手冊。`,
   );
 
   for (const ext of ["pdf", "docx"])
@@ -497,10 +505,8 @@ test("四大車種的名稱在 app 與 lib 兩邊一致", () => {
  * assets/ 就還停在 v2.1.40。
  *
  * 這一支在「這台機器根本建不出可發布的產物」時會略過而不是誤報：
- * package.json 把 xlsx 釘在 SheetJS 官方 CDN 的 0.20.3，受限網路裝不到，
- * 換成 npm registry 的替代版本雖然跑得動測試，但**不可以拿去產生發布用的
- * assets/**（見 DEPLOYMENT.md）。裝到的不是釘住的那一版時就略過，
- * 並且把原因寫出來，而不是假裝通過。
+ * SheetJS 官方 0.20.3 已收進 vendor/ 並以雜湊鎖定，因此任何環境都必須
+ * 安裝正確版本；不再因為網路限制而略過本項檢查。
  */
 test("根目錄的網站建置產物是本版（可發布環境才檢查）", () => {
   if (!has("assets") || !has("index.html")) return; // 只有原始碼的包沒有這一層
@@ -519,16 +525,7 @@ test("根目錄的網站建置產物是本版（可發布環境才檢查）", ()
   } catch {
     installed = null;
   }
-  if (pinnedVersion && installed !== pinnedVersion) {
-    console.log(
-      `  ⚠ 略過：node_modules 的 xlsx 是 ${installed ?? "（沒安裝）"}，` +
-        `不是釘住的 ${pinnedVersion}。這台機器產生的 assets/ 不可發布` +
-        `（會把 SheetJS 降回有安全警示的版本），所以不在這裡比對。` +
-        `請在裝得到 cdn.sheetjs.com 的環境執行：npm ci && npm run build:github，` +
-        `再把 github-pages-dist/ 的 index.html 與 assets/ 複製到根目錄。`,
-    );
-    return;
-  }
+  assert.equal(installed, pinnedVersion, `node_modules 的 xlsx 必須是 ${pinnedVersion}`);
 
   const indexHtml = read("index.html");
   const entry = indexHtml.match(/src="\.\/assets\/([^"]+)"/)?.[1];

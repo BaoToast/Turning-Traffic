@@ -538,9 +538,48 @@ test("匯入路徑要接上範圍檢查，且不合格時不能按下選檔", ()
   assert.match(appSource, /function commitImport\(\) \{[\s\S]*?if \(!importPeriodCheck\?\.ok\)/);
 });
 
-test("共用期別模組必須包含本輪新增的檢查", async () => {
+test("共用期別模組必須包含季度輸入把關", async () => {
+  /*
+   * 這支原本斷言原始碼含有 `rocYear >= 90 && rocYear <= 200`——那是**某一種
+   * 實作的長相**，不是行為。結果是：想把三支同步回同一份程式，反而會踩紅
+   * 這支測試，守門測試從「防止分歧」變成「鎖住分歧」。改成只確認函式存在，
+   * 行為交給下面的共用契約驗。
+   */
   const { readFileSync } = await import("node:fs");
   const here = readFileSync(new URL("../lib/period-date.ts", import.meta.url), "utf8");
   assert.match(here, /export function checkSurveyPeriodInput/);
-  assert.match(here, /rocYear >= 90 && rocYear <= 200/);
+  assert.match(here, /export function surveyPeriodInputMessage/);
+});
+
+/* ── 三支共用的季度輸入行為契約 ── */
+
+test("季度輸入把關必須完全符合三支共用的行為契約", async () => {
+  /*
+   * 上一輪三支的 checkSurveyPeriodInput() 被改成三種不同寫法，而三支的守門
+   * 測試都只驗自己那一份，所以沒有任何一支看得到分歧。這裡改成跑共用契約：
+   * 契約檔在三支裡逐位元相同，任何一支的實作漂掉，就是它自己的測試紅。
+   */
+  const { runContract, CASES } = await import("./period-input-contract.mjs");
+  const { checkSurveyPeriodInput, normalizeSurveyPeriod } = await import(
+    "../lib/period-date.ts"
+  );
+  assert.ok(CASES.length >= 50, "契約案例數異常，檔案可能被截斷");
+  const problems = runContract(checkSurveyPeriodInput, normalizeSurveyPeriod);
+  assert.deepEqual(problems, [], "與共用行為契約不符：\n" + problems.join("\n"));
+});
+
+test("行為契約檔本身必須與另外兩支逐位元相同", async () => {
+  /*
+   * 三支各自釘同一個 SHA-256。只改一支的契約檔，那一支就會紅；
+   * 要改行為就得三支的契約檔一起改、雜湊一起換——這正是我們要的。
+   * 用雜湊而不是跨包引用檔案，交付包才能解壓後獨立執行。
+   */
+  const { createHash } = await import("node:crypto");
+  const { readFileSync } = await import("node:fs");
+  const bytes = readFileSync(new URL("./period-input-contract.mjs", import.meta.url));
+  assert.equal(
+    createHash("sha256").update(bytes).digest("hex"),
+    "638f2b48ed3d7e24e7c605314eb2149f3cc5c07865f69a99d8c767a52945fe75",
+    "行為契約檔與另外兩支不同步；三支必須是同一份檔案",
+  );
 });

@@ -12507,14 +12507,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.43-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.45-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.43-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.45-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >

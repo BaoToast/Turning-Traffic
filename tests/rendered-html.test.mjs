@@ -108,8 +108,8 @@ test("手冊裡有本版的更新說明區塊", async () => {
     "utf8",
   );
   assert.ok(
-    manual.includes(`本版（${VERSION}）`),
-    `manual.html 裡找不到「本版（${VERSION}）」——升版時可能只改了版號、` +
+    manual.includes(`系統版本：${VERSION}　更新日期：`),
+    `manual.html 的封面戳記不是 ${VERSION}——升版時可能只改了版號、` +
       `忘了寫這一版做了什麼，或是字串取代沒有生效。`,
   );
 });

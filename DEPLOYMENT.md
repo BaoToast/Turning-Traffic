@@ -16,22 +16,14 @@ repository 根目錄當成網站發布。`.github/workflows/pages.yml`
 > 完全看不出來。`tests/release-structure.test.mjs` 現在會擋住任何在 workflow
 > 裡加回發布步驟的改動。
 
-## 安裝相依套件時會連到 cdn.sheetjs.com
+## SheetJS 可重現建置
 
-`package.json` 的 `xlsx` 指向
-**`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`**，不是 npm registry。
-這是 SheetJS 官方自 0.20 起的發布方式，也是安全警示的修正版，應該維持。
+`package.json` 的 `xlsx` 指向包內 `vendor/xlsx-0.20.3.tgz`。這是 SheetJS
+官方 0.20.3 發布包，`tests/release-structure.test.mjs` 會同時驗證版本、來源與
+SHA-256，防止誤用 npm registry 的 0.18.5 或被替換的檔案。
 
-代價是 **`npm ci` 需要連得到 `cdn.sheetjs.com`**：
-
-- GitHub Actions 的執行環境沒有問題。
-- 但在受限網路、公司 Proxy、離線環境或某些沙箱裡，`npm ci` 會出現
-  `403 Forbidden - GET https://cdn.sheetjs.com/...`。
-- **這個錯誤與程式碼無關**，不要當成建置壞掉而去改程式。先確認該網域連得到；
-  若只是要檢查程式邏輯（lint、單元測試、e2e）而不是產生正式成品，
-  可以暫時改用 npm registry 上的 `xlsx` 版本，但
-  **絕對不可以用那份安裝結果產生要發布的 `assets/`**——那會把 SheetJS
-  降回有安全警示的版本，而且從畫面上完全看不出來。
+因此 `npm ci` 不再依賴 `cdn.sheetjs.com`；受限網路或離線環境也能使用同一份
+已驗證套件重現正式網站。
 
 ## 更新版本時要同步改的東西
 
@@ -39,8 +31,10 @@ repository 根目錄當成網站發布。`.github/workflows/pages.yml`
 
 1. `lib/traffic.ts` 的 `VERSION` 與 `VERSION_HISTORY`（**版號的唯一來源**）。
 2. `package.json` 與 `package-lock.json` 的 `version`。
-3. `scripts/manual/manual.html` 的封面戳記（版號＋日期），並新增
-   「本版（vX.Y.Z）更新內容」區塊。
+3. `scripts/manual/manual.html` 的封面戳記（版號＋日期）。
+   **不要**在手冊裡加「本版更新內容」之類的區塊——手冊只寫目前的功能與操作方式，
+   版本沿革寫進本檔案清單第 6 項的 `CHANGELOG.md`。
+   `tests/manual-version-log.test.mjs` 會擋下版本紀錄與維護敘事。
 4. `scripts/manual/build-pdf.mjs`、`build-docx.mjs` 的輸出檔名與頁尾
    （**頁尾日期必須等於封面戳記的日期**）。
 5. `app/traffic-app.tsx` 裡兩個手冊下載連結的檔名。
@@ -81,10 +75,8 @@ rm -rf assets && cp -r github-pages-dist/assets .
 > v2.1.40 的 `assets/`。`tests/release-structure.test.mjs` 的
 > 「根目錄的網站建置產物是本版」現在會擋這件事。
 >
-> ⚠️ 這一步**必須在裝得到 `cdn.sheetjs.com` 的環境**做。用 npm registry 的
-> 替代 `xlsx` 產生的 `assets/` 會把 SheetJS 降回有安全警示的 0.18.5，
-> 而且從畫面上完全看不出來。裝到的不是釘住的版本時，那一支測試會略過
-> 並把原因印出來——**看到「略過」就代表這一份 `assets/` 還沒重建**。
+> 正式建置必須使用包內且雜湊驗證通過的 SheetJS 0.20.3；發布結構測試會直接
+> 擋下錯誤版本，不會略過。
 
 ## 人工上傳 GitHub 時
 

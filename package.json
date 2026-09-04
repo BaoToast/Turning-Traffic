@@ -1,6 +1,6 @@
 {
   "name": "turning-traffic",
-  "version": "2.1.43",
+  "version": "2.1.45",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -23,7 +23,7 @@
     "jszip": "^3.10.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "file:./vendor/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.54.0",

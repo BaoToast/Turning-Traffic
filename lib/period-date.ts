@@ -157,19 +157,36 @@ export type SurveyPeriodCheck =
   | { ok: false; key: string; reason: "format" | "range" };
 
 export function checkSurveyPeriodInput(input: string): SurveyPeriodCheck {
-  const raw = String(input ?? "").trim().toUpperCase();
-  const key = normalizeSurveyPeriod(raw);
-  /* 正規化之後必須真的落在民國 90～200 年，不能只看位數。 */
-  const normalized = key.match(/^(\d{2,3})Q[1-4]$/);
-  if (normalized) {
-    const rocYear = Number(normalized[1]);
-    if (rocYear >= 90 && rocYear <= 200) return { ok: true, key };
-    return { ok: false, key, reason: "range" };
-  }
-  /* 形狀本身就不對（沒有 Qn、季別不是 1～4、夾雜其他字元）。 */
-  if (!/^\d{2,4}Q[1-4]$/.test(raw)) return { ok: false, key, reason: "format" };
-  /* 形狀對、但年份換算不進民國 90～200 這個窗口。 */
-  return { ok: false, key, reason: "range" };
+  /*
+   * 先做 NFKC 正規化並去掉所有空白：從 Excel／Word／PDF 複製貼上很常帶進
+   * 全形數字或全形 Ｑ，手打時也常在中間多一個空白。三支必須一視同仁。
+   */
+  const raw = String(input ?? "")
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .toUpperCase();
+  const match = /^(\d{2,4})Q([1-4])$/.exec(raw);
+  if (!match)
+    return { ok: false, key: normalizeSurveyPeriod(raw), reason: "format" };
+
+  /*
+   * 年份**以數值判定，不看位數**。
+   *
+   * 舊寫法依位數分派（四碼一律當西元），於是把 `0115Q1` 判成「西元 115 年、
+   * 超出範圍」，回一句「民國年請填 90～200」——但 0115 就是 115，訊息與事實
+   * 矛盾；而共用的 normalizeSurveyPeriod() 一直都把它算成 115Q1，等於檢查與
+   * 正規化對同一個字串有兩種看法。Number() 會吃掉前導零，改用數值就一致了。
+   *
+   * 民國 90～200 與西元 2001～2111 兩段不重疊，所以數值本身就足以分辨，
+   * 不需要位數。範圍外一律擋下：normalizeSurveyPeriod() 只在這個窗口內換算，
+   * 窗口外的年份會原樣回傳，放行就會產生一個永遠比對不到的季度鍵。
+   */
+  const year = Number(match[1]);
+  const quarter = match[2];
+  if (year >= 90 && year <= 200) return { ok: true, key: year + "Q" + quarter };
+  if (year >= 2001 && year <= 2111)
+    return { ok: true, key: year - 1911 + "Q" + quarter };
+  return { ok: false, key: normalizeSurveyPeriod(raw), reason: "range" };
 }
 
 /** 年份不合格時給使用者看的說明，三支共用同一句。 */
