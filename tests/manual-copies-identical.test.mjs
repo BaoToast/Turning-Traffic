@@ -32,8 +32,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+
+/*
+ * 版號一律從唯一來源（lib/traffic.ts 的 VERSION）取，不要在這裡寫死。
+ * 寫死的話，升版當下這一支會因為「找不到本版手冊」而紅字——雖然擋得住，
+ * 但紅的是測試本身過期，不是真的漏同步，訊息會把人帶錯方向。
+ */
+import { VERSION } from "../lib/traffic.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SKIP = new Set(["node_modules", ".git", ".next", ".turbo", ".wrangler"]);
@@ -55,7 +62,10 @@ function walk(dir, out = []) {
 }
 
 test("包裡每一份手冊副本都必須來自同一次產生", () => {
-  const files = walk(ROOT).filter((f) => /Turning-Traffic-v2\.1\.45-新手操作手冊\.(pdf|docx)$/.test(f));
+  const base = `Turning-Traffic-${VERSION}-新手操作手冊`;
+  const files = walk(ROOT).filter((f) =>
+    [`${base}.pdf`, `${base}.docx`].includes(basename(f)),
+  );
   assert.ok(
     files.length > 0,
     "包裡找不到任何本版手冊——升版時可能忘了重新產生，或檔名對不上。",

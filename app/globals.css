@@ -591,6 +591,20 @@ button {
   text-align: center;
   border-style: dashed;
 }
+/*
+ * 拖曳中的放置區：邊框、底色與外光暈一起變。
+ * 原本只有 onDrop 接得到檔案，但畫面完全沒反應，
+ * 使用者拖到一半不知道丟這裡對不對。
+ */
+.upload-card.drag-active,
+.upload-label.drag-active {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+  box-shadow: 0 0 0 4px rgba(20, 140, 140, 0.14);
+}
+.upload-label.drag-active {
+  border-style: dashed;
+}
 .upload-icon {
   display: grid;
   place-items: center;
@@ -608,6 +622,20 @@ button {
 }
 .upload-card .primary {
   margin: 18px 0 12px;
+}
+.import-progress {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--teal-soft);
+  color: var(--teal);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.import-progress b {
+  font-weight: 800;
 }
 .upload-card > small {
   display: block;

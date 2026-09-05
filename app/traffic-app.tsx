@@ -129,6 +129,42 @@ import {
   type ConclusionTemplate,
 } from "../lib/conclusion";
 
+/*
+ * 按下按鈕之後，把「剛長出來的結果」帶到看得見的地方。
+ *
+ * 使用者回報（交通服務水準）：「路段管理」按下『預覽修改影響』之後畫面停在原地，
+ * 不知道預覽已經長在下面，會以為程式沒反應。三支都做了同一件事的實測。
+ *
+ * 規則刻意訂得保守，因為「畫面亂跳」比「不跳」更惱人：
+ *   ・結果已經整個看得到 → **完全不動**。按了之後結果就在原地的按鈕不受影響。
+ *   ・結果在視窗外       → 才捲動，而且只捲到剛好看得見。
+ *   ・使用者的系統設定要求減少動態效果 → 直接跳過去，不做平滑捲動。
+ *
+ * 只在「按了才會出現結果」的按鈕呼叫；每次輸入都會重畫的地方不要用，
+ * 那會變成打一個字畫面跳一次。
+ */
+export function revealResult(el: Element | null | undefined) {
+  if (!el || typeof el.getBoundingClientRect !== "function") return;
+  const rect = el.getBoundingClientRect();
+  const vh = window.innerHeight || document.documentElement.clientHeight;
+  const fullyVisible = rect.top >= 0 && rect.bottom <= vh;
+  const fillsViewport = rect.top <= 0 && rect.bottom >= vh;
+  if (fullyVisible || fillsViewport) return;
+  const reduce =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  try {
+    el.scrollIntoView({
+      behavior: reduce ? "auto" : "smooth",
+      block: "nearest",
+      inline: "nearest",
+    });
+  } catch {
+    /* 舊瀏覽器不接受設定物件時，退回最陽春的用法 */
+    el.scrollIntoView();
+  }
+}
+
 type View =
   | "dashboard"
   | "projects"
@@ -3506,6 +3542,19 @@ function AuditWorkbench(props: {
   );
 }
 
+/*
+ * 拖曳放置區的「進出深度」計數，記在該區塊自己的 dataset 上。
+ *
+ * 用計數而不是布林旗標：拖曳經過區塊內部的子元素時，子元素的 dragenter
+ * 會比父元素的 dragleave 晚送達，用布林會讓高亮一閃一閃。
+ * 每個放置區各記各的，互不干擾。放在元件外面是因為它不碰任何狀態。
+ */
+function dragDepth(el: HTMLElement, delta: number) {
+  const next = Math.max(0, Number(el.dataset.dragDepth || 0) + delta);
+  el.dataset.dragDepth = String(next);
+  return next;
+}
+
 export default function TrafficApp() {
   const [view, setView] = useState<View>("projects");
   const [projects, setProjects] = useState<Project[]>([]);
@@ -3674,6 +3723,42 @@ export default function TrafficApp() {
     Record<string, ImportResolution>
   >({});
   const [importing, setImporting] = useState(false);
+  /*
+   * 匯入大量檔案時的逐檔進度。
+   *
+   * 舊版判讀中只有按鈕文字變成「正在解析…」，一動也不動——檔案一多、
+   * 跑上十幾秒，使用者分不出「還在跑」和「當掉了」，會以為沒上傳成功。
+   * 這裡記「已完成幾份／共幾份／正在讀哪一個檔」，畫在上傳卡片上。
+   */
+  const [importProgress, setImportProgress] = useState<{
+    done: number;
+    total: number;
+    file: string;
+  } | null>(null);
+  /*
+   * 拖曳中的視覺回饋。原本 onDrop 是有接的，但畫面上沒有任何變化，
+   * 使用者拖到一半看不出來「丟這裡對不對」，只能賭一把放開。
+   */
+  const [dragZone, setDragZone] = useState("");
+  /*
+   * 檔案掉在放置區**外面**時，瀏覽器預設會直接開啟那個檔案，
+   * 等於把使用者踢出系統畫面。這裡全域擋掉，並讓游標顯示「不可放置」。
+   * 放置區內部照常放行，交給該區自己的 onDrop 處理。
+   */
+  useEffect(function () {
+    function blockStray(e: DragEvent) {
+      const el = e.target instanceof Element ? e.target : null;
+      if (el && el.closest("[data-dropzone]")) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    }
+    window.addEventListener("dragover", blockStray);
+    window.addEventListener("drop", blockStray);
+    return function () {
+      window.removeEventListener("dragover", blockStray);
+      window.removeEventListener("drop", blockStray);
+    };
+  }, []);
   /*
    * 站號在檔案內與檔名都讀不到時，讓使用者在預覽列直接補填。
    * 鍵是預覽列的檔案標籤（同一個檔案的平日／假日會是兩列，各自填各自的）。
@@ -5132,8 +5217,25 @@ export default function TrafficApp() {
     if (importPeriodCheck && !importPeriodCheck.ok)
       return notify(surveyPeriodInputMessage(importPeriodCheck.reason));
     setImporting(true);
+    try {
+    const all = Array.from(files);
+    /*
+     * 每讀完一份就讓出主執行緒一個「巨集任務」的時間。
+     * 只 await 一個已完成的 Promise 只會讓出微任務，瀏覽器不會重畫，
+     * 進度數字會整批卡到最後才一次跳完。
+     */
+    const breathe = () => new Promise((done) => setTimeout(done, 0));
+    setImportProgress({ done: 0, total: all.length, file: all[0]?.name ?? "" });
+    await breathe();
     const rows: ImportPreview[] = [];
-    for (const file of Array.from(files)) {
+    let parsedCount = 0;
+    for (const file of all) {
+      setImportProgress({
+        done: parsedCount,
+        total: all.length,
+        file: all[parsedCount]?.name ?? file.name,
+      });
+      await breathe();
       try {
         rows.push(...(await inspectWorkbookVariants(file, pce)));
       } catch (error) {
@@ -5163,6 +5265,8 @@ export default function TrafficApp() {
           pceUsed: structuredClone(pce),
         });
       }
+      parsedCount += 1;
+      await breathe();
     }
     const detectedDefinitions = new Map<
       string,
@@ -5293,7 +5397,11 @@ export default function TrafficApp() {
     });
     setImportRows(rows);
     setImportResolutions(resolutions);
+    } finally {
+      // 即使後續整理或記憶範本時發生非預期錯誤，也不能讓選檔按鈕永遠卡在停用狀態。
     setImporting(false);
+    setImportProgress(null);
+    }
   }
 
   function commitImport() {
@@ -8354,17 +8462,35 @@ export default function TrafficApp() {
               </section>
               <section className="import-layout">
                 <article
-                  className="panel upload-card"
-                  onDragOver={function (e) {
+                  className={`panel upload-card${dragZone === "import" ? " drag-active" : ""}`}
+                  data-dropzone="import"
+                  onDragEnter={function (e) {
                     e.preventDefault();
+                    dragDepth(e.currentTarget, 1);
+                    setDragZone("import");
+                  }}
+                  onDragOver={function (e) {
+                    /*
+                     * dragover 一定要 preventDefault，否則瀏覽器根本不會把
+                     * drop 事件送過來——這是 HTML5 拖放最容易漏掉的一步。
+                     */
+                    e.preventDefault();
+                    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+                  }}
+                  onDragLeave={function (e) {
+                    e.preventDefault();
+                    if (dragDepth(e.currentTarget, -1) === 0) setDragZone("");
                   }}
                   onDrop={function (e) {
                     e.preventDefault();
-                    handleFiles(e.dataTransfer.files);
+                    e.currentTarget.dataset.dragDepth = "0";
+                    setDragZone("");
+                    if (e.dataTransfer?.files?.length)
+                      handleFiles(e.dataTransfer.files);
                   }}
                 >
                   <span className="upload-icon">⇧</span>
-                  <h2>再拖曳 Excel 檔案到這裡</h2>
+                  <h2>把 Excel 檔案拖曳到這裡</h2>
                   <p>
                     支援 .xls、.xlsx、.xlsm，多路口一次選取；照片工作表忽略。
                   </p>
@@ -8380,17 +8506,31 @@ export default function TrafficApp() {
                   />
                   <button
                     className="primary"
-                    disabled={!importPeriodReady}
+                    disabled={!importPeriodReady || importing}
                     onClick={function () {
                       fileRef.current?.click();
                     }}
                   >
                     {importing
-                      ? "正在解析…"
+                      ? importProgress
+                        ? `正在解析… ${Math.min(importProgress.done + 1, importProgress.total)}／${importProgress.total}`
+                        : "正在解析…"
                       : importPeriod
                         ? "選擇檔案"
                         : "請先選年度與季度"}
                   </button>
+                  {/*
+                   * 判讀中的進度。使用者回報過「上傳大量檔案後以為沒成功」，
+                   * 原因是舊版只有按鈕文字換成「正在解析…」，一動也不動。
+                   * 這一行會逐檔跳動，並寫出正在讀哪一個檔名。
+                   */}
+                  {importing && importProgress ? (
+                    <p className="import-progress" role="status">
+                      正在讀取第 {Math.min(importProgress.done + 1, importProgress.total)}／
+                      {importProgress.total} 份：
+                      <b>{importProgress.file}</b>
+                    </p>
+                  ) : null}
                   <small>
                     {importPeriod
                       ? "本批次將寫入 " + importPeriodKey
@@ -12415,8 +12555,37 @@ export default function TrafficApp() {
                     ZIP 或 JSON 都可以。系統會自己判斷這是單一計畫還是全部計畫的
                     備份，並在動手前把「會併入」還是「會取代」寫清楚給您確認。
                   </p>
-                  <label className="secondary full upload-label">
-                    選擇備份檔
+                  <label
+                    className={`secondary full upload-label${dragZone === "restore" ? " drag-active" : ""}`}
+                    data-dropzone="restore"
+                    onDragEnter={function (e) {
+                      e.preventDefault();
+                      dragDepth(e.currentTarget, 1);
+                      setDragZone("restore");
+                    }}
+                    onDragOver={function (e) {
+                      e.preventDefault();
+                      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+                    }}
+                    onDragLeave={function (e) {
+                      e.preventDefault();
+                      if (dragDepth(e.currentTarget, -1) === 0) setDragZone("");
+                    }}
+                    onDrop={function (e) {
+                      e.preventDefault();
+                      e.currentTarget.dataset.dragDepth = "0";
+                      setDragZone("");
+                      const files = e.dataTransfer?.files;
+                      if (!files?.length) return;
+                      /* 還原一次只處理一個檔，多拖幾個就取第一個並講清楚 */
+                      if (files.length > 1)
+                        notify(
+                          `還原一次只收一個備份檔，已使用「${files[0].name}」。`,
+                        );
+                      restoreBackup(files[0]);
+                    }}
+                  >
+                    選擇或拖曳備份檔
                     <input
                       hidden
                       type="file"
@@ -12507,14 +12676,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.45-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.48-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.45-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.48-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >
@@ -12746,8 +12915,8 @@ export default function TrafficApp() {
  * 結論草稿產生器。
  *
  * 使用者自己勾條件（範圍／時段／路口／支線／指標／分段方式），系統照著寫。
- * 產生的文字可以直接手改，改過之後不會被自動覆蓋——只有按「重新產生」
- * 才會蓋掉，而且會先問過。條件可以存成範本重複使用。
+ * 產生的文字可以直接手改，改過之後不會被自動覆蓋——只有再按一次
+ *「產生草稿」才會蓋掉，而且會先問過。條件可以存成範本重複使用。
  */
 /*
  * 年度是「115」這種光年份的字串，沒有 Qn，showQuarter() 認不得。
@@ -12855,6 +13024,9 @@ function ConclusionStudio(props: {
     [source, condition],
   );
 
+  /* 草稿框在整頁最下面；按完要確認它真的在使用者眼前。 */
+  const draftBoxRef = useRef<HTMLElement | null>(null);
+
   const patch = function (next: Partial<ConclusionCondition>) {
     setCondition({ ...condition, ...next });
   };
@@ -12895,6 +13067,13 @@ function ConclusionStudio(props: {
     );
     setEdited(false);
     props.notify("結論草稿已產生。");
+    /*
+     * 唯一的「產生草稿」就在草稿框旁邊，所以正常情況下結果本來就在眼前，
+     * revealResult() 會判斷「已經看得到」而完全不動。保留是為了少數例外
+     * ——視窗特別矮、或草稿變長把框推出畫面外。
+     * 等 React 把新草稿畫完再量位置，否則量到的是舊高度。
+     */
+    requestAnimationFrame(() => revealResult(draftBoxRef.current));
   }
 
   const scope = condition.scope;
@@ -12912,9 +13091,13 @@ function ConclusionStudio(props: {
             兩邊的數字來源完全相同，都取自畫面與 Excel 用的同一組計算，不會另外再算一次。
           </p>
         </div>
-        <button className="primary" onClick={() => generate()}>
-          產生草稿
-        </button>
+        {/*
+         * 這裡原本另有一顆「產生草稿」，和草稿框旁邊那一顆呼叫同一個函式。
+         * 使用者指出實際動線用不到它：條件與條件範本都在下方，
+         *「哪怕條件沒變，為了確保資料正確，正常情況下仍會往下滑動確認條件」，
+         * 所以每一條動線最後都停在草稿框旁邊。兩顆同名按鈕反而讓人以為有差別，
+         * 也可能讓新手在還沒勾任何條件時就按下去，拿到一份用預設條件產生的草稿。
+         */}
       </section>
 
       {!source.length ? (
@@ -13374,15 +13557,15 @@ function ConclusionStudio(props: {
             </div>
           </section>
 
-          <section className="panel conclusion-output">
+          <section className="panel conclusion-output" ref={draftBoxRef}>
             <div className="conclusion-head">
               <div>
                 <span className="eyebrow">CONCLUSION DRAFT</span>
                 <h2>結論草稿</h2>
               </div>
               <div className="conclusion-actions-row">
-                <button className="secondary" onClick={() => generate()}>
-                  重新產生
+                <button className="primary" onClick={() => generate()}>
+                  產生草稿
                 </button>
                 <button
                   className="secondary"
@@ -13417,7 +13600,7 @@ function ConclusionStudio(props: {
             <textarea
               aria-label="結論草稿"
               value={draft}
-              placeholder="設定好上面的條件後，按「產生草稿」。"
+              placeholder="設定好上面的條件後，按右上角的「產生草稿」。"
               onChange={function (e) {
                 setDraft(e.target.value);
                 setEdited(true);
@@ -13425,7 +13608,7 @@ function ConclusionStudio(props: {
             />
             <p className="conclusion-hint">
               {edited
-                ? "您已手動修改過這份草稿；按「重新產生」會先詢問再覆蓋。"
+                ? "您已手動修改過這份草稿；按「產生草稿」會先詢問再覆蓋。"
                 : "這段文字可以直接修改，改過之後不會被自動覆蓋。"}
             </p>
           </section>

@@ -523,8 +523,19 @@ test("年度輸入超出可換算範圍時要擋下，不得原樣存成西元�
 test("匯入路徑要接上範圍檢查，且不合格時不能按下選檔", () => {
   assert.match(appSource, /const importPeriodCheck = importPeriod/);
   assert.match(appSource, /const importPeriodReady = Boolean\(importPeriodCheck\?\.ok\)/);
-  /* 選檔按鈕要看「檢查通過」而不是只看「有沒有填」 */
-  assert.match(appSource, /disabled=\{!importPeriodReady\}/);
+  /*
+   * 選檔按鈕要看「檢查通過」而不是只看「有沒有填」。
+   *
+   * 這裡刻意**不**寫死成 `disabled={!importPeriodReady}` 一種長相。
+   * v2.1.47 為了避免使用者在判讀途中重複觸發匯入，把它改成
+   * `disabled={!importPeriodReady || importing}`——行為只有變嚴格，
+   * 但寫死長相的斷言仍然會紅字。那就是「守門測試從防止分歧變成鎖住實作」，
+   * 這一支測試自己在下面第二則就寫過同樣的教訓（v2.1.45 的 rocYear 那次）。
+   *
+   * 現在只要求：那顆按鈕的 disabled 條件裡必須用到 importPeriodReady，
+   * 而且不可以退回只看 importPeriod。
+   */
+  assert.match(appSource, /disabled=\{![^}]*importPeriodReady[^}]*\}/);
   assert.doesNotMatch(appSource, /disabled=\{!importPeriod\}/);
   /* 真的走到讀檔時再擋一次（按鈕可能被繞過） */
   assert.match(

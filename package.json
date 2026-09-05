@@ -1,6 +1,6 @@
 {
   "name": "turning-traffic",
-  "version": "2.1.45",
+  "version": "2.1.48",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -15,7 +15,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "seed": "node scripts/seed-state.mjs",
-    "e2e": "npm run build:github && node scripts/seed-state.mjs && node scripts/e2e-diagram.mjs && node scripts/e2e-arm-name.mjs && node scripts/e2e-reports.mjs && node --experimental-strip-types scripts/e2e-report-draft.mjs && node scripts/make-wide-seed.mjs && node scripts/e2e-conclusion.mjs && node scripts/e2e-survey-type.mjs && node scripts/e2e-layout.mjs && node scripts/e2e-backup.mjs && node scripts/e2e-lock-review.mjs && node scripts/e2e-trend-day.mjs && node scripts/e2e-diagram-summary.mjs && node scripts/e2e-period-date.mjs && node scripts/e2e-period-month.mjs"
+    "e2e": "npm run build:github && node scripts/seed-state.mjs && node scripts/e2e-diagram.mjs && node scripts/e2e-arm-name.mjs && node scripts/e2e-reports.mjs && node --experimental-strip-types scripts/e2e-report-draft.mjs && node scripts/make-wide-seed.mjs && node scripts/e2e-conclusion.mjs && node scripts/e2e-reveal.mjs && node scripts/e2e-drop.mjs && node scripts/e2e-progress.mjs && node scripts/e2e-survey-type.mjs && node scripts/e2e-layout.mjs && node scripts/e2e-backup.mjs && node scripts/e2e-lock-review.mjs && node scripts/e2e-trend-day.mjs && node scripts/e2e-diagram-summary.mjs && node scripts/e2e-period-date.mjs && node scripts/e2e-period-month.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

@@ -108,7 +108,7 @@ const matched = await page.locator(".conclusion-count").innerText();
 console.log("符合條件：", matched);
 ok("符合條件筆數會即時更新", /符合條件 \d+ 筆/.test(matched) && !/ 0 筆/.test(matched), matched);
 
-await page.locator('button:has-text("產生草稿")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(700);
 const text1 = await draft.inputValue();
 console.log("\n── 草稿前 1200 字 ──\n" + text1.slice(0, 1200) + "\n──────────────");
@@ -175,7 +175,7 @@ const shareOut = page.locator(
 await shareIn.uncheck();
 await shareOut.check();
 await page.waitForTimeout(200);
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(800);
 const outShareDraft = await draft.inputValue();
 ok(
@@ -186,7 +186,7 @@ ok(
 
 await shareIn.check();
 await page.waitForTimeout(200);
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(800);
 const bothShareDraft = await draft.inputValue();
 const bothLine = bothShareDraft.split("\n").find((l) => /佔駛入 /.test(l)) || "";
@@ -202,7 +202,7 @@ await shareOut.uncheck();
 await page.waitForTimeout(200);
 
 await page.locator('.conclusion-metrics label:has-text("車種組成（輛數與百分比）") input').check();
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(700);
 const text2 = await draft.inputValue();
 ok("加勾車種組成之後草稿有變", text2 !== text1);
@@ -217,7 +217,7 @@ ok("手改之後有提示會先詢問再覆蓋", /手動修改/.test(hint), hint
 /* ── 指定單一路口 ── */
 await page.locator(".conclusion-field:has-text('要寫哪些路口') input[type=checkbox]").first().check();
 await page.waitForTimeout(250);
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(700);
 const text3 = await draft.inputValue();
 const sections = (text3.match(/^\d+\. /gm) || []).length;
@@ -228,7 +228,7 @@ await page.locator('.conclusion-field:has-text("統計範圍") input[type=radio]
 await page.waitForTimeout(350);
 await page.locator(".conclusion-field:has-text('要寫哪些路口') button:has-text('全部路口')").click();
 await page.waitForTimeout(250);
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(700);
 const text4 = await draft.inputValue();
 ok("年度條件寫得出「N 年度」標頭", /【結論草稿】\d+ 年度/.test(text4), text4.split("\n")[0]);
@@ -354,7 +354,7 @@ const quarterSelect = page.locator(".conclusion-field select").first();
 await quarterSelect.selectOption((await quarterSelect.locator("option").allTextContents())[0]);
 await page.locator(".conclusion-field:has-text('要寫哪些路口') input[type=checkbox]").last().check();
 await page.waitForTimeout(250);
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(700);
 const text5 = await draft.inputValue();
 ok(
@@ -727,7 +727,7 @@ ok(
   "只勾一個方向時，呈現方式選項不出現（雙向合計對單一方向沒有意義）",
   (await page.locator(".conclusion-submode").count()) === 0,
 );
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(900);
 const inOnlyDraft = await draft.inputValue();
 ok(
@@ -739,7 +739,7 @@ ok(
 await branchIn.uncheck();
 await branchOut.check();
 await page.waitForTimeout(300);
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(900);
 const outOnlyDraft = await draft.inputValue();
 ok(
@@ -759,7 +759,7 @@ await page
   .locator('.conclusion-submode label:has-text("一律分行車方向") input')
   .check();
 await page.waitForTimeout(300);
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(900);
 const compDraft = await draft.inputValue();
 ok("草稿寫出了各支線各車種", /駛入各車種：/.test(compDraft), compDraft.slice(0, 120));
@@ -788,7 +788,7 @@ await page
   .locator('.conclusion-submode label:has-text("一律雙向合計") input')
   .check();
 await page.waitForTimeout(300);
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(900);
 const twoWayDraft = await draft.inputValue();
 ok(
@@ -825,7 +825,7 @@ await page
   .locator('.conclusion-submode label:has-text("跟著車種組成分析頁") input')
   .check();
 await page.waitForTimeout(300);
-await page.locator('button:has-text("重新產生")').first().click();
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(900);
 const followDraft = await draft.inputValue();
 ok(

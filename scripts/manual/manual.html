@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8" />
-<title>Turning Traffic 新手操作手冊 v2.1.45</title>
+<title>Turning Traffic 新手操作手冊 v2.1.48</title>
 <style>
   :root{
     --navy:#17353E; --teal:#087F75; --orange:#C77A18; --ink:#17353E;
@@ -98,7 +98,7 @@
     </tbody>
   </table>
 
-  <p class="stamp">系統版本：v2.1.45　更新日期：2026-09-03</p>
+  <p class="stamp">系統版本：v2.1.48　更新日期：2026-09-05</p>
 </section>
 
 <!-- ══════════ 1 ══════════ -->
@@ -192,7 +192,8 @@
 <div class="step"><div class="h">步驟 2｜指定年度與季度</div>
   <p>到 <span class="btn">季度批次匯入</span>，先填「調查年度（民國或西元）」例如 <code>115</code> 或 <code>2026</code>，再選季度。畫面會顯示 <code>115 年第 2 季（115Q2）</code>——填西元也一樣，資料一律以民國年記錄。<strong>沒選之前不能選檔案</strong>，按鈕會寫「請先選年度與季度」。</p></div>
 <div class="step"><div class="h">步驟 3｜放入原始 Excel</div>
-  <p>把檔案拖進虛線框，或按 <span class="btn">選擇檔案</span>，可一次多選。支援 .xls／.xlsx／.xlsm，照片工作表會自動忽略。</p></div>
+  <p>把檔案<strong>拖進虛線框</strong>，或按 <span class="btn">選擇檔案</span>，可一次多選。支援 .xls／.xlsx／.xlsm，照片工作表會自動忽略。拖曳經過時整張卡片會亮起來，就是丟對地方了；檔案掉在卡片外面不會有事，系統會擋住，畫面也不會跳走。</p>
+  <p>檔案多的時候，按鈕會顯示「正在解析… 3／12」，下方另有一行寫出正在讀哪一個檔名。<strong>看到數字在跳就是還在跑，不必重按。</strong></p></div>
 <div class="step"><div class="h">步驟 4｜看懂匯入辨識結果再寫入</div>
   <p>系統只是<strong>預覽</strong>，還沒寫入。逐列確認檔案角色、站號名稱、調查日期、AM／PM 尖峰值；若偵測到新車種，順手在上方的車種對應表決定要獨立分析還是併入標準類別。都沒問題才按 <span class="btn">確認寫入 115Q2</span>。</p></div>
 <div class="step"><div class="h">步驟 5｜先看資料品質檢查</div>
@@ -671,7 +672,7 @@
   <p>統計範圍選<strong>單一季度 → 115Q2</strong>；時段只留<strong>上午尖峰</strong>（或兩個都留）；
   路口<strong>一個都不勾</strong>（＝全部）；支線<strong>一個都不勾</strong>（＝全部）；
   數字只勾<strong>各支線駛入流量、各支線駛入車輛數、各支線佔駛入路口總量百分比、路口總流量與總車輛數</strong>；
-  敘述方式選<strong>依路口分段</strong>。按 <span class="btn">產生草稿</span>，
+  敘述方式選<strong>依路口分段</strong>。按草稿框右上角的 <span class="btn">產生草稿</span>，
   每個路口就會各成一段，只寫你要的那幾個數字，沒勾的一律不出現。</p>
 </div>
 
@@ -693,7 +694,7 @@
 <div class="box">
   <span class="t">三個要知道的行為</span>
   <p>・<strong>草稿的數字＝畫面與 Excel 的數字。</strong>取的是各分析頁用的同一組計算，不會另外再算一次。<br />
-  ・<strong>可以直接手改。</strong>改過之後系統不會自動覆蓋；按 <span class="btn">重新產生</span> 會先跳出確認再蓋掉。<br />
+  ・<strong>可以直接手改。</strong>改過之後系統不會自動覆蓋；再按一次 <span class="btn">產生草稿</span> 會先跳出確認再蓋掉。<br />
   ・<strong>條件挑不到資料時會明講</strong>「所選條件沒有對應的資料，請放寬季度範圍⋯」，不會給你一片空白。</p>
 </div>
 
@@ -742,7 +743,7 @@
 <div class="step"><div class="h">步驟 2｜把備份檔帶到 B 電腦</div>
   <p>用公司網路磁碟、USB 或其他受控方式搬移。</p></div>
 <div class="step"><div class="h">步驟 3｜在 B 電腦開同一個網站還原</div>
-  <p>同樣在備份頁按 <span class="btn">選擇備份檔</span>，選 ZIP 或 JSON，全部計畫與設定就會接續回來。</p></div>
+  <p>同樣在備份頁按 <span class="btn">選擇或拖曳備份檔</span>，選 ZIP 或 JSON，全部計畫與設定就會接續回來。<strong>也可以直接把備份檔拖到那張卡片上</strong>，拖曳經過時卡片會亮起來。</p></div>
 
 <ul>
   <li>關閉網站或重新整理，資料<strong>不會</strong>消失（存在這台電腦的瀏覽器裡）。</li>
