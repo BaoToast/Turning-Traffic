@@ -1,6 +1,6 @@
 {
   "name": "turning-traffic",
-  "version": "2.1.48",
+  "version": "2.1.49",
   "private": true,
   "engines": {
     "node": ">=22.13.0"

@@ -3747,6 +3747,15 @@ export default function TrafficApp() {
    */
   useEffect(function () {
     function blockStray(e: DragEvent) {
+      /*
+       * 只攔「拖檔案」，不要攔一般的文字拖曳。
+       *
+       * v2.1.47～48 少了這一層判斷，於是把使用者在頁面內拖動選取文字
+       * 也一起擋掉了——拖一段字到輸入框或文字區都放不下去。實測確認過。
+       * dataTransfer.types 含 "Files" 才是拖檔案。
+       */
+      const types = e.dataTransfer ? Array.from(e.dataTransfer.types || []) : [];
+      if (!types.includes("Files")) return;
       const el = e.target instanceof Element ? e.target : null;
       if (el && el.closest("[data-dropzone]")) return;
       e.preventDefault();
@@ -12676,14 +12685,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.48-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.49-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.48-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.49-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >

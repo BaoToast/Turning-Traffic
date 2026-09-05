@@ -495,7 +495,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.48";
+export const VERSION = "v2.1.49";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -603,6 +603,11 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.49",
+    date: "2026-09-05",
+    note: "修正全域拖放防呆會連一般文字拖曳都擋掉的問題，**沒有變更任何交通量或 PCU 計算**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30，固定計算黃金值完全相同。v2.1.47 加入的「檔案掉在放置區外面不要把使用者帶離頁面」少了一層判斷：沒有先確認拖進來的是不是檔案，於是使用者在頁面內拖動選取文字（例如把一段字拖到輸入框）也一起被擋住。實測輸入框、側邊選單與內容區三處都中。改成只有 `dataTransfer.types` 含 `Files` 時才攔截，文字拖曳完全不受影響——全日交通量 v20.47 本來就是這樣寫的，本版與它對齊。另外把 `scripts/e2e-progress.mjs` 的畫面取樣由固定 10ms 輪詢改成 MutationObserver 全量記錄：短命的畫面狀態用輪詢會漏掉，改法讓守門測試看得到每一次變動。",
+  },
   {
     version: "v2.1.48",
     date: "2026-09-05",

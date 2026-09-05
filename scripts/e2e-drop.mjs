@@ -297,6 +297,66 @@ ok(
   `提示「${restoreOutcome.toast}」、對話框 ${restoreOutcome.modal} 個`,
 );
 
+/* ── 六、全域防呆只能攔檔案，不可以連一般文字拖曳都擋掉 ── */
+/*
+ * v2.1.47～48 的防呆少了「是不是拖檔案」這一層判斷，於是把使用者
+ * 在頁面內拖動選取文字也一起擋掉了：拖一段字到輸入框放不下去。
+ * 這一項就是釘住那個分界。
+ */
+/* 先切到有一般輸入框的分頁；備份頁上唯一的 input 是放置區裡的隱藏檔案欄，
+   拿它來驗會變成恆真的假檢查（第一版就踩到了）。 */
+await go("多計畫管理");
+const textDrag = await page.evaluate(() => {
+  const probe = (selector) => {
+    const el = document.querySelector(selector);
+    if (!el) return { missing: true };
+    const dt = new DataTransfer();
+    dt.setData("text/plain", "一段被拖曳的文字");
+    const over = new DragEvent("dragover", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: dt,
+    });
+    el.dispatchEvent(over);
+    return { blocked: over.defaultPrevented };
+  };
+  /*
+   * 要挑**不在放置區裡**的輸入框。備份頁的 .upload-label 本身就是放置區，
+   * 裡面那個隱藏的 file input 被擋是正確行為，拿它來驗會誤判。
+   */
+  const plainInput = [...document.querySelectorAll("input")].find(
+    (el) => el.type !== "file" && !el.closest("[data-dropzone]"),
+  );
+  const probeEl = (el) => {
+    if (!el) return { missing: true };
+    const dt = new DataTransfer();
+    dt.setData("text/plain", "一段被拖曳的文字");
+    const over = new DragEvent("dragover", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: dt,
+    });
+    el.dispatchEvent(over);
+    return { blocked: over.defaultPrevented };
+  };
+  return {
+    input: probeEl(plainInput),
+    nav: probe("nav"),
+    content: probe(".content"),
+  };
+});
+ok(
+  "前置：找得到一個不在放置區裡的一般輸入框",
+  textDrag.input.missing !== true,
+  textDrag.input.missing ? "找不到，這一項會變成恆真的假檢查" : "有",
+);
+for (const [label, key] of [["輸入框", "input"], ["側邊選單", "nav"], ["內容區", "content"]])
+  ok(
+    `拖一般文字到${label}不會被擋掉`,
+    textDrag[key].missing !== true && textDrag[key].blocked === false,
+    textDrag[key].missing ? "（找不到元素）" : `被擋=${textDrag[key].blocked}`,
+  );
+
 ok("沒有 JS 例外", errors.length === 0, errors.slice(0, 2).join(" | "));
 
 console.log(problems.length ? `\n❌ ${problems.length} 項未通過` : "\n✅ 全部通過");

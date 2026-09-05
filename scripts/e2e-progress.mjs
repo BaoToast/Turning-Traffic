@@ -153,6 +153,23 @@ const trace = await page.evaluate(
       if (!last || last.button !== entry.button || last.progress !== entry.progress)
         seen.push(entry);
     };
+    /*
+     * ⚠️ 這裡原本只用 setInterval 每 10ms 取樣。
+     *
+     * 問題是：序號與檔名對不上的那一格畫面只存在一個 setTimeout(0) 的時間
+     * （遠短於 10ms），取樣幾乎一定會跳過它。實測把 v2.1.47 的錯位寫法改回去，
+     * 這一支仍然 3/3 全綠——等於守門測試抓不到它要抓的那個 bug。
+     *
+     * 改用 MutationObserver：畫面**每一次**變動都記一筆，短命的錯誤畫面
+     * 也逃不掉。setInterval 保留做為保險（有些變動不經過 DOM mutation）。
+     */
+    const observer = new MutationObserver(() => snap());
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+    });
     const timer = setInterval(snap, 10);
     snap();
     const zone = document.querySelector(".upload-card");
@@ -168,6 +185,7 @@ const trace = await page.evaluate(
     );
     await new Promise((r) => setTimeout(r, 20000));
     clearInterval(timer);
+    observer.disconnect();
     snap();
     return seen;
   },
