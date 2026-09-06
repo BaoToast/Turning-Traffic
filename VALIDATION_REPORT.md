@@ -53,4 +53,12 @@ v2.1.51 可發布。複查發現並修正兩項非計算問題：
 
 ## 發布證據
 
-本節於 GitHub 推送、Actions 完成及公開網址驗證後補入最終提交、工作流程與線上主資產雜湊。
+- 發布提交：`dddbfab03ac56cc217fdee55aacf1c7a9fa341b0`（`Release Turning Traffic v2.1.51`）。
+- GitHub Actions「建置與測試」：run `34020048761`，成功。
+- GitHub Pages「pages build and deployment」：run `34020048317`，成功。
+- 以帶版號網址 `https://baotoast.github.io/Turning-Traffic/?v=2.1.51` 驗證，首頁引用 `assets/index-Rwp4RgMx.js` 與 `assets/index-CXM4BkEv.css`。
+- 線上主資產 `assets/index-Rwp4RgMx.js`：HTTP 200；SHA-256 `72359d0c920b6324acdcd2bc6cdfd169889e4e70c268ba2e5c10975d3066828b`，與本機正式建置逐位一致。
+- 線上 v2.1.51 PDF／DOCX 手冊：HTTP 200；SHA-256 分別為 `f8311d0b30711e9a261bc1dbad3594e53030d61d31ff4f7eaa48be037d4d9bb2`、`d0dd3d03bfdd28ef25e3b512106f86cf20b3ff61f04d29aca88873e78d5e262f`，均與本機逐位一致。
+- v2.1.49、v2.1.50 及 Claude 原始 v2.1.51 候選版的舊主資產網址均為 HTTP 404；v2.1.49、v2.1.50 舊手冊網址亦為 HTTP 404。
+
+上述公開驗證只採用帶版號網址、新版專屬雜湊資產及帶版號手冊，不以易受快取影響的固定路徑作為版本依據。
