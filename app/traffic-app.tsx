@@ -3741,6 +3741,36 @@ export default function TrafficApp() {
    */
   const [dragZone, setDragZone] = useState("");
   /*
+   * 選檔期間的提示。
+   *
+   * 使用者回報「按下選擇檔案、選了大量檔案之後，畫面什麼都沒有」。
+   * 實測過原因：change 一送到畫面 0ms 就更新——那段等待完全發生在
+   * 瀏覽器把檔案準備好之前，程式那時候還沒被叫到，所以沒辦法
+   * 「等待中才開始顯示」，只能從按下去的那一刻就先顯示。
+   *
+   * 取消選取時不會有 change，靠視窗重新取得焦點當退路。
+   */
+  const [pickingFiles, setPickingFiles] = useState(false);
+  useEffect(
+    function () {
+      if (!pickingFiles) return undefined;
+      let timer = 0;
+      function onFocus() {
+        window.clearTimeout(timer);
+        /* 有選檔時 change 很快就到；等一下再判斷，避免把正常選檔誤判成取消 */
+        timer = window.setTimeout(function () {
+          setPickingFiles(false);
+        }, 1200);
+      }
+      window.addEventListener("focus", onFocus);
+      return function () {
+        window.clearTimeout(timer);
+        window.removeEventListener("focus", onFocus);
+      };
+    },
+    [pickingFiles],
+  );
+  /*
    * 檔案掉在放置區**外面**時，瀏覽器預設會直接開啟那個檔案，
    * 等於把使用者踢出系統畫面。這裡全域擋掉，並讓游標顯示「不可放置」。
    * 放置區內部照常放行，交給該區自己的 onDrop 處理。
@@ -5234,8 +5264,38 @@ export default function TrafficApp() {
      * 進度數字會整批卡到最後才一次跳完。
      */
     const breathe = () => new Promise((done) => setTimeout(done, 0));
+    /*
+     * 第一次解析之前，要**確定畫面已經重繪過**。
+     *
+     * setTimeout(0) 只是讓出一個巨集任務，不保證瀏覽器有機會畫。
+     * 實測（交通服務水準，6 份 1.7MB 的檔）：狀態停在「已完成 0／6 份」，
+     * 每 20ms 的心跳整段只跳了 1 次——單一檔案解析的過程主執行緒完全被佔住，
+     * 畫面零重繪。使用者回報「按下選擇檔案之後，作業系統的檔案對話框
+     * 沒有自動關閉，但系統仍在匯入」就是這個原因：畫面來不及重繪，
+     * 對話框關閉後的殘影留在螢幕上。三支的解析流程一樣，所以一起處理。
+     *
+     * ⚠️ 分頁在背景時 requestAnimationFrame 不會觸發，一定要有時間退路，
+     *    否則匯入會永遠停住。
+     */
+    const paint = () =>
+      new Promise<void>((done) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          done();
+        };
+        const fallback = setTimeout(finish, 250);
+        if (typeof requestAnimationFrame === "function")
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              clearTimeout(fallback);
+              finish();
+            }),
+          );
+      });
     setImportProgress({ done: 0, total: all.length, file: all[0]?.name ?? "" });
-    await breathe();
+    await paint();
     const rows: ImportPreview[] = [];
     let parsedCount = 0;
     for (const file of all) {
@@ -6989,7 +7049,10 @@ export default function TrafficApp() {
         駛入流量: item.inbound,
         駛出流量: item.outbound,
         差值: item.difference,
-        單位: "PCU/hr",
+        /* 同一個活頁簿裡 OD 矩陣已經用 scopeUnit(peak)；這裡寫死 PCU/hr
+           會讓兩張表對同一批數字說兩種話（FULL 時差約 24 倍的語意），
+           而且與畫面上的「各支線流量平衡」面板也對不起來。 */
+        單位: scopeUnit(peak),
       };
     });
     const sensitivityRows = peakSensitivity(record).map(function (item) {
@@ -7232,14 +7295,20 @@ export default function TrafficApp() {
             VEHICLE_LABELS[vehicle] ||
             CORE_VEHICLE_LABELS[vehicle] ||
             vehicle;
-      const diagramUnit = vehicle === "all" ? "PCU/hr" : "輛/hr";
+      /*
+       * ⚠️ 不可以寫死 /hr：peak 的型別是 ScopeKey，包含 FULL（全日時段），
+       * 畫面選單也真的讓使用者選得下去。圖檔本身的單位是跟著 scopeUnit(peak)
+       * 走的，README 寫死 PCU/hr 就會和它附的圖對不上——而這包 ZIP 是要交給
+       * 業主的成果。實測選「全日時段」時：圖上是「PCU/調查日」，
+       * README 卻寫「時段：FULL 尖峰／單位 PCU/hr」。
+       */
+      const diagramUnit = scopeUnit(peak, vehicle === "all" ? "pcu" : "vehicle");
       zip.file(
         "README.txt",
         "Turning Traffic 批次成果包\r\n範圍：" +
           selectedQuarters.join("、") +
           "\r\n時段：" +
-          peak +
-          " 尖峰" +
+          SCOPE_LABELS[peak] +
           "\r\n內容：各計畫分析 Excel、多頁 PDF、各路口 PNG。" +
           "\r\n轉向圖車種：" +
           diagramVehicleLabel +
@@ -8510,6 +8579,7 @@ export default function TrafficApp() {
                     multiple
                     accept=".xls,.xlsx,.xlsm"
                     onChange={function (e) {
+                      setPickingFiles(false);
                       handleFiles(e.target.files);
                     }}
                   />
@@ -8517,6 +8587,7 @@ export default function TrafficApp() {
                     className="primary"
                     disabled={!importPeriodReady || importing}
                     onClick={function () {
+                      setPickingFiles(true);
                       fileRef.current?.click();
                     }}
                   >
@@ -8528,6 +8599,15 @@ export default function TrafficApp() {
                         ? "選擇檔案"
                         : "請先選年度與季度"}
                   </button>
+                  {/*
+                    按下去到 change 之間完全是瀏覽器在讀檔，程式插不進去，
+                    提示只能從按下去那一刻開始顯示；取消時由 focus 那條退路收掉。
+                  */}
+                  {pickingFiles && !importing ? (
+                    <p className="picking-files-hint" role="status">
+                      正在讀取您選擇的檔案，請稍候…
+                    </p>
+                  ) : null}
                   {/*
                    * 判讀中的進度。使用者回報過「上傳大量檔案後以為沒成功」，
                    * 原因是舊版只有按鈕文字換成「正在解析…」，一動也不動。
@@ -11521,7 +11601,7 @@ export default function TrafficApp() {
                             }
                           >
                             守恆差值 {conservation.difference.toLocaleString()}{" "}
-                            PCU/hr · {conservation.valid ? "一致" : "需核對"}
+                            {scopeUnit(peak)} · {conservation.valid ? "一致" : "需核對"}
                           </span>
                         </section>
                         <section className="advanced-grid">
@@ -11627,7 +11707,14 @@ export default function TrafficApp() {
                                 </span>
                                 <h2>連續 60 分鐘候選排行</h2>
                               </div>
-                              <span className="status-dot">{scopeUnit(peak)}</span>
+                              {/*
+                                這張表是 peakSensitivity(record) 算的，永遠是
+                                60 分鐘視窗，值永遠是 PCU/hr，**不隨 peak 變動**。
+                                舊版這裡寫 scopeUnit(peak)，選「全日時段」時標題
+                                變成 PCU/調查日，同一張表的格子卻寫 PCU/hr，
+                                面板自己跟自己矛盾。單位固定才是實話。
+                              */}
+                              <span className="status-dot">PCU/hr（固定 60 分鐘視窗）</span>
                             </div>
                             {sensitivity.length ? (
                               <div className="table-scroll">
@@ -12685,14 +12772,14 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./Turning-Traffic-v2.1.49-新手操作手冊.pdf"
+                    href="./Turning-Traffic-v2.1.51-新手操作手冊.pdf"
                     download
                   >
                     下載完整 PDF 手冊
                   </a>
                   <a
                     className="secondary help-download"
-                    href="./Turning-Traffic-v2.1.49-新手操作手冊.docx"
+                    href="./Turning-Traffic-v2.1.51-新手操作手冊.docx"
                     download
                     title="可編輯的 Word 版本"
                   >

@@ -246,6 +246,175 @@ ok(
   `結束時按鈕「${last.button}」`,
 );
 
+/* ── 選檔期間就要看得到提示 ── */
+/*
+ * 使用者回報「按下選擇檔案、選了大量檔案之後畫面什麼都沒有」。
+ * 實測 change 一送到畫面 0ms 就更新——等待完全在瀏覽器那一側，
+ * 程式還沒被叫到，提示只能從按下去那一刻開始顯示。
+ * 三段都要驗，缺一段就會變成恆真。
+ */
+{
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(1200);
+  await go("季度批次匯入");
+  await page.locator('.content label:has-text("調查年度") input').first().fill("115");
+  await page.locator('.content label:has-text("季度") select').first().selectOption("2");
+  await page.waitForTimeout(400);
+  const before = await page.evaluate(
+    () => document.querySelectorAll(".picking-files-hint").length,
+  );
+  ok("前置：還沒按選擇檔案時，沒有「正在讀取」提示", before === 0);
+
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.locator('.upload-card button:has-text("選擇檔案")').first().click();
+  /* 只要等到對話框真的被叫出來就夠了，這一輪要模擬的是「開了但按取消」 */
+  await chooserPromise;
+  await page.waitForTimeout(300);
+  const whilePicking = await page.evaluate(() => {
+    const el = document.querySelector(".picking-files-hint");
+    return el ? el.textContent.trim() : "";
+  });
+  ok(
+    "按下選擇檔案之後，馬上看得到「正在讀取」的提示",
+    /正在讀取/.test(whilePicking),
+    `「${whilePicking}」`,
+  );
+
+  /* 取消：沒有 change，提示要靠 focus 退路自己收掉 */
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForTimeout(1800);
+  const afterCancel = await page.evaluate(
+    () => document.querySelectorAll(".picking-files-hint").length,
+  );
+  ok("按了取消之後，提示要自己收掉", afterCancel === 0, `提示 ${afterCancel} 個`);
+
+  /* 真的選檔：提示要收掉 */
+  const chooser2Promise = page.waitForEvent("filechooser");
+  await page.locator('.upload-card button:has-text("選擇檔案")').first().click();
+  const chooser2 = await chooser2Promise;
+  await chooser2.setFiles([
+    { name: payload[0].name, mimeType: payload[0].type, buffer: Buffer.from(payload[0].base64, "base64") },
+  ]);
+  await page.waitForTimeout(3000);
+  const afterPick = await page.evaluate(
+    () => document.querySelectorAll(".picking-files-hint").length,
+  );
+  ok("真的選了檔之後，提示也要收掉", afterPick === 0, `提示 ${afterPick} 個`);
+}
+
+/* ── 分頁在背景時（rAF 不觸發）匯入不可以卡住 ── */
+/*
+ * 第一份檔案解析前改成等兩個動畫影格，才能確保「正在解析」被畫出來。
+ * 但分頁被切到背景時 requestAnimationFrame **完全不會觸發**——
+ * 少了時間退路，匯入會永遠停住。這一項就是釘住那條退路。
+ */
+{
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(1200);
+  await go("季度批次匯入");
+  await page.locator('.content label:has-text("調查年度") input').first().fill("115");
+  await page.locator('.content label:has-text("季度") select').first().selectOption("2");
+  await page.waitForTimeout(400);
+  await page.evaluate(() => {
+    window.requestAnimationFrame = () => 0;
+  });
+  await page.evaluate(async ({ name, base64, type }) => {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], name, { type }));
+    document
+      .querySelector(".upload-card")
+      .dispatchEvent(
+        new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }),
+      );
+  }, payload[0]);
+  const finished = await page.evaluate(async () => {
+    const started = performance.now();
+    while (performance.now() - started < 20000) {
+      await new Promise((r) => setTimeout(r, 150));
+      const button = document.querySelector(".upload-card button");
+      if (button && !/正在解析/.test(button.textContent))
+        return Math.round(performance.now() - started);
+    }
+    return -1;
+  });
+  ok(
+    "rAF 不觸發時（分頁在背景）匯入仍然會完成，不會永遠卡住",
+    finished >= 0,
+    finished >= 0 ? `${finished}ms 內完成` : "20 秒內沒有完成——退路失效了",
+  );
+}
+
+/*
+ * ── 第一份檔案開始解析之前，一定要先真的重畫過一次 ──
+ *
+ * ⚠️ 這一項是補上來的。原本只有下面那個「rAF 不觸發時不會卡住」在守，
+ *    而那只守到 250ms 退路那一半。實測把 `await paint()` 改回
+ *    `await breathe()`（等於整個拿掉這項修正），整支測試**仍然全綠**——
+ *    也就是本版的招牌修正之一根本沒有守門測試。
+ *
+ * 怎麼驗：`paint()` 的作法是「連續兩個 requestAnimationFrame」，所以匯入
+ * 期間一定會看到成對的 rAF 呼叫。改回 setTimeout(0) 的話一次都不會有。
+ * 直接數 rAF 呼叫次數，是這個實作唯一可觀測、又不依賴畫面時序的痕跡。
+ */
+{
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(1200);
+  await go("季度批次匯入");
+  await page.locator('.content label:has-text("調查年度") input').first().fill("115");
+  await page.locator('.content label:has-text("季度") select').first().selectOption("2");
+  await page.waitForTimeout(400);
+  const paintProbe = await page.evaluate(
+    async ({ payload }) => {
+      let raf = 0;
+      const original = window.requestAnimationFrame;
+      window.requestAnimationFrame = function (callback) {
+        raf += 1;
+        return original(callback);
+      };
+      let sawProgress = false;
+      const observer = new MutationObserver(function () {
+        if (document.querySelector(".import-progress")) sawProgress = true;
+      });
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      });
+      const transfer = new DataTransfer();
+      for (const item of payload) {
+        const binary = atob(item.base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        transfer.items.add(new File([bytes], item.name, { type: item.type }));
+      }
+      document
+        .querySelector(".upload-card")
+        .dispatchEvent(
+          new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }),
+        );
+      await new Promise((r) => setTimeout(r, 12000));
+      observer.disconnect();
+      window.requestAnimationFrame = original;
+      return { raf, sawProgress };
+    },
+    { payload: payload.slice(0, 6) },
+  );
+  /* 前置：匯入真的跑了。沒跑的話 rAF 當然是 0，下一項就變成沒有意義的檢查。 */
+  ok(
+    "前置：這一輪匯入真的有跑起來（有出現過進度列）",
+    paintProbe.sawProgress,
+    paintProbe.sawProgress ? "有出現進度列" : "整段沒有進度列，下一項不成立",
+  );
+  ok(
+    "第一份檔案開始解析前，確實等過一次真正的重畫（連續兩個 rAF）",
+    paintProbe.sawProgress && paintProbe.raf >= 2,
+    `匯入期間 requestAnimationFrame 呼叫 ${paintProbe.raf} 次（需要 ≥ 2）`,
+  );
+}
+
 ok("沒有 JS 例外", errors.length === 0, errors.slice(0, 2).join(" | "));
 
 console.log(problems.length ? `\n❌ ${problems.length} 項未通過` : "\n✅ 全部通過");

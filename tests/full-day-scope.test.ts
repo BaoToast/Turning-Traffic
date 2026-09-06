@@ -389,6 +389,32 @@ test("四個統計範圍的欄位由 SCOPE_KEYS 產生，不是手寫", () => {
   );
 });
 
+test("進階分析與批次成果包的全日時段單位都走 scopeUnit", () => {
+  const advancedBlock = appSource.slice(
+    appSource.indexOf("function exportAdvancedExcel"),
+    appSource.indexOf("function exportQualityExcel"),
+  );
+  assert.match(advancedBlock, /單位:\s*scopeUnit\(peak\)/);
+
+  const advancedView = appSource.slice(
+    appSource.indexOf('{view === "advanced"'),
+    appSource.indexOf('{view === "conclusion"'),
+  );
+  assert.match(advancedView, /scopeUnit\(peak\)/);
+  assert.doesNotMatch(
+    advancedView,
+    /守恆差值[\s\S]{0,160}PCU\/hr/,
+    "全日時段的守恆差值仍被標成每小時",
+  );
+
+  const batchBlock = appSource.slice(
+    appSource.indexOf("async function exportBatch"),
+    appSource.indexOf("function importBackup"),
+  );
+  assert.match(batchBlock, /scopeUnit\(peak,/);
+  assert.match(batchBlock, /SCOPE_LABELS\[peak\]/);
+});
+
 test("轉向圖上的數字只有一支取值函式（含新增的車輛數模式）", () => {
   assert.match(appSource, /const movementValue = function/);
   assert.match(appSource, /const routeValueOf = function/);

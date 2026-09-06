@@ -495,7 +495,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.49";
+export const VERSION = "v2.1.51";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -603,6 +603,16 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.51",
+    date: "2026-09-05",
+    note: "全面徹查後的四項修正與發布前獨立補正，**沒有變更任何交通量或 PCU 計算**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30，固定計算黃金值不變。**(1) 全日時段單位修正。** 批次成果包 README、轉向進階核對 Excel 的支線流量平衡及畫面上的守恆差值改為跟著 scopeUnit(peak)；固定 60 分鐘候選排行明確標示 PCU/hr。**(2) 混用時間格只加警告，不改挑選邏輯。** 警告只在兩種以上格距各佔兩成以上且各自至少重複兩次時出現，避免短時段只漏一列造成單次跳號誤報。**(3) 補上 paint() 的守門測試。** 以匯入期間 requestAnimationFrame 呼叫次數確認第一份解析前確實重畫。**(4) 重新匯入測試改為真實滑鼠點擊。** 在按鈕確實停用期間檢查檔案對話框不會被再次叫出。上述修改只涉及顯示、警告與測試，不改尖峰挑選、OD、車種當量或流量計算。",
+  },
+  {
+    version: "v2.1.50",
+    date: "2026-09-05",
+    note: "補上「按下選擇檔案之後、檔案還在讀」這段空窗期的提示，並確保第一份檔案開始解析前畫面一定先重畫一次，**沒有變更任何交通量或 PCU 計算**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.30，固定計算黃金值完全相同。使用者回報兩件事：一是按下「選擇檔案」、在系統對話框選了大量檔案之後，畫面看起來完全沒反應（對話框關閉到程式收到 change 之間是瀏覽器在讀檔，程式插不進去），二是匯入開始後要等到全部讀完才看得到進度。本版在按下按鈕當下就顯示「正在讀取您選擇的檔案，請稍候…」，選好檔或按取消都會自己收掉（取消沒有 change 事件，靠視窗重新取得焦點當退路）；另外在第一份檔案開始解析前先等一次真正的重畫（連續兩個 requestAnimationFrame），讓進度列在第一份就看得到，並附 250ms 時間退路，避免分頁在背景時 requestAnimationFrame 不觸發而永遠卡住。三項修正都以「拿掉修正」的版本實測守門測試會紅字。",
+  },
   {
     version: "v2.1.49",
     date: "2026-09-05",
@@ -2662,6 +2672,58 @@ export async function inspectWorkbook(
       "未找到時相圖；不影響尖峰轉向流量，僅表示道路幾何可能需要人工校正。",
     );
   if (!intervalRows.length) warnings.push("未找到可辨識的時間序列資料。");
+  /*
+   * 混合時間格：同一份檔案裡有些是 15 分鐘格、有些是整點格。
+   *
+   * 格距只取全表眾數，而尖峰視窗是**數格數**（needed = 60 / 眾數格距）、
+   * 不是累計分鐘數。眾數是 60 時 needed = 1，等於任何一列都被當成一個完整
+   * 小時；台灣常見的「全日整點＋尖峰時段拆 15 分鐘」版型正好踩中，
+   * 尖峰那一小時被拆成 4 列，系統只取其中 1 列當成該小時的流率，
+   * 低估 75%，而且總量守恆，任何以總量為基礎的檢查都抓不到。
+   *
+   * 這裡**只做偵測與提醒，不改計算**。修正挑選邏輯會變更計算口徑，
+   * 那要連 LAST_CALC_CHANGE_VERSION 一起推進、讓既有鎖定全部重新確認，
+   * 屬於使用者要拍板的決定，不是可以順手做掉的事。
+   * （實測：使用者目前的 37 份真實工作簿沒有任何一份混用，0/37。）
+   */
+  /*
+   * 判準要抓「兩種規律的格距」，不是「格距不完全一致」。
+   *
+   * 第一版只看 gapCounts.size > 1 就報，實測 55 筆真實預覽誤報 19 筆：
+   *  ・調查中間有休息時段（07:00–09:00、17:00–19:00）→ 中間一個 480 分鐘的跳號
+   *  ・旅行時間格式的檔案（TS 系列）根本不是等距時間序列，一堆一次性的間隔
+   * 所以改成：每一種格距都要**佔全部間隔的兩成以上**才算一個「規律」，
+   * 有兩種以上規律才是真的混用。休息時段的跳號只出現一次，佔比極低，
+   * 不會觸發；TS 那種零散間隔也不會有任何一種達到兩成。
+   */
+  const totalGaps = gaps.length;
+  const regularGaps = [...gapCounts.entries()]
+    .filter(function (entry) {
+      /*
+       * 一次性的跳號不是「規律格距」。短時段資料若只漏一列，可能只有
+       * 4 個相鄰間隔，其中那一個 30 分鐘跳號就占 25%；只看比例會把
+       * 全部都標成 15 分鐘的資料誤報為混合 15／30 分鐘。
+       * 至少重複兩次，再加上兩成門檻，才有足夠證據稱為另一種規律。
+       */
+      return totalGaps > 0 && entry[1] >= 2 && entry[1] / totalGaps >= 0.2;
+    })
+    .sort(function (a, b) {
+      return a[0] - b[0];
+    });
+  if (regularGaps.length > 1) {
+    const spread = regularGaps
+      .map(function (entry) {
+        return entry[0] + " 分鐘 × " + entry[1] + " 段";
+      })
+      .join("、");
+    warnings.push(
+      "這份檔案混用了不同長度的時間格（" +
+        spread +
+        "），系統以最常出現的 " +
+        intervalMinutes +
+        " 分鐘為準推算尖峰小時，該值可能不是真正的一小時流量，請人工核對尖峰時段的數字。",
+    );
+  }
   const distinctApproaches = new Set(
     detectedColumns.map(function (column) {
       return column.approach;

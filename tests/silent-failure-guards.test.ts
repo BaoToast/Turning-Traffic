@@ -128,6 +128,60 @@ test("全部都是數字時不可以誤報非數值警告", async () => {
   assert.ok(!preview.warnings.some((w) => /不是數字/.test(w)));
 });
 
+/* ── 混合時間格只提醒真正重複出現的第二種規律 ── */
+function turningFileWithStarts(fileName: string, starts: number[]) {
+  const rows: unknown[][] = Array.from({ length: starts.length + 8 }, () =>
+    Array(56).fill(null),
+  );
+  const vehicles = ["機車", "小型車", "大型車", "特種車"];
+  const movements = ["左轉", "直進", "右轉"];
+  const clock = (minutes: number) =>
+    `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  for (let approach = 0; approach < 4; approach += 1) {
+    const base = approach * 14;
+    rows[1][base] = "站號：11017T14-02";
+    rows[1][base + 4] = "日期：115年01月26日 (平日)";
+    rows[2][base] = "站名：測試路－驗證路口";
+    rows[3][base] = `路口編號：路口${String.fromCharCode(65 + approach)}`;
+    rows[4][base] = "時間";
+    vehicles.forEach((vehicle, vi) => {
+      rows[4][base + 1 + vi * 3] = vehicle;
+      movements.forEach((movement, mi) => {
+        rows[5][base + 1 + vi * 3 + mi] = movement;
+      });
+    });
+    starts.forEach((start, ri) => {
+      rows[6 + ri][base] = `${clock(start)}~${clock(start + 15)}`;
+      for (let column = 1; column <= 12; column += 1)
+        rows[6 + ri][base + column] = 10;
+    });
+  }
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!merges"] = Array.from({ length: 4 }).flatMap((_, approach) =>
+    vehicles.map((__, vi) => ({
+      s: { r: 4, c: approach * 14 + 1 + vi * 3 },
+      e: { r: 4, c: approach * 14 + 3 + vi * 3 },
+    })),
+  );
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "平日");
+  return new File([XLSX.write(wb, { type: "array", bookType: "xlsx" })], fileName);
+}
+
+test("真正重複的 15／60 分鐘格距會提出人工核對警告", async () => {
+  const preview = await inspectWorkbook(
+    turningFileWithStarts("路口_混合時間格.xlsx", [420, 435, 450, 510, 570, 585, 645]),
+  );
+  assert.ok(preview.warnings.some((warning) => /混用了不同長度的時間格/.test(warning)));
+});
+
+test("短時段資料只漏一列時，不誤稱為混合時間格", async () => {
+  const preview = await inspectWorkbook(
+    turningFileWithStarts("路口_單一漏列.xlsx", [420, 435, 450, 480, 495]),
+  );
+  assert.ok(!preview.warnings.some((warning) => /混用了不同長度的時間格/.test(warning)));
+});
+
 
 /* ── 四、判斷與寫入必須用同一個運算式 ── */
 test("日期格式與布林值的儲存格要真的變成 0，不能存進 epoch 毫秒", async () => {
