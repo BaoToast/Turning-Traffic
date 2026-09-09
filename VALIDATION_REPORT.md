@@ -57,4 +57,12 @@
 
 ## 發布證據
 
-發布提交、GitHub Actions、Pages 新版雜湊資產及帶版號手冊的線上 SHA-256，於正式發布完成後記錄於交付資料夾的 Claude 交接說明及 SHA-256 清單。
+- 發布提交：`ef5e56e028dbbba87b4529b87b0ae40341dd66fe`（`Release Turning Traffic v2.1.63`）。
+- GitHub Actions「建置與測試」run `34337416104`：成功。
+- GitHub Pages「pages build and deployment」run `34337415540`：成功。
+- 帶版號首頁 `https://baotoast.github.io/Turning-Traffic/?v=2.1.63` 引用新版 `assets/index-DSVt1yFb.js` 與 `assets/index-I6lm9iKN.css`。
+- 線上主資產 SHA-256：`4F673FEDC82559FC025EE04CB39386DF4B31453D021E0851B11F8DD2FCA560B5`，與本機逐位一致。
+- 線上 v2.1.63 PDF／DOCX 手冊 SHA-256 分別為 `7006CD1D4E9263F8EB33034D6D489CEEA20BC7116F94A4AFECCD1FDFE25F23C7`、`9DA92D7184ED0EEE31D9CE8B77AA7AA8398272033DDA6C549E4D3C80B6EAEB7F`，與本機逐位一致。
+- v2.1.62 主資產 `assets/index-DXNvRCqG.js`、v2.1.51 主資產 `assets/index-Rwp4RgMx.js` 及 v2.1.62 PDF 手冊網址均為 HTTP 404。
+
+線上驗證只採用帶版號首頁、新版專屬雜湊資產及帶版號手冊，不以易受快取影響的固定檔名判定版本。
