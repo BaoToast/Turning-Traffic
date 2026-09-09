@@ -38,6 +38,11 @@ const MUST_TRAVEL = [
   "reportTemplatesByProject",
   "conclusionTemplatesByProject",
   "recordRevisions",
+  /*
+   * 「這個轉向到底存不存在」的使用者裁決。沒收進備份的話，換一台電腦
+   * 還原之後每一季匯入都會再問一次同樣的問題（那正是使用者抱怨過的事）。
+   */
+  "movementPresence",
 ];
 
 /** 每一項都必須是「每個計畫各自一份」，不可以是全機共用的一份。 */
@@ -60,7 +65,12 @@ function block(startMarker, endMarker, label) {
 test("存進瀏覽器的內容收齊了使用者的設定", () => {
   const saved = block(
     'kind: "TURNING_TRAFFIC_STATE"',
-    "localStorage.setItem",
+    /*
+     * v2.1.53 起存檔改走 saveState()（IndexedDB），不再是
+     * localStorage.setItem。這裡只是「存檔內容那一段」的結束標記，
+     * 換成新的呼叫名稱即可，檢查的東西沒有變。
+     */
+    "saveState(",
     "存檔內容",
   );
   for (const key of MUST_TRAVEL)
@@ -146,7 +156,12 @@ test("舊版備份的扁平範本清單，還原時每個計畫各給一份", ()
 test("存檔仍然寫出舊欄位，讓退版之後還讀得到東西", () => {
   const saved = block(
     'kind: "TURNING_TRAFFIC_STATE"',
-    "localStorage.setItem",
+    /*
+     * v2.1.53 起存檔改走 saveState()（IndexedDB），不再是
+     * localStorage.setItem。這裡只是「存檔內容那一段」的結束標記，
+     * 換成新的呼叫名稱即可，檢查的東西沒有變。
+     */
+    "saveState(",
     "存檔內容",
   );
   for (const key of ["reportTemplates", "conclusionTemplates"])

@@ -393,6 +393,79 @@ if (parallel) {
 console.log("\n══ 主控台錯誤 ══");
 ok("沒有 JS 例外", errors.length === 0, errors.slice(0, 4).join(" / "));
 
+/* ── 按鈕上的字要看得見 ── */
+/*
+ * 姊妹專案（交通服務水準）實際踩到的：按鈕裡的 <small> 被一條沒寫 color
+ * 的規則塗成灰色，白底的按鈕看得到，深藍底的那顆對比只有 1.12:1——
+ * 等於看不見。**只有其中一顆壞掉**，肉眼掃過去很容易漏掉，必須用量的。
+ *
+ * ⚠️ 假通過陷阱：只驗「字有沒有設 color」擋不住（設了灰色也是有設），
+ * 只驗「按鈕上有文字」更擋不住。要**真的算對比度**：取元素的實際文字色
+ * 與它背後那一層的實際背景色，照 WCAG 的相對亮度公式算，門檻 4.5:1。
+ * 另外，沒有 active 的分頁是 display:none，量不到任何東西——所以要
+ * 逐分頁走一遍，而且先驗「真的量到東西」，否則對比那一項會變成恆真。
+ */
+const contrastProbe = () => {
+  const lum = (rgb) => {
+    const parts = rgb.match(/[\d.]+/g).slice(0, 3).map(Number);
+    const chan = parts.map((v) => {
+      const x = v / 255;
+      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * chan[0] + 0.7152 * chan[1] + 0.0722 * chan[2];
+  };
+  /* 往上找到第一個不透明的背景色——按鈕的字是畫在按鈕自己的底色上。 */
+  const backdrop = (node) => {
+    let cursor = node;
+    while (cursor && cursor !== document.documentElement) {
+      const bg = getComputedStyle(cursor).backgroundColor;
+      const alpha = bg.match(/[\d.]+/g);
+      if (bg && alpha && (alpha.length < 4 || Number(alpha[3]) > 0.9)) return bg;
+      cursor = cursor.parentElement;
+    }
+    return "rgb(255,255,255)";
+  };
+  const out = [];
+  for (const node of document.querySelectorAll(
+    "button small, button b, button span",
+  )) {
+    const rect = node.getBoundingClientRect();
+    if (!rect.width || !rect.height) continue;
+    const style = getComputedStyle(node);
+    const fg = lum(style.color);
+    const bg = lum(backdrop(node));
+    const ratio =
+      (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+    out.push({
+      text: (node.textContent || "").trim().slice(0, 24),
+      color: style.color,
+      background: backdrop(node),
+      ratio: Number(ratio.toFixed(2)),
+    });
+  }
+  return out;
+};
+const contrast = [];
+for (const [, label] of VIEWS) {
+  if (!(await gotoView(label))) continue;
+  contrast.push(...(await page.evaluate(contrastProbe)));
+}
+ok(
+  "前置：要真的量到按鈕裡的補充文字（量不到的話下一項會變成恆真）",
+  contrast.length > 0,
+  `量到 ${contrast.length} 段`,
+);
+{
+  const bad = contrast.filter((item) => item.ratio < 4.5);
+  ok(
+    "按鈕上的補充說明文字要看得清楚（與按鈕底色的對比 ≥ 4.5:1）",
+    bad.length === 0,
+    bad
+      .map((item) => `「${item.text}」${item.ratio}:1（字 ${item.color}／底 ${item.background}）`)
+      .join("；"),
+  );
+}
+
 await browser.close();
 server.close();
 

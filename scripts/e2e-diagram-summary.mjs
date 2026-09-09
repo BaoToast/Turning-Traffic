@@ -16,6 +16,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "./serve.mjs";
 import { launchOptions } from "./chrome-path.mjs";
+import { installStateHelpers } from "./read-state.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const problems = [];
@@ -34,11 +35,20 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(String(e.message)));
 page.on("dialog", (d) => d.accept());
 
+/* v2.1.53：資料改存 IndexedDB，端對端腳本要用 __readState／__writeState 才讀得到。 */
+
+await installStateHelpers(page);
+
 await page.goto("http://localhost:8188/");
 await page.waitForTimeout(700);
-await page.evaluate((json) => {
+await page.evaluate(async (json) => {
   localStorage.clear();
-  localStorage.setItem("turning-traffic-state-v2", json);
+  /*
+   * v2.1.53：狀態存在 IndexedDB，種子也要寫到那裡。
+   * 只寫 localStorage 的話，程式開機看到 IndexedDB 已經有東西（第一次載入
+   * 時存檔 effect 寫進去的空白狀態）就不會理它，這個種子等於沒生效。
+   */
+  await window.__writeState(json);
 }, JSON.stringify(seed));
 await page.reload();
 await page.waitForTimeout(1300);
@@ -184,8 +194,8 @@ ok(
  * 於是在既有品質檢查容許的 5% 落差內，兩邊會靜靜地各講各的。
  * 這一段直接把資料改成分歧狀態，再確認畫面上兩個數字仍然相同。
  */
-const patched = await page.evaluate(() => {
-  const raw = localStorage.getItem("turning-traffic-state-v2");
+const patched = await page.evaluate(async () => {
+  const raw = await window.__readState();
   if (!raw) return null;
   const state = JSON.parse(raw);
   const record = state.records?.[0];
@@ -196,7 +206,7 @@ const patched = await page.evaluate(() => {
   if (!id) return null;
   /* 把第一個車種的數量改掉，模擬使用者在核對工作台調整過。 */
   bag[id] = Math.round(Number(bag[id] || 0) * 1.3) + 7;
-  localStorage.setItem("turning-traffic-state-v2", JSON.stringify(state));
+  await window.__writeState(JSON.stringify(state));
   return { station: record.station, id, value: bag[id] };
 });
 ok("能做出「車輛數來源分歧」的狀態", Boolean(patched), JSON.stringify(patched));

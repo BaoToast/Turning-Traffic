@@ -17,6 +17,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchOptions } from "./chrome-path.mjs";
+import { installStateHelpers } from "./read-state.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, "..", "github-pages-dist");
@@ -99,14 +100,22 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(String(e.message)));
 page.on("dialog", (d) => d.accept());
 
+/* v2.1.53：資料改存 IndexedDB，端對端腳本要用 __readState／__writeState 才讀得到。 */
+await installStateHelpers(page);
+
 async function seedAndReload(value) {
   await page.goto("http://localhost:8113/");
   /* 等第一次載入的存檔 effect 跑完，否則它會蓋掉下面種進去的狀態。 */
   await page.waitForTimeout(700);
   await page.evaluate(
-    ([json]) => {
+    async ([json]) => {
       localStorage.clear();
-      if (json) localStorage.setItem("turning-traffic-state-v2", json);
+      /*
+       * v2.1.53：狀態存在 IndexedDB，種子也要寫到那裡。
+       * 只寫 localStorage 的話，程式開機看到 IndexedDB 已經有東西就不會理它，
+       * 這個種子等於沒生效，而測試多半仍然會綠——那是最糟的一種假通過。
+       */
+      await window.__writeState(json || "");
     },
     [value ? JSON.stringify(value) : ""],
   );
@@ -147,8 +156,8 @@ await page.waitForTimeout(600);
   await inputs.nth(1).fill("全新電腦上的計畫");
   await page.locator('button:has-text("＋ 建立計畫")').first().click();
   await page.waitForTimeout(800);
-  const saved = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("turning-traffic-state-v2") || "null"),
+  const saved = await page.evaluate(async () =>
+    JSON.parse((await window.__readState()) || "null"),
   );
   ok(
     "全新瀏覽器建立計畫後真的有存檔",
@@ -220,8 +229,8 @@ if (singleJson) {
       buffer: Buffer.from(JSON.stringify(singleJson)),
     });
   await page.waitForTimeout(1200);
-  const after = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("turning-traffic-state-v2") || "{}"),
+  const after = await page.evaluate(async () =>
+    JSON.parse((await window.__readState()) || "{}"),
   );
   ok(
     "空白電腦匯入單一計畫備份後計畫回來了",
@@ -254,8 +263,8 @@ if (singleJson) {
       buffer: Buffer.from(JSON.stringify(secondBackup)),
     });
   await page.waitForTimeout(1400);
-  const merged = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("turning-traffic-state-v2") || "{}"),
+  const merged = await page.evaluate(async () =>
+    JSON.parse((await window.__readState()) || "{}"),
   );
   ok(
     "第二份單一計畫備份是「併入」，前一個計畫還在",

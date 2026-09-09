@@ -26,6 +26,7 @@ import { join } from "node:path";
 import * as XLSX from "xlsx";
 import { serve } from "./serve.mjs";
 import { launchOptions } from "./chrome-path.mjs";
+import { installStateHelpers } from "./read-state.mjs";
 
 /* 與 e2e-progress.mjs 相同的匿名版型，不含任何真實調查資料。 */
 function makeWorkbook({ sheetName, dateText, station, name }) {
@@ -111,6 +112,8 @@ const page = await (
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e.message)));
 page.on("dialog", (d) => d.accept());
+/* v2.1.53：資料改存 IndexedDB，端對端腳本要用 __readState／__writeState 才讀得到。 */
+await installStateHelpers(page);
 await page.goto("http://localhost:8176/");
 await page.waitForTimeout(1500);
 
@@ -248,9 +251,9 @@ await page.locator('button:has-text("確認寫入"), button:has-text("寫入")')
 await page.waitForTimeout(2500);
 
 const countState = async () =>
-  page.evaluate(() => {
+  page.evaluate(async () => {
     try {
-      const raw = localStorage.getItem("turning-traffic-state-v2");
+      const raw = await window.__readState();
       if (!raw) return { records: 0, stations: 0 };
       const state = JSON.parse(raw);
       const records = Array.isArray(state.records) ? state.records : [];

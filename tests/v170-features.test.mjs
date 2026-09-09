@@ -46,11 +46,38 @@ test("keeps multi-quarter exports, batch packages, and format memories", () => {
   assert.match(appSource, /reportStartQuarter/);
   assert.match(appSource, /reportEndQuarter/);
   assert.match(appSource, /exportBatchPackage/);
+  /*
+   * formatMemories 的**資料**仍然保留（照樣累積、照樣進備份），
+   * 備份格式不變，舊備份還原不受影響。
+   */
   assert.match(appSource, /formatMemories/);
-  assert.match(appSource, /已記住的實際調查版型/);
 });
 
-test("shows destination inbound analysis with honest full-day availability", () => {
+/**
+ * 匯入頁的「調查檔格式範本」面板（三張範本卡片＋「已記住的實際調查版型」
+ * 折疊區）在 v2.1.54 移除。
+ *
+ * ⚠️ 這裡刻意比對 **JSX 的樣子**，不是比對「原始碼裡有沒有出現這幾個字」：
+ *    ・原始碼會留下解釋「為什麼拿掉」的註解
+ *    ・VERSION_HISTORY 的更新說明本來就要寫出拿掉了什麼
+ *    這兩處都會出現同樣的字，用純字串比對會被自己的說明絆倒
+ *    （第一版與第二版就是分別這樣紅的）。
+ */
+export const REMOVED_FORMAT_PANEL_PATTERNS = [
+  /className="panel format-template-panel"/,
+  /IMPORT_FORMAT_TEMPLATES\.map/,
+  /已記住的實際調查版型（\{formatMemories\.length\}/,
+  />\s*刪除格式記憶\s*</,
+];
+
+test("匯入頁不再展示「調查檔格式範本」與「已記住的實際調查版型」", () => {
+  for (const pattern of REMOVED_FORMAT_PANEL_PATTERNS)
+    assert.doesNotMatch(
+      appSource,
+      pattern,
+      `匯入頁還留著這一段版型面板：${pattern}`,
+    );
+});test("shows destination inbound analysis with honest full-day availability", () => {
   assert.match(appSource, /駛入／駛出各路口交通量/);
   assert.match(appSource, /inboundAnalysisRows/);
   assert.match(appSource, /駛入駛出各路口流量/);

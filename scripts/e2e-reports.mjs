@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import * as XLSX from "xlsx";
 import { serve } from "./serve.mjs";
 import { launchOptions } from "./chrome-path.mjs";
+import { installStateHelpers } from "./read-state.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const seed = readFileSync(join(here, "seed-state.json"), "utf8");
@@ -25,6 +26,8 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 page.on("console", (m) => { if (m.type() === "error" && !/net::ERR_/.test(m.text())) errors.push(m.text()); });
 await page.addInitScript((s) => localStorage.setItem("turning-traffic-state-v2", s), seed);
+/* v2.1.53：資料改存 IndexedDB，端對端腳本要用 __readState／__writeState 才讀得到。 */
+await installStateHelpers(page);
 await page.goto("http://localhost:8113/");
 await page.waitForTimeout(1200);
 
@@ -58,8 +61,8 @@ const truckRow = page.locator("table tbody tr").filter({ hasText: "大貨車" })
 await truckRow.locator("input").first().fill("1.8");
 await truckRow.locator("input").first().blur();
 await page.waitForTimeout(500);
-const savedFactor = await page.evaluate(() => {
-  const state = JSON.parse(localStorage.getItem("turning-traffic-state-v2") || "{}");
+const savedFactor = await page.evaluate(async () => {
+  const state = JSON.parse((await window.__readState()) || "{}");
   return state.pce?.["custom:大貨車"]?.left;
 });
 ok("修改後的當量有寫入儲存", Number(savedFactor) === 1.8, String(savedFactor));
@@ -153,8 +156,8 @@ ok("套用範本後勾選完整還原",
 // 勾選記在計畫上：切到別的頁面再回來仍在
 await go("總覽儀表板");
 await go("報表與批次輸出");
-const persisted = await page.evaluate(() => {
-  const state = JSON.parse(localStorage.getItem("turning-traffic-state-v2") || "{}");
+const persisted = await page.evaluate(async () => {
+  const state = JSON.parse((await window.__readState()) || "{}");
   return { onProject: state.projects?.[0]?.reportItems, templates: (state.reportTemplates || []).length };
 });
 console.log("   已保存：", JSON.stringify(persisted));

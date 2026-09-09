@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "./serve.mjs";
 import { launchOptions } from "./chrome-path.mjs";
+import { installStateHelpers } from "./read-state.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const seed = readFileSync(join(here, "seed-state.json"), "utf8");
@@ -24,6 +25,8 @@ page.on("console", (m) => { if (m.type() === "error" && !/ERR_TUNNEL_CONNECTION_
 page.on("requestfailed", (r) => console.log("   （外部資源載入失敗）", r.url().slice(0, 120)));
 page.on("crash", () => errors.push("PAGE CRASHED"));
 await page.addInitScript((s) => localStorage.setItem("turning-traffic-state-v2", s), seed);
+/* v2.1.53：資料改存 IndexedDB，端對端腳本要用 __readState／__writeState 才讀得到。 */
+await installStateHelpers(page);
 await page.goto("http://localhost:8111/");
 await page.waitForTimeout(1200);
 
@@ -206,8 +209,8 @@ const afterReset = await page.evaluate(() => document.querySelectorAll(".diagram
 ok("重設圖卡位置後畫面正常", afterReset > 0, `${afterReset} 張卡`);
 
 // localStorage 沒有因為拖曳而爆量
-const storage = await page.evaluate(() => {
-  const raw = localStorage.getItem("turning-traffic-state-v2") || "";
+const storage = await page.evaluate(async () => {
+  const raw = (await window.__readState()) || "";
   const parsed = JSON.parse(raw || "{}");
   return { bytes: raw.length, revisions: (parsed.recordRevisions || []).length };
 });
@@ -273,8 +276,8 @@ ok("路口標籤的位置同樣依顯示模式各自保存",
   `both ${bothLabelBefore}→${bothLabelAfter}，inbound ${inLabel}`);
 
 // 存進 localStorage 的結構
-const layouts = await page.evaluate(() => {
-  const state = JSON.parse(localStorage.getItem("turning-traffic-state-v2") || "{}");
+const layouts = await page.evaluate(async () => {
+  const state = JSON.parse((await window.__readState()) || "{}");
   const record = (state.records || []).find((r) => r.station === "S01-03");
   const approach = record?.approaches?.find((a) => a.cardLayouts);
   return approach ? Object.keys(approach.cardLayouts) : [];
@@ -286,8 +289,8 @@ ok("版面依模式分別寫入儲存", layouts.includes("both") && layouts.incl
 await go("道路與流向管理");
 const resetAll = page.locator('button:has-text("重設所有圖卡位置")');
 if (await resetAll.count()) { await resetAll.first().click(); await page.waitForTimeout(900); }
-const cleared = await page.evaluate(() => {
-  const state = JSON.parse(localStorage.getItem("turning-traffic-state-v2") || "{}");
+const cleared = await page.evaluate(async () => {
+  const state = JSON.parse((await window.__readState()) || "{}");
   const record = (state.records || []).find((r) => r.station === "S01-03");
   return (record?.approaches || []).some((a) => a.cardLayouts || a.cardOffsets || a.labelOffset);
 });
@@ -328,8 +331,8 @@ await dragCard(anyCard.id, anyCard.sec, -120, 0);
 const bounced = await cardAt(anyCard.id, anyCard.sec);
 ok("拖到邊界後往回拖立刻有反應（沒有死區）",
   Math.abs(pinned[0] - bounced[0] - 120) <= 6, `回拖 120px 實際移動 ${pinned[0] - bounced[0]}px`);
-const stored = await page.evaluate((id) => {
-  const state = JSON.parse(localStorage.getItem("turning-traffic-state-v2") || "{}");
+const stored = await page.evaluate(async (id) => {
+  const state = JSON.parse((await window.__readState()) || "{}");
   const approach = (state.records || [])
     .flatMap((r) => r.approaches || [])
     .find((a) => a.id === id);

@@ -16,6 +16,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchOptions } from "./chrome-path.mjs";
+import { installStateHelpers } from "./read-state.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, "..", "github-pages-dist");
@@ -75,15 +76,21 @@ page.on("dialog", (d) => {
   d.accept();
 });
 
+/* v2.1.53：資料改存 IndexedDB，端對端腳本要用 __readState／__writeState 才讀得到。 */
+
+await installStateHelpers(page);
+
 await page.goto("http://localhost:8114/");
 await page.waitForTimeout(700);
-await page.evaluate(
-  (json) => {
-    localStorage.clear();
-    localStorage.setItem("turning-traffic-state-v2", json);
-  },
-  JSON.stringify(seed),
-);
+await page.evaluate(async (json) => {
+  localStorage.clear();
+  /*
+   * v2.1.53：狀態存在 IndexedDB，種子也要寫到那裡。
+   * 只寫 localStorage 的話，程式開機看到 IndexedDB 已經有東西（第一次載入
+   * 時存檔 effect 寫進去的空白狀態）就不會理它，這個種子等於沒生效。
+   */
+  await window.__writeState(json);
+}, JSON.stringify(seed));
 await page.reload();
 await page.waitForTimeout(1000);
 
@@ -92,9 +99,9 @@ async function gotoAudit() {
   await page.waitForTimeout(600);
 }
 const lockedCount = () =>
-  page.evaluate(() => {
+  page.evaluate(async () => {
     const data = JSON.parse(
-      localStorage.getItem("turning-traffic-state-v2") || "{}",
+      (await window.__readState()) || "{}",
     );
     return (data.records || []).filter((r) => r.resultLock).length;
   });
@@ -115,14 +122,13 @@ ok(
 );
 
 /* ── 2. 全部改成已確認後可以鎖 ── */
-await page.evaluate(() => {
-  const key = "turning-traffic-state-v2";
-  const data = JSON.parse(localStorage.getItem(key) || "{}");
+await page.evaluate(async () => {
+  const data = JSON.parse((await window.__readState()) || "{}");
   data.records = (data.records || []).map((r) => ({
     ...r,
     review: { status: "已確認", note: "", updatedAt: r.review?.updatedAt || "" },
   }));
-  localStorage.setItem(key, JSON.stringify(data));
+  await window.__writeState(JSON.stringify(data));
 });
 await page.reload();
 await page.waitForTimeout(1000);

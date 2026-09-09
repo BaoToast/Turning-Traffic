@@ -4,6 +4,7 @@ import http from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchOptions } from "./chrome-path.mjs";
+import { installStateHelpers } from "./read-state.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(process.argv[2] ?? join(here, "..", "github-pages-dist"));
 const LABEL = process.argv[3] ?? "七叉路口拖曳壓力測試";
@@ -21,6 +22,8 @@ let crashed=false, errs=0;
 page.on("crash",()=>{crashed=true});
 page.on("pageerror",e=>{errs++; if(errs<3) console.log("  ERR:", e.message.slice(0,90))});
 await page.addInitScript(s=>localStorage.setItem("turning-traffic-state-v2",s), seed);
+/* v2.1.53：資料改存 IndexedDB，端對端腳本要用 __readState／__writeState 才讀得到。 */
+await installStateHelpers(page);
 await page.goto("http://localhost:8112/"); await page.waitForTimeout(1500);
 // 7叉路口 + 開啟排版預覽
 await page.locator('aside button:has-text("路口轉向圖"), nav button:has-text("路口轉向圖")').first().click();
@@ -60,7 +63,7 @@ try {
 const elapsed = Date.now()-t0;
 let alive=0, store={bytes:0,revisions:0};
 try { alive = await page.evaluate(()=>document.querySelectorAll("[data-card-id]").length, {timeout:5000}); } catch { alive=-1; }
-try { store = await page.evaluate(()=>{const raw=localStorage.getItem("turning-traffic-state-v2")||"";const j=JSON.parse(raw||"{}");return {bytes:raw.length,revisions:(j.recordRevisions||[]).length};}, {timeout:5000}); } catch { /* best-effort stress probe */ }
+try { store = await page.evaluate(async ()=>{const raw=(await window.__readState())||"";const j=JSON.parse(raw||"{}");return {bytes:raw.length,revisions:(j.recordRevisions||[]).length};}, {timeout:5000}); } catch { /* best-effort stress probe */ }
 console.log(`[${LABEL}] ${steps} 步 / ${elapsed}ms / 每步 ${(elapsed/Math.max(1,steps)).toFixed(0)}ms / 存活圖卡 ${alive} / crashed=${crashed} / pageerrors=${errs}`);
 const writes = await page.evaluate(()=>window.__writes).catch(()=>-1);
 console.log(`[${LABEL}] localStorage ${Math.round(store.bytes/1024)} KB / 版本歷程 ${store.revisions} 筆 / 拖曳期間存檔次數 ${writes}`);

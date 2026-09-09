@@ -277,7 +277,73 @@ export type RecordRevision = {
   savedAt: string;
   reason: string;
   snapshot: TrafficRecord;
+  /*
+   * 還原點以「一次操作」為單位。
+   *
+   * 原本是**每一筆紀錄各一個**：一次季度批次重新匯入覆蓋 65 個路口，
+   * 就一口氣長出 65 個看不出差別的還原點，清單沒有人看得懂，
+   * 而且丟舊資料時會把同一次操作切成兩半——還原回去只還原了一部分，
+   * 比沒有還原點更危險。
+   *
+   * 改成同一次操作的每一筆共用一個 batchId，畫面依 batchId 收成一列
+   * （「115Q2 重新匯入，涵蓋 65 個路口」），淘汰與刪除也一律整批進出。
+   *
+   * 三個欄位都是選填：**舊備份與舊資料沒有這些欄位**，讀回來時每一筆
+   * 各自當成一個只含一筆的批次，照樣顯示、照樣還原得回去。
+   */
+  batchId?: string;
+  batchLabel?: string;
+  batchSize?: number;
 };
+
+/** 還原點最多保留幾「次操作」。超過就整批丟掉最舊的。 */
+export const REVISION_BATCH_LIMIT = 30;
+
+/**
+ * 還原點總量上限（位元組）。
+ *
+ * 只有筆數上限不夠：一次批次匯入可以涵蓋幾十個路口，
+ * 而單一個七叉路口的快照實測就有 38.7 KB。改存 IndexedDB 之後空間
+ * 大得多，但仍然不該無上限地長，否則備份檔會被還原點灌爆
+ * （實測全日交通量的使用者備份，還原點佔了整份 67.1 MB 的 94%）。
+ */
+export const REVISION_BYTE_BUDGET = 20 * 1024 * 1024;
+
+/**
+ * 依「次操作」淘汰還原點：先砍到 REVISION_BATCH_LIMIT 次，
+ * 再砍到 REVISION_BYTE_BUDGET 以內。永遠至少留最新的一次操作，
+ * 而且**不會把同一次操作切成兩半**。
+ *
+ * 傳回的陣列維持原本的排序（新的在前）。
+ */
+export function trimRevisionBatches(items: RecordRevision[]) {
+  const order: string[] = [];
+  const groups = new Map<string, RecordRevision[]>();
+  for (const item of items) {
+    /* 舊資料沒有 batchId，用自己的 id 當批次鍵，等於一筆一批。 */
+    const key = item.batchId || item.id;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key)!.push(item);
+  }
+  let kept = order.slice(0, REVISION_BATCH_LIMIT);
+  const sizeOf = function (key: string) {
+    return JSON.stringify(groups.get(key) ?? []).length;
+  };
+  let total = kept.reduce(function (sum, key) {
+    return sum + sizeOf(key);
+  }, 0);
+  while (kept.length > 1 && total > REVISION_BYTE_BUDGET) {
+    total -= sizeOf(kept[kept.length - 1]);
+    kept = kept.slice(0, -1);
+  }
+  const keptKeys = new Set(kept);
+  return items.filter(function (item) {
+    return keptKeys.has(item.batchId || item.id);
+  });
+}
 
 export function recordPeakTotal(record: TrafficRecord, peak: ScopeKey) {
   return Math.round(

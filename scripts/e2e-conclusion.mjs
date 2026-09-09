@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "./serve.mjs";
 import { launchOptions } from "./chrome-path.mjs";
+import { installStateHelpers } from "./read-state.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const seed = readFileSync(join(here, "seed-wide.json"), "utf8");
@@ -46,6 +47,8 @@ await page.addInitScript((s) => {
   if (!localStorage.getItem("turning-traffic-state-v2"))
     localStorage.setItem("turning-traffic-state-v2", s);
 }, seed);
+/* v2.1.53：資料改存 IndexedDB，端對端腳本要用 __readState／__writeState 才讀得到。 */
+await installStateHelpers(page);
 await page.goto("http://localhost:8133/");
 await page.waitForTimeout(1400);
 
@@ -282,28 +285,27 @@ ok("套用範本會還原當時的條件（年度）", scopeChecked);
  * 要驗的是「換了計畫之後範本清單長什麼樣」，不是切換元件本身。
  */
 const switchTo = async (projectId) => {
-  await page.evaluate((id) => {
+  await page.evaluate(async (id) => {
     const state = JSON.parse(
-      localStorage.getItem("turning-traffic-state-v2") || "{}",
+      (await window.__readState()) || "{}",
     );
     state.activeProjectId = id;
-    localStorage.setItem("turning-traffic-state-v2", JSON.stringify(state));
+    await window.__writeState(JSON.stringify(state));
   }, projectId);
   await page.reload();
   await page.waitForTimeout(1500);
   await go("結論草稿產生器");
 };
 
-const firstProjectId = await page.evaluate(() => {
+const firstProjectId = await page.evaluate(async () => {
   const state = JSON.parse(
-    localStorage.getItem("turning-traffic-state-v2") || "{}",
+    (await window.__readState()) || "{}",
   );
   return state.activeProjectId;
 });
 /* 種一個第二計畫，並把第一計畫的紀錄複製一份給它，讓它也產得出草稿。 */
-const secondProjectId = await page.evaluate(() => {
-  const key = "turning-traffic-state-v2";
-  const state = JSON.parse(localStorage.getItem(key) || "{}");
+const secondProjectId = await page.evaluate(async () => {
+  const state = JSON.parse((await window.__readState()) || "{}");
   const id = "P-e2e-second";
   if (!state.projects.some((p) => p.id === id)) {
     state.projects.push({
@@ -317,7 +319,7 @@ const secondProjectId = await page.evaluate(() => {
     state.records = state.records.concat(
       state.records.map((r, i) => ({ ...r, id: `${r.id}-2nd${i}`, projectId: id })),
     );
-    localStorage.setItem(key, JSON.stringify(state));
+    await window.__writeState(JSON.stringify(state));
   }
   return id;
 });

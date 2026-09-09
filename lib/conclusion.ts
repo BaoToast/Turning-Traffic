@@ -240,7 +240,14 @@ function whole(value: number | null | undefined) {
   return Math.round(value).toLocaleString("zh-TW");
 }
 
-function pct(value: number | null | undefined, digits = 1) {
+/*
+ * 百分比一律要把「小數位數」帶進來。
+ *
+ * 舊版這個參數有預設值 1，而全部呼叫端都沒有傳，於是使用者把小數位數
+ * 改成 2 位時百分比完全不動（三支系統都是同一個寫法、同一個毛病）。
+ * 這裡**刻意拿掉預設值**，漏傳就是編譯錯誤，不會再無聲失效。
+ */
+function pct(value: number | null | undefined, digits: number) {
   if (value === null || value === undefined || !Number.isFinite(value))
     return "—";
   return value.toFixed(digits) + "%";
@@ -517,9 +524,9 @@ function describePeak(
         const inShare = shareOf(branch.inflowPcu);
         const outShare = shareOf(branch.outflowPcu);
         if (wants("shareIn") && inShare !== null)
-          parts.push(`佔駛入 ${pct(inShare)}`);
+          parts.push(`佔駛入 ${pct(inShare, digits)}`);
         if (wants("shareOut") && outShare !== null)
-          parts.push(`佔駛出 ${pct(outShare)}`);
+          parts.push(`佔駛出 ${pct(outShare, digits)}`);
       }
       if (wants("balance")) {
         if (branch.inflowPcu !== null && branch.outflowPcu !== null) {
@@ -552,6 +559,7 @@ function describePeak(
                 (item) =>
                   `${item.label} ${whole(item.count)}（${pct(
                     sum ? (item.count / sum) * 100 : null,
+                    digits,
                   )}）`,
               )
               .join("、") +
@@ -597,7 +605,7 @@ function describePeak(
   return lines;
 }
 
-function describeComposition(record: ConclusionRecord) {
+function describeComposition(record: ConclusionRecord, digits: number) {
   const total = record.composition.reduce((sum, item) => sum + item.count, 0);
   if (!total) return ["　車種組成：這一筆沒有可用的車種數量。"];
   const parts = record.composition
@@ -607,6 +615,7 @@ function describeComposition(record: ConclusionRecord) {
       (item) =>
         `${item.label} ${whole(item.count)} ${record.compositionUnit}（${pct(
           (item.count / total) * 100,
+          digits,
         )}）`,
     );
   return [
@@ -705,7 +714,7 @@ function describeGrowth(
         `變為 ${quarterText(last.quarter)} 的 ${num(last.value, digits)} PCU/hr，` +
         (change === null
           ? "起始季為 0，變動幅度無法以百分比表示"
-          : `${change >= 0 ? "增加" : "減少"} ${Math.abs(change).toFixed(1)}%`) +
+          : `${change >= 0 ? "增加" : "減少"} ${pct(Math.abs(change), digits)}`) +
         `；期間最高為 ${quarterText(peakPoint.quarter)}（${num(peakPoint.value, digits)} PCU/hr）。`,
     );
   }
@@ -888,7 +897,7 @@ export function buildConclusion(
           out.push(`　〔${quarterText(record.quarter)}${quarterTag(record)}〕`);
         for (const peak of peaks)
           out.push(...describePeak(record, peak, condition));
-        if (wants("composition")) out.push(...describeComposition(record));
+        if (wants("composition")) out.push(...describeComposition(record, digits));
       }
       if (wants("growth")) {
         /*
@@ -911,7 +920,7 @@ export function buildConclusion(
         out.push(`　〔${record.station}　${record.name}〕`);
         for (const peak of peaks)
           out.push(...describePeak(record, peak, condition));
-        if (wants("composition")) out.push(...describeComposition(record));
+        if (wants("composition")) out.push(...describeComposition(record, digits));
       }
       if (wants("extremes")) {
         const lines = describeExtremes(group, peaks, digits);
@@ -927,7 +936,7 @@ export function buildConclusion(
     for (const record of chosen.slice(0, 1)) {
       out.push(`　代表紀錄：${recordTitle(record)}`);
       for (const peak of peaks) out.push(...describePeak(record, peak, condition));
-      if (wants("composition")) out.push(...describeComposition(record));
+      if (wants("composition")) out.push(...describeComposition(record, digits));
     }
     if (chosen.length > 1)
       out.push(

@@ -271,7 +271,15 @@ test("整欄都是同一種壞資料時，警告要歸併同一種原文而不�
   const preview = await inspectWorkbook(
     new File([XLSX.write(wb, { type: "array", bookType: "xlsx" })], "路口_整欄破折號.xlsx"),
   );
-  const warning = preview.warnings.find((w) => /不是數字/.test(w))!;
+  /*
+   * 比對字串要挑得夠精確。v2.1.55 新增了「整欄空白」的提醒，
+   * 它原本也含有「不是數字」四個字，於是這裡的 find() 抓到了那一則
+   * 而不是壞資料那一則——測試紅了，但程式是對的。
+   * 改成認「個儲存格有內容但不是數字」這個完整片語。
+   */
+  const warning = preview.warnings.find((w) =>
+    /個儲存格有內容但不是數字/.test(w),
+  )!;
   assert.match(warning, /有 5 個儲存格/, "要報出真實筆數，不能被上限截斷");
   assert.match(warning, /「休」5 格/, "同一種原文要歸併計數");
 });
