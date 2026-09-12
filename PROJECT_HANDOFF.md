@@ -1,7 +1,9 @@
 # Turning Traffic 長期工程交接基準
 
-最後更新：2026-09-13  
-適用系統：**Turning Traffic 路口尖峰轉向交通量分析系統**  
+最後更新：2026-09-13
+
+適用系統：**Turning Traffic 路口尖峰轉向交通量分析系統**
+
 文件用途：主要 GPT 開發對話換代、Claude 修改後的 GPT 獨立複查、修正、測試、發布與 Claude 第二次複查。
 
 > 本文件不是聊天摘要。後續維護必須同時閱讀本文件與目前實際 Repository；若兩者衝突，以可驗證的程式碼、Git 狀態與可重現測試為準，並明確記錄差異。
@@ -319,13 +321,20 @@ GitHub 證據：
 
 ## 13. 固定 Claude ↔ GPT 開發流程
 
-Claude 修改／修復  
-→ Claude 提供完整檔案與修改說明  
-→ GPT 獨立進行風險導向複查  
-→ GPT 發現問題時直接修正  
-→ 執行必要及完整 Regression／Test／TypeScript／lint／Build  
-→ 全部必要驗證通過後發布 GitHub／GitHub Pages  
-→ GPT 提供完整修改、版本、commit、測試結果及高風險資訊  
+Claude 修改／修復
+
+→ Claude 提供完整檔案與修改說明
+
+→ GPT 獨立進行風險導向複查
+
+→ GPT 發現問題時直接修正
+
+→ 執行必要及完整 Regression／Test／TypeScript／lint／Build
+
+→ 全部必要驗證通過後發布 GitHub／GitHub Pages
+
+→ GPT 提供完整修改、版本、commit、測試結果及高風險資訊
+
 → Claude Opus High 再進行第二次獨立複查。
 
 GPT 不得因 Claude 表示「已完成」「已測試」或只列某些檔案，就省略獨立驗證。Claude 的說明是複查入口，不是通過證據。
