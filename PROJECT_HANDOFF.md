@@ -66,7 +66,7 @@
 - `github/`、`vite.github.config.ts`：GitHub Pages 的 Vite 入口與建置設定。
 - `github-pages-dist/`：`npm run build:github` 的輸出；正式發布前須把其 `index.html` 與 `assets/` 同步到 repository root。
 - 根目錄 `index.html`、`assets/`、`.nojekyll`：GitHub Pages 實際發布內容。
-- `scripts/`：手冊產製、種子資料及 27 支瀏覽器 E2E。
+- `scripts/`：手冊產製、2 支種子資料產生器（`seed-state.mjs`、`make-wide-seed.mjs`）及 25 支 `e2e-*.mjs` 瀏覽器測試。`npm run e2e` 建置後合計執行 27 個 Node 流程步驟；不得把全部 27 個流程步驟都稱為瀏覽器 E2E。
 - `tests/`：計算、parser、資料契約、備份、發布結構、文件與 regression tests。
 - `CHANGELOG.md`：重點版次；完整版本歷史的唯一來源是 `lib/traffic.ts` 的 `VERSION_HISTORY`。
 - `DEPLOYMENT.md`：正式部署與版本同步清單。
@@ -243,6 +243,7 @@ v2.1.63 全套測試有三項真實附件條件式略過：`11535T1502...xls`、
 20. **Excel 修復警告／圖表遮資料**：原生圖表的 XML、欄位字母、資料範圍與空白處理需用 OOXML 測試；圖移到資料表下方且有標題、圖例、X/Y 軸與單位。
 21. **過大 canvas**：120 季等長期資料不能無上限倍增畫布；4,800px 是現行安全上限，匯出仍保留全部資料點。
 22. **萬用檔案複製假設**：Windows/PowerShell 對 wildcard、缺少目的資料夾與跨 shell 刪除可能表現不同。發布檔同步後要用 SHA 與檔名清單實際核對，不可只相信複製命令無錯。
+23. **存檔註解與實作漂移**：`app/traffic-app.tsx` 的存檔註解仍描述兩次寫入同時執行、以 `saveTokenRef` 處理「後發先至」；現行 `lib/state-storage.ts` 已把所有寫入排入同一條序列鏈，`saveTokenRef` 只決定哪一次結果可更新 UI／toast，不取消或取代資料庫寫入。實際序列化機制是正確的既有保護，不得因舊註解而改回並行寫入；註解更新列為後續低風險文件維護。
 
 完整逐版細節請查 `lib/traffic.ts` 的 `VERSION_HISTORY`，重點原因與紅字證明查 `CHANGELOG.md`。若此摘要與現行程式衝突，應先調查差異而非照摘要改程式。
 
@@ -277,7 +278,7 @@ npm run build:github
 - 備份完整性、儲存 race、匯入 revision／鎖定／審核。
 - trend metrics、缺季、資料別拆線、長期間圖寬與單位。
 - release metadata、release structure、manual version/copies、rendered HTML、dependency manifest。
-- 27 支 Playwright E2E：轉向圖、名稱、報表、結論、拖放／顯示、重匯、日別、版面、備份、鎖定、趨勢、日期、XLSX 修復、儲存阻擋／IndexedDB、三岔、存在性裁決、revision batch、圖表版面與跨計畫趨勢等。
+- `npm run e2e` 流程：25 支 `e2e-*.mjs` 瀏覽器測試，涵蓋轉向圖、名稱、報表、結論、拖放／顯示、重匯、日別、版面、備份、鎖定、趨勢、日期、XLSX 修復、儲存阻擋／IndexedDB、三岔、存在性裁決、revision batch、圖表版面與跨計畫趨勢等；另有 2 支種子資料產生器，合計 27 個 Node 流程步驟。報告時必須分開描述，不能稱為「27 支瀏覽器 E2E」。
 
 涉及交通工程或 Parser 時，必須額外逐層核對：**輸入 → 解析 → 驗證 → 資料結構 → 計算 → UI → 匯出**，並比較同一值在核對頁、轉向圖、摘要、趨勢與 Excel/PDF 中是否一致。
 
@@ -292,7 +293,7 @@ npm run build:github
 - 結構／發布：53/53 通過。
 - 運算／解析／資料契約：250 通過、0 失敗、3 條件式略過。
 - 固定計算黃金值：通過，既有逐車種車輛數與尖峰 PCU 未變。
-- 27 支瀏覽器 E2E：全部通過。
+- `npm run e2e` 的 27 個 Node 流程步驟全部通過；精確組成是 25 支 `e2e-*.mjs` 瀏覽器測試與 2 支種子資料產生器，不是 27 支瀏覽器 E2E。
 - Excel OOXML：18 parts、1 native chart，結構合規。
 - 18 個功能頁於 640–1920px：無橫向溢出；大量季度測資涵蓋 44 季，另有 120 季安全檢查。
 - PDF 手冊 31 頁逐頁視覺檢查：通過；DOCX 結構與副本一致性：通過。因當時缺獨立 LibreOffice 環境，DOCX 未另做點陣化視覺渲染。
@@ -307,7 +308,21 @@ GitHub 證據：
 - v2.1.63 DOCX：`9DA92D7184ED0EEE31D9CE8B77AA7AA8398272033DDA6C549E4D3C80B6EAEB7F`。
 - 舊 v2.1.62／v2.1.51 主資產與 v2.1.62 PDF 經驗證為 HTTP 404。
 
-### 12.3 正式發布
+### 12.3 2026-09-13 新 GPT 交接驗收的本機重現範圍
+
+本次交接驗收針對當時的 `main`／`08b330edf2c35ef4a8885208cde2f7bf72c1324d`，使用工作區既有 `node_modules` 與 bundled Node.js 24.19.0 進行獨立核對；這不是重新發布，也不是完整乾淨安裝驗證：
+
+- ESLint：通過。
+- TypeScript `tsc --noEmit`：通過。
+- vinext production build 與 GitHub Pages build：通過。
+- 結構／發布 `.mjs` tests：53/53 通過。
+- 運算／解析／資料契約 TypeScript tests：250 通過、0 失敗、3 條件式略過。
+- `npm run e2e` 所列 27 個 Node 流程步驟全部成功；精確組成為 25 支 `e2e-*.mjs` 瀏覽器測試與 2 支種子資料產生器。
+- 3 個需真實附件的條件式測試未執行；不得描述為通過。
+- DOCX 沒有在本次補做獨立 LibreOffice 點陣化視覺驗證。
+- 本次環境沒有 `npm`，因此未重新執行乾淨 `npm ci`、字面上的 `npm test` 或最新 `npm audit`。各子項是以可用的 Node 執行環境分別重現；不得把第 12.2 節的歷史驗證證據描述成本次重新驗證結果，也不得把本次結果擴張成完整乾淨 npm 驗證。
+
+### 12.4 正式發布
 
 1. 先完成本節全部必要驗證。
 2. 若升版，依 `DEPLOYMENT.md` 同步：`VERSION`／`VERSION_HISTORY`、package/lock、手冊 HTML/產製檔名/頁尾、UI 連結、CHANGELOG、PDF/DOCX；刪除所有舊版手冊。
@@ -411,12 +426,23 @@ GPT 不得因 Claude 表示「已完成」「已測試」或只列某些檔案�
 
 - 三個真實附件測試在 v2.1.63 是條件式略過；若處理那些格式，需取回原檔實測。
 - DOCX 在 v2.1.63 未用獨立 LibreOffice 點陣化渲染；只驗證 OOXML、版號與副本一致性。PDF 已逐頁檢查。
+- 2026-09-13 本次交接驗收同樣未執行上述三個真實附件測試，也未補做 DOCX 的獨立 LibreOffice 點陣化視覺驗證。
+- 2026-09-13 本次環境沒有 `npm`，未重跑乾淨 `npm ci`、字面 `npm test` 或最新 `npm audit`；本次可重現子項與第 12.2 節歷史發布證據必須明確分開。
 - 完整依賴 audit 有 10 項開發／建置工具鏈警示；production dependencies 為 0。
 - 本文件只保存可由 Repository、Git、驗證報告及高價值對話決策交叉支持的內容。無法從現行證據可靠重建的早期聊天細節未寫成事實。
 
-### 待確認／暫無待辦
+### 已知文件差異與待確認事項
+
+- `README.md` 的 Excel 說明只描述三類成果，現行 UI／匯出實作實際已有 10 個可選工作表。這是後續文件維護事項，不代表目前只支援三張，也不得在本次交接補強中順手修改 README。
+- `README.md` 的尖峰說明只描述連續四個 15 分鐘格；現行核心除 15 分鐘格外也支援 20、30、60 分鐘格。這是後續文件維護事項，不得據舊文字縮減核心能力或在本次修改 README。
+- `app/traffic-app.tsx` 的存檔註解與 `lib/state-storage.ts` 現行序列化寫入機制不一致；依第 10 節第 23 點處理，僅列為後續低風險文件／註解維護，不修改程式行為。
+- `VALIDATION_REPORT.md` 記載驗證日期為 2026-09-10，但該檔所在 commit `a4f93f29c25242a0faddcdf562a38b16f1012ceb` 的 Git author／commit 日期均為 2026-09-09 17:59:27（Asia/Taipei）。目前證據不足以確認是跨日驗證、補記或日期誤植；只記錄差異，未經進一步證據不得自行改日期。
+
+### 後續維護待辦
 
 - 截至 v2.1.63 正式驗證後，沒有已知尚未修正的功能 Bug。
+- 經使用者另行授權後，可用低風險文件維護處理 README 的 Excel 工作表／時間格描述，以及 `traffic-app.tsx` 的存檔註解；仍須核對實作、相關測試與完整資料流，不可藉文件維護變更計算或儲存機制。
+- `VALIDATION_REPORT.md` 日期差異需先取得可驗證證據或使用者決策；目前不是可自行修正的待辦。
 - 未來待辦由新的使用者回饋、實際新格式或 Claude 新版修改觸發；不得自行把暫緩的三系統整併、雲端多人或依賴大升級當成下一個工作。
 
 ### 新 GPT 接手後最合理的下一步
