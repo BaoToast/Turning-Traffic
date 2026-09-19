@@ -17,7 +17,7 @@ if (!stamp)
   throw new Error("manual.html 讀不到封面戳記「系統版本：vX.Y　更新日期：YYYY-MM-DD」");
 const [, MANUAL_VERSION, MANUAL_DATE] = stamp;
 
-const out = join(here, "..", "..", "public", `Turning-Traffic-${MANUAL_VERSION}-新手操作手冊.pdf`);
+const out = join(here, "..", "..", "public", `路口轉向程式手冊_${MANUAL_VERSION}.pdf`);
 
 const chrome = chromePath();
 const browser = await chromium.launch({ executablePath: chrome, args: ["--no-sandbox"] });

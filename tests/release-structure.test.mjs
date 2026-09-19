@@ -88,11 +88,18 @@ test("版號在每一個寫著它的檔案裡都一致", () => {
   const targets = [
     ["scripts/manual/manual.html", read("scripts/manual/manual.html")],
     ["scripts/manual/build-pdf.mjs", read("scripts/manual/build-pdf.mjs")],
-    ["scripts/manual/build-docx.mjs", read("scripts/manual/build-docx.mjs")],
     ["app/traffic-app.tsx", read("app/traffic-app.tsx")],
   ];
   for (const [name, text] of targets) {
-    const others = [...text.matchAll(/Turning-Traffic-(v[\d.]+)-新手操作手冊/g)]
+    /*
+     * ⚠️ 版號要寫成 `v\d+(\.\d+)*`，不可以寫成 `v[\d.]+`。
+     *   手冊改名之後檔名是「路口轉向程式手冊_v2.1.72.pdf」，版號後面**直接接
+     *   副檔名的那個點**，`[\d.]+` 會把它一起吃進去變成 "v2.1.72."，
+     *   於是永遠對不上真正的版號、這一條永遠紅。
+     *   （舊檔名是「Turning-Traffic-v2.1.72-新手操作手冊」，版號後面接的是
+     *     「-」，所以以前沒事——改名才把這個寫法的問題照出來。）
+     */
+    const others = [...text.matchAll(/路口轉向程式手冊_(v\d+(?:\.\d+)*)/g)]
       .map((match) => match[1])
       .filter((found) => found !== v);
     assert.deepEqual(
@@ -101,13 +108,21 @@ test("版號在每一個寫著它的檔案裡都一致", () => {
       `${name} 還連著別版的手冊檔名（目前應為 ${v}）`,
     );
   }
-  for (const ext of ["pdf", "docx"])
-    assert.ok(
-      read("app/traffic-app.tsx").includes(
-        `Turning-Traffic-${v}-新手操作手冊.${ext}`,
-      ),
-      `畫面上的 ${ext} 手冊連結沒有跟著版本更新`,
-    );
+  assert.ok(
+    read("app/traffic-app.tsx").includes(`路口轉向程式手冊_${v}.pdf`),
+    "畫面上的 PDF 手冊連結沒有跟著版本更新",
+  );
+  /*
+   * 手冊自 v2.1.64 起**只出 PDF**（使用者：「使用手冊可以只提供PDF檔就好，
+   * WORD檔不是必須的」）。Word 版的產生器與檔案都已移除，
+   * 所以這裡反過來守「不可以再冒出 .docx 連結」——
+   * 只刪不守的話，下一次照舊版樣板補回一顆按鈕就會連到不存在的檔案（404）。
+   */
+  assert.doesNotMatch(
+    read("app/traffic-app.tsx"),
+    /新手操作手冊\.docx/,
+    "畫面上又出現 Word 手冊連結，但本專案不再產生 .docx，點下去會 404",
+  );
 });
 
 test("SheetJS 固定使用官方修正版，不得降回 npm registry 的 0.18.5", () => {
@@ -177,10 +192,7 @@ test("手冊的版號與日期只有一個來源，封面與頁尾不會對不�
    * 而且必須真的去讀那個戳記。舊版寫死時，升版只要漏改腳本就會靜靜產生
    * 一份檔名與頁尾都還是舊版號的手冊，而且不會有任何錯誤訊息。
    */
-  for (const script of [
-    "scripts/manual/build-pdf.mjs",
-    "scripts/manual/build-docx.mjs",
-  ]) {
+  for (const script of ["scripts/manual/build-pdf.mjs"]) {
     const text = read(script);
     assert.match(
       text,
@@ -204,6 +216,20 @@ test("手冊的版號與日期只有一個來源，封面與頁尾不會對不�
       `${script} 仍有寫死的版號字串`,
     );
   }
+  /*
+   * ⚠️ 手冊的 <title> 也要跟著版本走。
+   *
+   *   2026-09-15 大檢查抓到：封面戳記已經是 v2.1.74，<title> 卻還停在
+   *   v2.1.64——**十個版本沒有人發現**。原因很簡單：所有檢查都只看封面戳記，
+   *   沒有任何一條在看 <title>，而 PDF 的分頁標籤與檔案總管的預覽用的正是它。
+   */
+  const title = read("scripts/manual/manual.html").match(/<title>([^<]*)<\/title>/);
+  assert.ok(title, "manual.html 沒有 <title>");
+  assert.ok(
+    title[1].includes(v),
+    `manual.html 的 <title> 寫著「${title[1]}」，但程式版號是 ${v}`,
+  );
+
   /* 封面戳記的日期就是手冊日期，兩者同源後仍要確認戳記本身格式正確。 */
   assert.match(read("scripts/manual/manual.html"), /更新日期：\d{4}-\d{2}-\d{2}/);
   assert.ok(date, "manual.html 封面戳記缺少更新日期");
@@ -220,18 +246,17 @@ test("手冊裡有本版的更新說明，而且沒有留著舊版的手冊檔",
     `manual.html 封面戳記不是「系統版本：${v}」——升版時可能只改了檔名，忘了重新產生手冊。`,
   );
 
-  for (const ext of ["pdf", "docx"])
-    assert.ok(
-      has(`public/Turning-Traffic-${v}-新手操作手冊.${ext}`),
-      `public/ 裡沒有 ${v} 的 ${ext} 手冊——程式連得到、檔案卻不存在，線上會 404`,
-    );
+  assert.ok(
+    has(`public/路口轉向程式手冊_${v}.pdf`),
+    `public/ 裡沒有 ${v} 的 PDF 手冊——程式連得到、檔案卻不存在，線上會 404`,
+  );
 
   /* 上傳只覆蓋同名檔案、不會刪除，所以舊版手冊一定要手動清掉。 */
   for (const folder of ["public", "."]) {
     if (!has(folder)) continue;
     const stale = readdirSync(join(root, folder)).filter(
       (name) =>
-        /^Turning-Traffic-v[\d.]+-新手操作手冊\.(pdf|docx)$/.test(name) &&
+        /^路口轉向程式手冊_v[\d.]+\.(pdf|docx)$/.test(name) &&
         !name.includes(v),
     );
     assert.deepEqual(

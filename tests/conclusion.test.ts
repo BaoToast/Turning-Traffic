@@ -469,8 +469,52 @@ test("跨路口只比大小，明講不做加總", () => {
   );
   assert.match(text, /最高為 T15-02/);
   assert.match(text, /最低為 T15-01/);
-  assert.match(text, /2 筆平均 1,500\.0 PCU\/hr/);
   assert.match(text, /不做加總/);
+  /*
+   * ⚠️ 2026-09-16 起**不可以**再出現「N 筆平均」（使用者裁示：
+   *   「每一行展示一筆季別+日別的結果……而不是要你平均起來」）。
+   *   這一條是反面守門：平均加回來就會紅。
+   */
+  assert.ok(
+    !/筆平均/.test(text),
+    "結論草稿不可以再寫「N 筆平均」——跨路口、跨季別、跨日別的平均沒有意義",
+  );
+  assert.match(text, /不取平均/);
+  /* 而且要**逐筆**列出（一行一個路口 × 季別 × 日別）。 */
+  assert.match(text, /・T15-01[^\n]*：1,000\.0 PCU\/hr/);
+  assert.match(text, /・T15-02[^\n]*：2,000\.0 PCU\/hr/);
+});
+
+test("跨路口逐筆列出：筆數太多時不列、而且一個合計或平均都不給", () => {
+  /*
+   * ⚠️ 超過上限時的正確行為是「說明還有幾筆」，**不是**改回給一個平均——
+   *   那等於把剛剛拿掉的錯誤換個說法留著。
+   */
+  const records = Array.from({ length: 15 }, (_, index) =>
+    makeRecord({
+      intersectionKey: `K${index}`,
+      station: `T15-${String(index).padStart(2, "0")}`,
+      name: `示範路口${index}`,
+      peaks: {
+        AM: {
+          window: "07:00–08:00",
+          totalPcu: 1000 + index * 100,
+          totalVehicles: 3000,
+          branches: [],
+        },
+      },
+    }),
+  );
+  const text = buildConclusion(
+    records,
+    cond({ peaks: ["AM"], metrics: ["extremes"], grouping: "overall" }),
+    META,
+  );
+  assert.match(text, /共 15 筆，逐筆列出過長/);
+  assert.ok(!/筆平均/.test(text), "超過上限時也不可以改回給平均");
+  /* 最大最小仍然要寫得出來——那是在比大小，不是把數字混在一起。 */
+  assert.match(text, /最高為 T15-14/);
+  assert.match(text, /最低為 T15-00/);
 });
 
 test("季度變動只在同一路口、同一尖峰之間計算", () => {
@@ -513,6 +557,7 @@ test("缺值寫成「—」，不會變成 0 或 NaN", () => {
             totalVehicles: null,
             branches: [
               {
+                code: "A",
                 name: "路口A",
                 outboundByVehicleSafe: null,
                 inflowByVehicleSafe: null,
@@ -565,14 +610,31 @@ test("三種分段方式都寫得出東西，且標題會編號", () => {
   }
 });
 
-test("整體模式會講清楚代表的是哪一筆", () => {
+test("⚠️ 稽核表 J：整體模式的代表紀錄是**最新一季**，而且說得出沒涵蓋到哪些", () => {
+  /*
+   * 舊版寫 `chosen.slice(0, 1)`，而 selectRecords() 是「季度由小到大」排序，
+   * 所以代表紀錄一直是**最舊**的那一季——報告要引用的通常是最新一季，
+   * 挑法連方向都相反，而畫面上只寫「代表紀錄：…」，看不出它是怎麼挑的。
+   *
+   * ⚠️ 兩件事要一起驗：
+   *   ・挑的是最新一季（只驗「有寫代表紀錄」的話，挑最舊也會全綠——
+   *     那正是舊版的狀態，而舊測試就是這樣寫的）
+   *   ・其餘沒寫進這一段的那幾筆要被列出來（不然使用者不知道漏了什麼）
+   */
   const text = buildConclusion(
     [makeRecord({ quarter: "115Q1" }), makeRecord({ quarter: "115Q2" })],
     cond({ peaks: ["AM"], metrics: ["total"], grouping: "overall" }),
     META,
   );
-  assert.match(text, /代表紀錄：115Q1/);
+  assert.match(text, /代表紀錄：115Q2/, "要取最新一季，不是陣列的第一筆");
+  assert.ok(
+    !/代表紀錄：115Q1/.test(text),
+    "最舊那一季不可以被當成代表紀錄",
+  );
+  assert.match(text, /最新的一季/, "要說明代表紀錄是怎麼挑的");
   assert.match(text, /僅以上列這一筆為代表/);
+  assert.match(text, /沒有寫進這一段/, "要說出其餘幾筆沒被涵蓋");
+  assert.match(text, /115Q1/, "要把沒涵蓋到的那一筆列出來");
 });
 
 test("每一個可勾選指標都真的會改變輸出（沒有死選項）", () => {
@@ -792,4 +854,174 @@ test("有勾時段時，行為與原本完全相同", () => {
   assert.match(before, /上午尖峰/);
   assert.match(before, /下午尖峰/);
   assert.match(before, /敘述時段：上午尖峰、下午尖峰。/);
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  支線用「名稱」篩，而且看起來一樣的名字就要算同一個
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-11 的兩段回報，合起來才是完整的需求：
+ *
+ *   ①「我把自動抓到的名字手動同步名稱……在『四、要寫哪些支線』
+ *      他竟然把自訂義的名稱也獨立變成一個選項了。」
+ *   ②「A 和 B 路段用預設名稱『路口A』就能正常抓到；C 路段自動讀到
+ *      『神農路口』，**就算我手動改成『路口A』，也不會被歸類到路口A裡面**，
+ *      除非我把 A、B 也手動輸入一次一模一樣的『路口A』。」
+ *
+ * 成因：inferApproachGeometry() 自動命名寫的是 `"路口 " + code`
+ * ——「路口」和代碼之間**有一個半形空格**。使用者手打的是「路口A」。
+ * `路口 A` ≠ `路口A`，於是被當成兩條不同的支線。
+ *
+ * ⚠️ 解法**不是**改成用支線代碼分類。使用者明確否決過：
+ *   「假設哪一天檔案第一條支線其實是路口D，只是這份資料不小心被挪到了
+ *     第一支線的位置，原本我希望我可以自己手動去修改名稱後，
+ *     讓程式把同樣名稱歸類在一起，現在反而作不到。」
+ *   代碼是檔案給的位置，名稱才是使用者可以修正的事實。
+ */
+test("名字看起來一樣就算同一條：自動的「路口 A」與手打的「路口A」要一起選到", () => {
+  const renamed = makeRecord({
+    intersectionKey: "K2",
+    station: "T15-02",
+    peaks: {
+      AM: {
+        window: "07:15–08:15",
+        totalPcu: 900,
+        totalVehicles: 5000,
+        branches: [
+          {
+            /* 這一筆排在第一欄，但使用者把它改名成 D——名稱才算數 */
+            code: "A",
+            name: "路口D",
+            outboundByVehicleSafe: null,
+            inflowByVehicleSafe: null,
+            twoWayByVehicleSafe: null,
+            directionDisplay: "split",
+            inflowPcu: 111,
+            outflowPcu: 112,
+            inflowVehicles: 113,
+            outflowVehicles: 114,
+            inflowFullDayVehicles: null,
+            outflowFullDayVehicles: null,
+          },
+          {
+            code: "B",
+            /* 自動命名的樣子：中間有一個半形空格 */
+            name: "路口 A",
+            outboundByVehicleSafe: null,
+            inflowByVehicleSafe: null,
+            twoWayByVehicleSafe: null,
+            directionDisplay: "split",
+            inflowPcu: 221,
+            outflowPcu: 222,
+            inflowVehicles: 223,
+            outflowVehicles: 224,
+            inflowFullDayVehicles: null,
+            outflowFullDayVehicles: null,
+          },
+        ],
+      },
+    },
+  });
+  /* 使用者勾的是他看到的「路口A」（沒有空格） */
+  const text = buildConclusion(
+    [makeRecord(), renamed],
+    cond({ peaks: ["AM"], branchNames: ["路口A"], metrics: ["inflowPcu"] }),
+    META,
+  );
+  assert.match(text, /400/, "第一個路口原本就叫路口A 的那一條要在");
+  assert.match(
+    text,
+    /221/,
+    "另一個路口自動命名成「路口 A」（有空格）的那一條也要在——這是修的東西",
+  );
+  /* 反面：被改名成「路口D」的那一條不可以混進來（哪怕它排在第一欄） */
+  assert.doesNotMatch(text, /111/, "名稱不是路口A 的支線不可以被選到");
+});
+
+test("支線挪錯位置時，改名之後就歸到正確的那一類", () => {
+  const shifted = makeRecord({
+    intersectionKey: "K3",
+    station: "T15-03",
+    peaks: {
+      AM: {
+        window: "07:15–08:15",
+        totalPcu: 900,
+        totalVehicles: 5000,
+        branches: [
+          {
+            /* 資料排在第一欄（代碼 A），但它其實是路口D，使用者已改名 */
+            code: "A",
+            name: "路口D",
+            outboundByVehicleSafe: null,
+            inflowByVehicleSafe: null,
+            twoWayByVehicleSafe: null,
+            directionDisplay: "split",
+            inflowPcu: 777,
+            outflowPcu: 778,
+            inflowVehicles: 779,
+            outflowVehicles: 780,
+            inflowFullDayVehicles: null,
+            outflowFullDayVehicles: null,
+          },
+        ],
+      },
+    },
+  });
+  const text = buildConclusion(
+    [shifted],
+    cond({ peaks: ["AM"], branchNames: ["路口D"], metrics: ["inflowPcu"] }),
+    META,
+  );
+  assert.match(text, /777/, "依名稱選得到，不受它排在第幾欄影響");
+});
+
+test("全形／空白差異不影響比對", () => {
+  for (const typed of ["路口 A", "路口　A", "路口A", "　路口A　"]) {
+    const text = buildConclusion(
+      [makeRecord()],
+      cond({ peaks: ["AM"], branchNames: [typed], metrics: ["inflowPcu"] }),
+      META,
+    );
+    assert.match(text, /400/, `「${typed}」應該要選到路口A`);
+  }
+});
+
+test("條件摘要寫的是支線的原名，不可以露出內部比對鍵", () => {
+  /*
+   * ⚠️ 這一則守的是我自己 2026-09-11 差點交出去的東西：
+   *   branchNames 改存比對鍵（小寫、去空白）之後，摘要那一行如果直接
+   *   把陣列 join 出來，草稿裡會出現「只敘述指定支線：路口a」——
+   *   小寫的 a。草稿是會被整段貼進報告的。
+   */
+  const text = buildConclusion(
+    [makeRecord()],
+    cond({ peaks: ["AM"], branchNames: ["路口 A"], metrics: ["inflowPcu"] }),
+    META,
+  );
+  assert.match(text, /只敘述指定支線：路口A。/);
+  assert.doesNotMatch(text, /路口a/, "不可以印出小寫的比對鍵");
+});
+
+test("大小寫算不同的名稱（排版差異吸收，內容差異不吸收）", async () => {
+  /*
+   * 使用者 2026-09-11：「路口A 和路口a、路口 a 會判定同名稱嗎？
+   *   我建議是判定是不同，因為這不是比對前『正規化』的意思。」
+   *
+   * 分界：空格與全半形是**排版雜訊**，大小寫是**內容**。
+   * ⚠️ 這一則同時擋兩個方向——正規化不足（空格沒吸收）與正規化過頭
+   *   （把不同的名字併在一起），兩種都是錯的。
+   */
+  const { typedNameKey } = await import("../lib/conclusion.ts");
+  /* 要吸收的：空格（含中間與全形）、全形英數字 */
+  assert.equal(typedNameKey("路口 A"), typedNameKey("路口A"));
+  assert.equal(typedNameKey("路口　A"), typedNameKey("路口A"));
+  assert.equal(typedNameKey(" 路口A "), typedNameKey("路口A"));
+  assert.equal(typedNameKey("路口Ａ"), typedNameKey("路口A"), "全形 Ａ 要收斂成半形");
+  /* 不可以吸收的：大小寫 */
+  assert.notEqual(typedNameKey("路口A"), typedNameKey("路口a"));
+  assert.notEqual(typedNameKey("路口A"), typedNameKey("路口 a"));
+  /* 不同的名字當然還是不同 */
+  assert.notEqual(typedNameKey("路口A"), typedNameKey("路口B"));
+  assert.notEqual(typedNameKey("神農路口"), typedNameKey("路口A"));
 });

@@ -484,6 +484,41 @@ export function periodDisplayLabel(
     .join("、");
 }
 
+/**
+ * 單一筆調查日期，依目前的年份顯示設定寫成人看得懂的字。
+ *
+ * 為什麼不用 readableDate()：那一支**固定**在民國年區間內就寫「民國115年…」，
+ * 不理會使用者的「年份顯示：民國年／西元年」開關，而且多了「民國」兩個字。
+ * 它服務的是匯入畫面的提示句（那裡要講得很白），不適合放進表格欄位。
+ *
+ * 使用者 2026-09-11：「請新增讓我在切換顯示調查月份時，也能看出
+ *   哪一個路口／路段是在 X 月做的這項功能。」
+ * 期別標籤只寫得出「115年4、5月」這種整季的合寫，看不出**哪一筆**是哪個月；
+ * 逐筆的日期要另外列出來才答得了那個問題。
+ *
+ * 讀不出日期時回傳空字串（不是「－」）——要顯示成什麼由呼叫端決定。
+ */
+export function surveyDateInYearStyle(
+  iso: string,
+  style: YearStyle = "roc",
+): string {
+  const m = String(iso ?? "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return "";
+  const year = style === "ad" ? m[1] : String(adToRoc(Number(m[1])));
+  return `${year}年${Number(m[2])}月${Number(m[3])}日`;
+}
+
+/** 同上，但只到月份（表格欄位太窄、或只想分辨月份時用）。 */
+export function surveyMonthInYearStyle(
+  iso: string,
+  style: YearStyle = "roc",
+): string {
+  const m = String(iso ?? "").match(/^(\d{4})-(\d{2})-\d{2}$/);
+  if (!m) return "";
+  const year = style === "ad" ? m[1] : String(adToRoc(Number(m[1])));
+  return `${year}年${Number(m[2])}月`;
+}
+
 /** 年份切換鈕上的文字，三支程式共用。 */
 export const YEAR_STYLE_LABELS: Record<YearStyle, string> = {
   roc: "民國年",

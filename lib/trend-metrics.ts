@@ -25,6 +25,7 @@ import {
   type Approach,
   type MovementKey,
   type ScopeKey,
+  type SurveyCoverage,
   type TrafficRecord,
   CORE_VEHICLE_LABELS,
   SCOPE_SHORT_LABELS,
@@ -33,7 +34,11 @@ import {
   scopeUnit,
   totalMovement,
 } from "./traffic.ts";
-import { recordIntersectionKey } from "./final-features.ts";
+/*
+ * 「兩條支線算不算同一條」全系統只能有一個答案。
+ * typedNameKey() 定義在 conclusion.ts（純字串函式，不會把 xlsx 拉進來）。
+ */
+import { typedNameKey } from "./conclusion.ts";
 
 /* ── 指標定義 ────────────────────────────────────────────────── */
 
@@ -160,9 +165,22 @@ export function trendMetricById(id: string): TrendMetricDef {
  * 三個尖峰都是一小時內的量，單位是「／hr」。這個規則全系統只有
  * scopeUnit() 說了算。
  */
-export function metricUnit(metric: TrendMetricDef, scope: ScopeKey): string {
+export function metricUnit(
+  metric: TrendMetricDef,
+  scope: ScopeKey,
+  /*
+   * 歷季趨勢天生就是**混合**的：同一張圖上可能有 24 小時的季度，
+   * 也有只做 4 小時的季度。所以這裡的預設留給呼叫端決定，
+   * 沒傳就走 scopeUnit 的安全預設（調查時段），不會把 4 小時說成一日。
+   */
+  coverage: SurveyCoverage = "unknown",
+): string {
   if (metric.unit === "%") return "%";
-  return scopeUnit(scope, metric.unit === "vehicle" ? "vehicle" : "pcu");
+  return scopeUnit(
+    scope,
+    metric.unit === "vehicle" ? "vehicle" : "pcu",
+    coverage,
+  );
 }
 
 /**
@@ -259,6 +277,13 @@ function inboundArmTotal(
  * **名稱**（使用者在「路口名稱管理」改過的名稱會被記住）與原始代碼
  * （路口A／B／C）。名稱優先，因為代碼在不同承辦的原始檔裡可能對調。
  */
+/*
+ * ⚠️ armMatchKey() 回傳的是**給人看的字串**（趨勢圖的下拉選單顯示它）。
+ *   「這兩條是不是同一條」不可以直接拿它相等比較——那正是 2026-09-11
+ *   在結論草稿踩到的坑：自動命名是 `"路口 " + code`（中間有半形空格），
+ *   使用者手打的是「路口A」，`路口 A !== 路口A`。
+ *   比對一律走 typedNameKey()（見下面的 findArm 與畫面端的 armOptions）。
+ */
 export function armMatchKey(approach: Approach): string {
   return String(approach.name || "").trim() || String(approach.sourceCode || "");
 }
@@ -267,14 +292,22 @@ export function findArm(
   record: TrafficRecord,
   key: string,
 ): Approach | undefined {
-  const wanted = String(key || "").trim();
+  /*
+   * ⚠️ 這裡原本兩邊都只做 trim()，於是「路口 A」與「路口A」對不起來：
+   *   趨勢圖選了其中一種寫法，另一種寫法的那幾季全部畫成斷線，
+   *   而畫面上寫的原因是「這一季找不到這一支支線（可能改過名稱）」——
+   *   把使用者引導到完全錯誤的方向（他兩邊打的就是同一個名字）。
+   *   結論草稿已經用 typedNameKey() 正規化；這裡沒有的話，
+   *   同一支程式對「兩條支線算不算同一條」就會有兩套答案。
+   */
+  const wanted = typedNameKey(key);
   if (!wanted) return undefined;
   return (
     record.approaches.find(function (approach) {
-      return armMatchKey(approach) === wanted;
+      return typedNameKey(armMatchKey(approach)) === wanted;
     }) ||
     record.approaches.find(function (approach) {
-      return String(approach.sourceCode || "") === wanted;
+      return typedNameKey(String(approach.sourceCode || "")) === wanted;
     })
   );
 }
@@ -308,7 +341,7 @@ export function metricValue(
       value: null,
       missingReason:
         scope === "DAY"
-          ? "這一季的調查不足 24 小時（或為舊版匯入），算不出全日尖峰小時"
+          ? "這一季缺少逐時間格資料（舊版匯入，或格距組不成整小時），算不出全調查時段尖峰"
           : "這一季沒有這個統計範圍的資料",
     };
   const useFlow = metric.flowAware ? flow : "outbound";
@@ -407,6 +440,14 @@ export function buildMetricSeries(
   option: TrendMetricOption,
   flow: TrendFlow,
   vehicleName?: (id: string) => string,
+  /*
+   * ⚠️ 這一批資料的調查涵蓋。不給的話 metricUnit 走安全預設「調查時段」，
+   *   而圖與 Excel 是拿 coverageOf(rows) 算的——兩邊就會對同一批數字
+   *   講兩種單位（整批都是 24 小時時，圖寫「PCU/調查日」、講稿寫
+   *   「PCU/調查時段」）。講稿是會被整段複製進報告的那一份。
+   *   （2026-09-16 實測抓到。）
+   */
+  coverage: SurveyCoverage = "unknown",
 ): MetricSeries {
   const points: MetricPoint[] = rows.map(function (record) {
     const got = metricValue(record, metric, scope, option, flow);
@@ -423,7 +464,7 @@ export function buildMetricSeries(
     flow,
     option,
     label: metricLabel(metric, option, vehicleName),
-    unit: metricUnit(metric, scope),
+    unit: metricUnit(metric, scope, coverage),
     digits: metric.digits,
     points,
     valued: points.filter(function (point) {
@@ -459,6 +500,22 @@ export function describeChange(
   from: number | null,
   to: number | null,
   series: Pick<MetricSeries, "unit" | "digits">,
+  /*
+   * ⚠️ 2026-09-11 新增，而且刻意是**必填**：倍率句一定要帶主詞。
+   *
+   * 使用者回報：「『大約剩下原來的 65%』，『原來的』是什麼？……
+   *   這類調查報告應該沒有所謂的原來值，除非是區分施工前、施工後，
+   *   但最好還是要有主詞……『A 是 B 的幾 %』主詞要明確，
+   *   不然會看不懂，是跟誰比才有這倍率。」
+   *
+   * 這種句子會被整段複製進報告，讀的人手上沒有畫面可以對照，
+   * 主詞一定要自己帶著。
+   *
+   * ⚠️ 設成必填而不是選填：給了退路就一定會有呼叫端忘記給，
+   *   而忘記的那一句長得和正常的一模一樣（只是少了主詞），沒有人會發現。
+   * ⚠️ 只改字，不改算法：ratio 仍然是 to / from，數字一個都不變。
+   */
+  labels: { from: string; to: string },
 ): string {
   if (from === null || to === null) return "";
   const delta = to - from;
@@ -469,8 +526,8 @@ export function describeChange(
   const times =
     ratio !== null && ratio > 0
       ? ratio >= 1
-        ? `，大約是原來的 ${ratio.toFixed(ratio >= 10 ? 0 : 1)} 倍`
-        : `，大約剩下原來的 ${(ratio * 100).toFixed(0)}%`
+        ? `，${labels.to}大約是${labels.from}的 ${ratio.toFixed(ratio >= 10 ? 0 : 1)} 倍`
+        : `，${labels.to}大約是${labels.from}的 ${(ratio * 100).toFixed(0)}%`
       : "";
   return `${direction} ${magnitude}${times}`;
 }
@@ -533,7 +590,10 @@ export function trendScript(
     lines.push(
       `整段期間：從 ${q(first.quarter)} 的 ${formatMetric(first.value, series)}，` +
         `到 ${q(last.quarter)} 的 ${formatMetric(last.value, series)}，` +
-        `整體${describeChange(first.value, last.value, series)}。`,
+        `整體${describeChange(first.value, last.value, series, {
+          from: q(first.quarter),
+          to: q(last.quarter),
+        })}。`,
     );
     /* 相鄰兩季變化最大的那一次——業主最常問的就是「哪一季跳最多」。 */
     let biggest: { from: MetricPoint; to: MetricPoint; delta: number } | null =
@@ -547,7 +607,10 @@ export function trendScript(
       lines.push(
         `變化最大的一次落在 ${q(biggest.from.quarter)} 到 ${q(biggest.to.quarter)}：` +
           `從 ${formatMetric(biggest.from.value, series)} ` +
-          `${describeChange(biggest.from.value, biggest.to.value, series)}。` +
+          `${describeChange(biggest.from.value, biggest.to.value, series, {
+            from: q(biggest.from.quarter),
+            to: q(biggest.to.quarter),
+          })}。` +
           `這一段通常要說明原因（工程施工、路網調整、鄰近設施開業、或調查條件不同）。`,
       );
     const values = valued.map(function (point) {
@@ -571,9 +634,26 @@ export function trendScript(
   sections.push({ title: "重點變化", lines });
 
   /* ③ 怎麼看這張圖 */
-  const how: string[] = [
-    "折線斷開的地方代表那一季「算不出來」，不是「歸零」——系統不會把算不出來的季度連過去，因為連過去等於宣稱中間有一個介於兩端之間的值。",
-  ];
+  /*
+   * ⚠️ 「折線斷開」那一句**只有在圖上真的有斷開時才講**。
+   *
+   * 使用者 2026-09-11（在全日交通量發現，這一支同一個病）：
+   *   「圖中只有兩季資料，沒有所謂的斷開的地方，是不是沒有這一段、
+   *     沒有結論，硬是亂找或模糊找了一句罐頭話套上？
+   *     我們之前說過，如果沒有相關結論，那就可以不顯示。」
+   *
+   * 這比「多一句廢話」嚴重：說明文字是要被**照著念給業主聽**的。
+   * 講一句圖上找不到對應的話，聽的人會去圖上找那個斷點，找不到就開始
+   * 懷疑整份資料——**一句不適用的罐頭話，賠掉的是整張圖的可信度**。
+   */
+  const hasGap = series.points.some(function (point) {
+    return point.value === null;
+  });
+  const how: string[] = [];
+  if (hasGap)
+    how.push(
+      "折線斷開的地方代表那一季「算不出來」，不是「歸零」——系統不會把算不出來的季度連過去，因為連過去等於宣稱中間有一個介於兩端之間的值。",
+    );
   if (series.metric.id === "vehicleShare")
     how.push(
       "佔比要和總量一起看：總量成長時，佔比下降不代表這個車種變少，只代表它成長得比其他車種慢。",
@@ -588,9 +668,13 @@ export function trendScript(
     );
   if (series.scope === "DAY")
     how.push(
-      "「全日尖峰」是在完整 24 小時裡搜尋出來的最忙一小時，和 AM／PM 尖峰不一定落在同一個時段；跨季比較時可以在明細表確認每一季的尖峰時段。",
+      "「全調查時段尖峰」是在這一季調查涵蓋的時段裡搜尋出來的最忙一小時，和 AM／PM 尖峰不一定落在同一個時段（跨中午的視窗只有它挑得到）。⚠️ 跨季比較時要留意各季的調查涵蓋可能不同：24 小時的季度與 4 小時的季度放在同一條線上，比的不是同一件事，請在明細表確認每一季的涵蓋時數與尖峰時段。",
     );
-  sections.push({ title: "怎麼看這張圖", lines: how });
+  /*
+   * ⚠️ 一句都沒有的時候**整段不出現**：不要放空標題，也不要為了湊滿
+   *   而塞一句「這張圖很好懂」之類的話。沒有結論就不要有段落。
+   */
+  if (how.length) sections.push({ title: "怎麼看這張圖", lines: how });
 
   /* ④ 要先講清楚的（資料界線） */
   const caveats: string[] = [];
@@ -635,262 +719,15 @@ export function trendScript(
 
 /* ── 跨計畫比較 ──────────────────────────────────────────────── */
 
-/**
- * 跨計畫歷季趨勢。
+/*
+ * ⚠️ 2026-09-17：移除 CrossProjectPoint／CrossProjectSeries／CrossProjectTrend。
  *
- * ⚠️ **絕對不可以比總量。** 每個計畫的路口數量本來就不一樣——A 計畫 12 個
- * 路口、B 計畫 3 個，總量畫在一起只會證明「A 比較大」，那是已知的，不是
- * 資訊。這裡一律換算成**每路口平均**，並把該季的路口數（N）帶在點上，
- * 讓看的人知道這個平均是幾個路口平均出來的。
- *
- * 佔比類指標（車種佔比）本來就是比例，改用**加權平均**：分子分母各自
- * 加總再相除，而不是把各路口的百分比再平均一次——後者會讓一個很小的
- * 路口和一個很大的路口有同樣的份量。
+ * 「跨計畫比較」整條線在 v2.1.64 依使用者決定移除（「跨計畫比較似乎沒什麼
+ * 意義」），算它的函式當時就一起刪了，**只剩這三個型別留在這裡**，
+ * 沒有任何一行程式引用。留著的代價是誤導：讀這個檔的人會以為那條路徑還在，
+ * 並照它的註解去理解「每路口平均」與「加權平均」——而那兩段邏輯已經不存在了。
+ * 《加總與並列稽核_三支程式_20260916》第六節列的兩處死程式之一。
  */
-export type CrossProjectPoint = {
-  quarter: string;
-  /** 每路口平均（佔比指標則是加權平均）。 */
-  value: number | null;
-  /** 這一季有幾個路口算得出來。 */
-  count: number;
-  /** 這一季總共有幾個路口（含算不出來的）。 */
-  total: number;
-};
-
-export type CrossProjectSeries = {
-  projectId: string;
-  projectName: string;
-  points: CrossProjectPoint[];
-};
-
-export type CrossProjectTrend = {
-  quarters: string[];
-  series: CrossProjectSeries[];
-  metric: TrendMetricDef;
-  scope: ScopeKey;
-  label: string;
-  unit: string;
-  digits: number;
-  /** 平均的說明字樣，畫在圖上與講稿裡。 */
-  basis: string;
-};
-
-export function buildCrossProjectTrend(
-  projects: Array<{ id: string; name: string; records: TrafficRecord[] }>,
-  metric: TrendMetricDef,
-  scope: ScopeKey,
-  option: TrendMetricOption,
-  flow: TrendFlow,
-  compareQuartersFn: (a: string, b: string) => number,
-  vehicleName?: (id: string) => string,
-): CrossProjectTrend {
-  /*
-   * 頭尾之間整季沒有資料的季度要補成空格，X 軸的間距才對應真實時間。
-   * 補出來的季在每一個計畫底下都查不到紀錄，值一律 null，折線會斷開。
-   */
-  const quarters = completeQuarterRange(
-    Array.from(
-      new Set(
-        projects.flatMap(function (project) {
-          return project.records.map(function (record) {
-            return record.quarter;
-          });
-        }),
-      ),
-    ).sort(compareQuartersFn),
-  );
-
-  const series = projects.map(function (project) {
-    /*
-     * ⚠️ 一季一個路口只能算一筆。
-     *
-     * 同一個路口同一季可能有兩筆（平日與假日，或重新匯入過），全部丟進去
-     * 平均的話有兩個後果：一是把平日與假日混在一起平均——那是一個不對應
-     * 任何一天的數字，沒有應用意義；二是 N（路口數）會被算成筆數，
-     * 「12 個路口」變成「24 筆」，平均值整個錯掉。
-     *
-     * 呼叫端應該先把資料別過濾成單一種（見畫面上的「資料別」選單）；
-     * 這裡再以路口鍵去重一次當作最後一道防線，同一個路口取最後匯入的那筆。
-     */
-    const byQuarter = new Map<string, Map<string, TrafficRecord>>();
-    for (const record of project.records) {
-      const bucket = byQuarter.get(record.quarter) ?? new Map<string, TrafficRecord>();
-      const key = recordIntersectionKey(record);
-      const seen = bucket.get(key);
-      if (
-        !seen ||
-        String(seen.importedAt || "") <= String(record.importedAt || "")
-      )
-        bucket.set(key, record);
-      byQuarter.set(record.quarter, bucket);
-    }
-    const points = quarters.map(function (quarter): CrossProjectPoint {
-      const bucket: TrafficRecord[] = Array.from(
-        (byQuarter.get(quarter) || new Map<string, TrafficRecord>()).values(),
-      );
-      if (!bucket.length)
-        return { quarter, value: null, count: 0, total: 0 };
-      if (metric.id === "vehicleShare") {
-        /* 加權平均：分子分母各自加總再相除。 */
-        const id = option.key || "";
-        let numerator = 0;
-        let denominator = 0;
-        let counted = 0;
-        for (const record of bucket) {
-          if (!hasScopeValue(record, scope)) continue;
-          const part = record.approaches.reduce(function (sum, approach) {
-            return sum + armVehicleCount(record, approach, scope, id);
-          }, 0);
-          const all = record.approaches.reduce(function (sum, approach) {
-            return sum + armVehicleCount(record, approach, scope);
-          }, 0);
-          if (!all) continue;
-          numerator += part;
-          denominator += all;
-          counted++;
-        }
-        return {
-          quarter,
-          value: denominator ? (numerator / denominator) * 100 : null,
-          count: counted,
-          total: bucket.length,
-        };
-      }
-      const values = bucket
-        .map(function (record) {
-          return metricValue(record, metric, scope, option, flow).value;
-        })
-        .filter(function (value): value is number {
-          return value !== null;
-        });
-      return {
-        quarter,
-        value: values.length
-          ? values.reduce(function (sum, value) {
-              return sum + value;
-            }, 0) / values.length
-          : null,
-        count: values.length,
-        total: bucket.length,
-      };
-    });
-    return { projectId: project.id, projectName: project.name, points };
-  });
-
-  return {
-    quarters,
-    series,
-    metric,
-    scope,
-    label: metricLabel(metric, option, vehicleName),
-    unit: metricUnit(metric, scope),
-    digits: metric.digits,
-    basis:
-      metric.id === "vehicleShare"
-        ? "各計畫的加權平均（分子分母各自加總再相除，不是把各路口的百分比再平均一次）"
-        : "各計畫的每路口平均（總量除以該季算得出來的路口數）",
-  };
-}
-
-export function crossProjectScript(
-  trend: CrossProjectTrend,
-  quarterLabel: (quarter: string) => string,
-): TrendScriptSection[] {
-  const q = quarterLabel;
-  const sections: TrendScriptSection[] = [];
-  const scopeName = SCOPE_SHORT_LABELS[trend.scope] || trend.scope;
-
-  sections.push({
-    title: "這張圖在說什麼",
-    lines: [
-      `這是各計畫在 ${scopeName}的「${trend.label}」歷季比較，每一條線是一個計畫。`,
-      `⚠️ 每個計畫的路口數量不一樣，所以圖上畫的**不是總量**，而是${trend.basis}。` +
-        `直接比總量只會證明「路口比較多的計畫比較大」，那是已知的，不是資訊。`,
-      "每一個點旁邊的 N 是那一季實際算得出來的路口數。N 差很多時（例如一個計畫 12 個路口、另一個只有 2 個），兩條線的穩定度本來就不同——路口少的那一條，單一路口的變化就足以讓整條線跳動。",
-    ],
-  });
-
-  const lines: string[] = [];
-  for (const item of trend.series) {
-    const valued = item.points.filter(function (point) {
-      return point.value !== null;
-    });
-    if (valued.length >= 2) {
-      const first = valued[0];
-      const last = valued[valued.length - 1];
-      lines.push(
-        `${item.projectName}：從 ${q(first.quarter)} 的 ${formatMetric(first.value, trend)}（N=${first.count}），` +
-          `到 ${q(last.quarter)} 的 ${formatMetric(last.value, trend)}（N=${last.count}），` +
-          `${describeChange(first.value, last.value, trend)}。`,
-      );
-    } else if (valued.length === 1) {
-      lines.push(
-        `${item.projectName}：只有 ${q(valued[0].quarter)} 一季有值（${formatMetric(valued[0].value, trend)}，N=${valued[0].count}），畫不出趨勢。`,
-      );
-    } else {
-      lines.push(`${item.projectName}：所選範圍內沒有算得出來的季度。`);
-    }
-  }
-  sections.push({ title: "各計畫的變化", lines });
-
-  const caveats: string[] = [];
-  const counts = trend.series.flatMap(function (item) {
-    return item.points
-      .filter(function (point) {
-        return point.value !== null;
-      })
-      .map(function (point) {
-        return point.count;
-      });
-  });
-  if (counts.length) {
-    const min = Math.min(...counts);
-    const max = Math.max(...counts);
-    if (max >= min * 3 && min > 0)
-      caveats.push(
-        `各計畫的路口數差距很大（最少 ${min} 個、最多 ${max} 個）。路口數少的計畫，平均值容易被單一路口帶著跑，兩條線的抖動幅度不能直接拿來相比。`,
-      );
-    if (min === 1)
-      caveats.push(
-        "有計畫在某一季只有 1 個路口算得出來——那一季的「平均」其實就是那一個路口本身，不具代表性。",
-      );
-  }
-  const partial = trend.series.filter(function (item) {
-    return item.points.some(function (point) {
-      return point.total > 0 && point.count < point.total;
-    });
-  });
-  if (partial.length)
-    caveats.push(
-      `有計畫的某些季度只有部分路口算得出來（${partial
-        .map(function (item) {
-          return item.projectName;
-        })
-        .join("、")}），平均是用算得出來的那幾個算的。要知道是哪幾個路口沒算出來，請展開下方的明細表。`,
-    );
-  const sparse = trend.series.filter(function (item) {
-    return (
-      item.points.filter(function (point) {
-        return point.value !== null;
-      }).length < 2
-    );
-  });
-  if (sparse.length)
-    caveats.push(
-      `${sparse
-        .map(function (item) {
-          return item.projectName;
-        })
-        .join("、")} 不足兩季，圖上不會有折線；這不是資料異常，只是還沒累積夠。`,
-    );
-  if (!caveats.length)
-    caveats.push(
-      "各計畫的路口數相當、每一季都算得出來，這幾條線可以直接互相比較。",
-    );
-  sections.push({ title: "要先講清楚的", lines: caveats });
-
-  return sections;
-}
 
 /* ── 缺季補齊 ────────────────────────────────────────────────── */
 

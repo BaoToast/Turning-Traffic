@@ -20,7 +20,21 @@
  * 備份包，本機已經有 Chrome 或 Edge 時就不必再另外下載一份瀏覽器。
  */
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { assertDistFresh } from "./dist-freshness.mjs";
+
+/*
+ * ⚠️ 匯入這一支就順便擋掉「拿舊的建置畫面去驗新的修改」。
+ *   放在這裡是因為 66 支端對端腳本全部都會匯入 chrome-path.mjs，
+ *   改一個地方就全部有；理由與兩個方向的危害寫在 dist-freshness.mjs。
+ */
+assertDistFresh({
+  root: join(dirname(fileURLToPath(import.meta.url)), ".."),
+  sources: ["app", "lib", "github", "public"],
+  dist: "github-pages-dist",
+  rebuild: "npm run build:github",
+});
 
 const CONTAINER_CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
 

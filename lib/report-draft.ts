@@ -61,6 +61,19 @@ export type ReportDraftContext = {
    * 例如「中正路口（115Q4、平日）」。
    */
   focusLabel: string;
+  /**
+   * 那一筆代表資料**是不是使用者目前選定的路口**。
+   *
+   * ⚠️ 稽核表 I：報表有自己的季度區間，而「目前選定的路口」跟著主工具列走。
+   *   選定的路口不在報表的季度範圍內時，舊版會一路退回
+   *   `latestBySeries.values().next().value`——也就是匯入順序上的第一筆，
+   *   別的路口、別的季、別的日別——然後照樣把那一筆的支線流量與車種組成
+   *   寫成正文，而畫面上只寫「以 ○○ 為代表」，**沒有一句說你選的那個不在裡面**。
+   *   false 時草稿要明講，讓人知道這一段換了對象。
+   */
+  focusIsSelected?: boolean;
+  /** 使用者目前選定、但不在這個匯出範圍內的那個路口（供上一句寫出來）。 */
+  focusRequestedLabel?: string;
   /** 尖峰時段：本範圍內出現最多次的那一組；不一致時由畫面端加註。 */
   peaks: { am: string; pm: string };
   /**
@@ -142,6 +155,31 @@ export type ReportDraftContext = {
   factors: { label: string; left: number; through: number; right: number }[];
   /** 本次匯出的資料實際用到幾組當量矩陣。 */
   factorMatrixCount: number;
+  /*
+   * ── 這一份草稿是在哪一組條件底下算出來的（2026-09-15 補）──────
+   *
+   * ⚠️ 舊版**一個字都沒寫**，而其中兩項會直接改變每一個數字：
+   *   ・尖峰時段判定方式：`viewRecord()` 一路套用在這一段的每一筆紀錄上。
+   *     選「各方向各自認定」時，各方向的尖峰不在同一小時，
+   *     **不可以相加**——而草稿照樣把它們加成「合計」。
+   *   ・轉向別：同樣經過 viewRecord，篩成「左轉」之後每一個 PCU 都被改寫。
+   *   兩者都沒有控制項、也沒有任何提示，使用者完全不會知道。
+   *   這段文字會被複製進正式報告，而報告上看不到畫面。
+   */
+  conditions?: { label: string; value: string }[];
+  /**
+   * 各方向（各支線）的尖峰量**可不可以相加**。
+   *
+   * 「各方向各自認定自己的尖峰」時是 false：那些數字不是同一時刻的量，
+   * 合計沒有意義，草稿必須寫出來而不是安靜地加起來。
+   */
+  peakRuleAdditive?: boolean;
+  /**
+   * 小數位數（0～2）。舊版**每一處都寫死 1 位**，於是結論草稿改成 2 位之後，
+   * 同一批數字在兩份文件裡以不同位數出現，而兩份都沒有解釋。
+   * 缺值時回到 1 位＝改版前的行為。
+   */
+  digits?: number;
 };
 
 const nf = (value: number, digits = 0) =>
@@ -154,35 +192,99 @@ const nf = (value: number, digits = 0) =>
 
 // Number.isFinite 的判斷不能省：資料含非數值欄位時 recordTotal 會回 NaN，
 // 少了這個守衛就會在報告裡寫出「減少 NaN%」。
-const pct = (value: number) =>
+/*
+ * ⚠️ 百分比一定要把小數位數帶進來，而且**刻意不給預設值**——漏傳就是編譯錯誤。
+ *   三支系統都踩過同一個雷：位數改成 2 位之後，只有前面的數值變了，
+ *   百分比仍然寫死 1 位，而畫面上看不出哪裡不對。
+ */
+const pct = (value: number, digits: number) =>
   Number.isFinite(value)
-    ? `${value >= 0 ? "增加" : "減少"} ${Math.abs(value).toFixed(1)}%`
+    ? `${value >= 0 ? "增加" : "減少"} ${Math.abs(value).toFixed(digits)}%`
     : "變動幅度無法計算（資料含非數值欄位）";
 
-const armList = (rows: ArmFlow[], limit = 3) =>
+const armList = (rows: ArmFlow[], digits: number, limit = 3) =>
   rows
     .slice(0, limit)
-    .map((row) => `${row.name}（AM ${nf(row.am, 1)}、PM ${nf(row.pm, 1)} PCU/hr）`)
+    .map((row) => `${row.name}（AM ${nf(row.am, digits)}、PM ${nf(row.pm, digits)} PCU/hr）`)
     .join("、");
 
 const rest = (rows: unknown[], limit = 3, unit = "條支線", tail = "見表") =>
   rows.length > limit ? `，其餘 ${rows.length - limit} ${unit}${tail}` : "";
 
-/** 兩個 PCU 數值是否可視為相等。各處都做到小數一位，所以用 0.05 當門檻。 */
-const same = (a: number, b: number) => Math.abs(a - b) < 0.05;
+/*
+ * 兩個 PCU 數值是否可視為相等。
+ * ⚠️ 門檻要跟著**小數位數**走：印到 1 位時 0.05 是對的，印到 2 位時
+ *   0.05 會把「12.34 與 12.37」講成相等，而草稿上兩個數字明明不一樣——
+ *   「畫面上看得出差別、文字卻說相等」是最容易被當成算錯的一種。
+ */
+const same = (a: number, b: number, digits: number) =>
+  Math.abs(a - b) < 0.5 * Math.pow(10, -digits);
+
+/**
+ * 小數位數夾回安全範圍。缺值或壞值一律回 1 位（＝改版前的行為）。
+ *
+ * ⚠️ 不可以只判斷 null／""：`Number([])` 是 0、`Number(true)` 是 1、
+ *   `Number(" ")` 是 0，全都落在 0～2 裡面，會安靜換掉使用者設定的位數。
+ */
+function safeReportDigits(value: unknown): number {
+  const acceptable =
+    typeof value === "number" ||
+    (typeof value === "string" && value.trim() !== "");
+  if (!acceptable) return 1;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 2 ? parsed : 1;
+}
 
 /** 單一段落的內容。回傳空陣列代表「這一段目前沒有資料可寫」。 */
 function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
+  /*
+   * 小數位數。⚠️ 缺值一律回 1 位＝改版前的行為，舊呼叫端與單元測試逐字相同。
+   *   `toFixed(undefined)` **不會拋錯，只會安靜輸出 0 位**，所以一定要夾。
+   */
+  const d = safeReportDigits(c.digits);
   switch (key) {
     case "scope": {
-      return [
+      const lines = [
         `本次分析範圍：${c.quarterRange}（共 ${c.quarterCount} 個季度）、${c.intersectionCount} 個路口、${nf(c.recordCount)} 筆路口季度資料。`,
         `尖峰時段：上午 ${c.peaks.am}、下午 ${c.peaks.pm}。`,
         // 尖峰小時流量不能跨路口或跨季度相加（把 Q1 與 Q2 的尖峰量加起來
         // 沒有意義），所以支線與車種的敘述固定以一筆代表資料為準，並在這裡
         // 講清楚是哪一筆，其餘的完整數字請看工作表。
-        `支線與車種的敘述以 ${c.focusLabel} 為代表，其餘路口與季度的完整數字請見各工作表。`,
+        c.focusIsSelected === false
+          ? `⚠️ 目前選定的${c.focusRequestedLabel ? `「${c.focusRequestedLabel}」` : "路口"}不在這份報表的季度範圍內，` +
+            `所以支線與車種的敘述改以 ${c.focusLabel} 為代表。` +
+            `要寫選定的那一個，請把上方的季度區間調整到它有資料的那幾季。` +
+            `其餘路口與季度的完整數字請見各工作表。`
+          : `支線與車種的敘述以 ${c.focusLabel} 為代表，其餘路口與季度的完整數字請見各工作表。`,
       ];
+      /*
+       * ── 條件與「不適用」一定要寫進草稿本身（使用者 2026-09-15）────
+       *
+       * ⚠️ 「尖峰時段判定方式」與「轉向別」**本來就一路套用在這一段的每一筆
+       *   紀錄上**（viewRecord），只是舊版一個字都沒寫。
+       *   尤其「各方向各自認定」：各支線的尖峰不在同一小時，那些數字
+       *   **不可以相加**，而下面的「各支線駛出合計」正是把它們加起來。
+       *   這段文字會被複製進正式報告，報告上看不到畫面——不寫的話沒有人會知道。
+       */
+      const conditions = c.conditions || [];
+      if (conditions.length)
+        lines.push(
+          "統計條件：" +
+            conditions.map((item) => `${item.label}＝${item.value}`).join("；") +
+            `；數值小數 ${d} 位。`,
+        );
+      if (c.peakRuleAdditive === false)
+        lines.push(
+          "⚠️ 本數值不適用「相加」：尖峰時段判定方式為「各方向各自認定自己的尖峰」，" +
+            "各支線的尖峰不在同一小時，下列各項合計與守恆檢核僅供參考，" +
+            "不代表同一時刻的路口總量。要取可相加的數字，請把判定方式改回" +
+            "「整個調查點同一時段」。",
+        );
+      lines.push(
+        "本數值不適用「顯示數值」條件：草稿裡每一句各自標明自己的單位" +
+          "（PCU/hr、輛、%），不跟著主工具列的「顯示數值」切換。",
+      );
+      return lines;
     }
     case "sites": {
       if (!c.siteSummaries.length) return [];
@@ -200,7 +302,7 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
             ? `各支線駛出／駛入：${peak.arms
                 .map(
                   (arm) =>
-                    `${arm.name} ${nf(arm.outbound, 1)}／${nf(arm.inbound, 1)}`,
+                    `${arm.name} ${nf(arm.outbound, d)}／${nf(arm.inbound, d)}`,
                 )
                 .join("、")} PCU/hr`
             : "";
@@ -210,15 +312,15 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
           const otherShare = others.reduce((sum, item) => sum + item.share, 0);
           const composition = shown.length
             ? `車種組成：${shown
-                .map((item) => `${item.label} ${item.share.toFixed(1)}%`)
+                .map((item) => `${item.label} ${item.share.toFixed(d)}%`)
                 .join("、")}${
                 others.length
-                  ? `、其餘 ${others.length} 種合計 ${otherShare.toFixed(1)}%`
+                  ? `、其餘 ${others.length} 種合計 ${otherShare.toFixed(d)}%`
                   : ""
               }`
             : "";
           const parts = [
-            `路口轉向總量 ${nf(peak.total, 1)} PCU/hr`,
+            `路口轉向總量 ${nf(peak.total, d)} PCU/hr`,
             arms,
             composition,
           ].filter(Boolean);
@@ -235,27 +337,27 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
       if (!c.outbound.length) return [];
       return [
         `${c.focusLabel} 各支線駛出尖峰流量（駛出路口X＝以支線 X 為起點、開往其他支線的車）：` +
-          `${armList(c.outbound)}${rest(c.outbound)}。`,
+          `${armList(c.outbound, d)}${rest(c.outbound)}。`,
       ];
     }
     case "inboundPeak": {
       if (!c.inbound.length) return [];
       return [
         `${c.focusLabel} 各支線駛入尖峰流量（駛入路口X＝以支線 X 為終點、由其他支線開來的車）：` +
-          `${armList(c.inbound)}${rest(c.inbound)}。`,
+          `${armList(c.inbound, d)}${rest(c.inbound)}。`,
       ];
     }
     case "inboundOutbound": {
       if (!c.totals.am && !c.totals.pm) return [];
       const lines = [
-        `${c.focusLabel} 路口轉向總量：上午尖峰 ${nf(c.totals.am, 1)} PCU/hr、下午尖峰 ${nf(c.totals.pm, 1)} PCU/hr。`,
+        `${c.focusLabel} 路口轉向總量：上午尖峰 ${nf(c.totals.am, d)} PCU/hr、下午尖峰 ${nf(c.totals.pm, d)} PCU/hr。`,
       ];
       const f = c.flowTotals;
-      const amBalanced = same(f.outboundAm, f.inboundAm);
-      const pmBalanced = same(f.outboundPm, f.inboundPm);
+      const amBalanced = same(f.outboundAm, f.inboundAm, d);
+      const pmBalanced = same(f.outboundPm, f.inboundPm, d);
       lines.push(
-        `各支線駛出合計：上午 ${nf(f.outboundAm, 1)}、下午 ${nf(f.outboundPm, 1)} PCU/hr；` +
-          `各支線駛入合計：上午 ${nf(f.inboundAm, 1)}、下午 ${nf(f.inboundPm, 1)} PCU/hr。`,
+        `各支線駛出合計：上午 ${nf(f.outboundAm, d)}、下午 ${nf(f.outboundPm, d)} PCU/hr；` +
+          `各支線駛入合計：上午 ${nf(f.inboundAm, d)}、下午 ${nf(f.inboundPm, d)} PCU/hr。`,
       );
       // 「駛入合計＝駛出合計」是資料完整時才成立的性質，不能無條件寫死；
       // 有流向沒被分配到支線時它就不成立，那正是報告該提醒的地方。
@@ -273,7 +375,7 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
         lines.push(
           amBalanced && pmBalanced
             ? "同一統計範圍內，各支線的駛入合計與駛出合計相等，流向資料守恆。"
-            : `駛入與駛出合計不一致（上午差 ${nf(f.inboundAm - f.outboundAm, 1)}、下午差 ${nf(f.inboundPm - f.outboundPm, 1)} PCU/hr），` +
+            : `駛入與駛出合計不一致（上午差 ${nf(f.inboundAm - f.outboundAm, d)}、下午差 ${nf(f.inboundPm - f.outboundPm, d)} PCU/hr），` +
               "請檢查是否有流向的目的支線未指定。",
         );
       return lines;
@@ -282,17 +384,17 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
       if (!c.topFlow) return [];
       return [
         `OD 轉向矩陣中流量最高的一筆為 ${c.topFlow.station} ${c.topFlow.peak} 尖峰的 ` +
-          `${c.topFlow.from} → ${c.topFlow.to}，${nf(c.topFlow.pcu, 1)} PCU/hr。`,
+          `${c.topFlow.from} → ${c.topFlow.to}，${nf(c.topFlow.pcu, d)} PCU/hr。`,
       ];
     }
     case "branchBalance": {
       const lines: string[] = [];
       if (c.worstBalance)
         lines.push(
-          same(c.worstBalance.difference, 0)
+          same(c.worstBalance.difference, 0, d)
             ? "支線流量平衡檢核：全部支線的駛入與駛出差值皆為 0，流向資料守恆。"
             : `支線流量平衡檢核：差值最大的是 ${c.worstBalance.station} ${c.worstBalance.peak} 尖峰的 ${c.worstBalance.name}，` +
-              `駛入減駛出 ${nf(c.worstBalance.difference, 1)} PCU/hr，請確認是否有未分配的流向。`,
+              `駛入減駛出 ${nf(c.worstBalance.difference, d)} PCU/hr，請確認是否有未分配的流向。`,
         );
       // 守恆檢核的結果不能被平衡檢核的早退吃掉——它是各自獨立的檢查，
       // 沒有支線資料時仍然要交代檢查了幾組。沒有任何一組可檢查時要講原因，
@@ -311,7 +413,7 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
       if (!c.vehicles.length) return [];
       return [
         `車種組成（${c.focusLabel}，${c.compositionScope}）：${c.vehicles
-          .map((v) => `${v.label} ${v.share.toFixed(1)}%（${nf(v.count)} ${c.compositionUnit}）`)
+          .map((v) => `${v.label} ${v.share.toFixed(d)}%（${nf(v.count)} ${c.compositionUnit}）`)
           .join("、")}。`,
       ];
     }
@@ -319,7 +421,7 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
       if (!c.trend.length) return [];
       const head =
         `歷季趨勢（${c.trendLabel}）：${c.trend
-          .map((row) => `${row.quarter}（AM ${nf(row.am, 1)}、PM ${nf(row.pm, 1)} PCU/hr）`)
+          .map((row) => `${row.quarter}（AM ${nf(row.am, d)}、PM ${nf(row.pm, d)} PCU/hr）`)
           .join("、")}。`;
       if (c.trend.length < 2) return [head];
       const last = c.trend[c.trend.length - 1];
@@ -333,8 +435,8 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
       const changeText = (now: number, before: number, unit = "PCU/hr") => {
         if (!Number.isFinite(before) || !Number.isFinite(now))
           return "變動幅度無法計算（資料含非數值欄位）";
-        if (!before) return `由 0 增為 ${nf(now, 1)} ${unit}`;
-        return pct(((now - before) / before) * 100);
+        if (!before) return `由 0 增為 ${nf(now, d)} ${unit}`;
+        return pct(((now - before) / before) * 100, d);
       };
       const comparable =
         (Number.isFinite(previous.am) && previous.am) ||
@@ -353,7 +455,14 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
       if (c.compareIntersections < 2 || c.compare.length < 2) return [];
       return [
         `各路口比較（每個路口、每種資料別各取範圍內最新一季，共 ${c.compare.length} 筆、涵蓋 ${c.compareIntersections} 個路口，依上午尖峰轉向總量排序）：` +
-          `${armList(c.compare, 5)}${rest(c.compare, 5, "筆", "，完整清單見表")}。`,
+          /*
+           * ⚠️ 這裡的 5 是**列出幾筆**，不是小數位數。
+           *   armList 的簽章 2026-09-15 多了一個 digits 參數插在中間，
+           *   這一處如果照舊只傳一個數字，5 就會被當成「小數 5 位」，
+           *   草稿上會印出「18,481.30000 PCU/hr」——而它看起來只是「比較長」，
+           *   不會有人察覺那是參數位置錯了。
+           */
+          `${armList(c.compare, d, 5)}${rest(c.compare, 5, "筆", "，完整清單見表")}。`,
       ];
     }
     case "quality": {

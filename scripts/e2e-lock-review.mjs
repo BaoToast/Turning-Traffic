@@ -109,7 +109,7 @@ const lockedCount = () =>
 await gotoAudit();
 
 /* ── 1. 有「需修正」時鎖不起來 ── */
-await page.locator('button:has-text("鎖定 ")').first().click();
+await page.locator('[data-testid="lock-quarter"]').first().click();
 await page.waitForTimeout(800);
 ok(
   "有「需修正」的紀錄時，鎖定被擋下來",
@@ -133,7 +133,7 @@ await page.evaluate(async () => {
 await page.reload();
 await page.waitForTimeout(1000);
 await gotoAudit();
-await page.locator('button:has-text("鎖定 ")').first().click();
+await page.locator('[data-testid="lock-quarter"]').first().click();
 await page.waitForTimeout(900);
 ok(
   "全部「已確認」後鎖定成功",
@@ -163,13 +163,29 @@ ok(
 
 /* ── 3. 鎖定後審核欄位停用 ── */
 await page.waitForTimeout(400);
+/*
+ * ⚠️ 錨點改成 [data-testid="review-status"]，不再用 `.review-panel` 的第一個。
+ *
+ *   這一頁有三塊都掛著 .review-panel。2026-09-11 依使用者要求把審核區
+ *   移到流量表之後（「先看過流量表，最下方才是成果審核狀態」），
+ *   DOM 裡的第一個 .review-panel 就換成了「資料別（平日／假日）」——
+ *   於是這一條紅字寫著「鎖定後審核狀態下拉停用」，看起來像鎖定壞了，
+ *   實際上鎖定完全正常，只是抓到了另一塊的下拉。
+ *   同一類問題今天已經踩到第三次：**錨點要綁身分，不要綁位置。**
+ */
+const reviewStatus = page.locator('[data-testid="review-status"]');
+ok(
+  "前置：找得到成果審核狀態那一塊（找不到的話下面兩條會恆真）",
+  (await reviewStatus.count()) === 1,
+  `找到 ${await reviewStatus.count()} 塊`,
+);
 ok(
   "鎖定後審核狀態下拉停用",
-  await page.locator(".review-panel select").first().isDisabled(),
+  await reviewStatus.locator("select").first().isDisabled(),
 );
 ok(
   "鎖定後審核備註欄停用",
-  await page.locator(".review-panel input").first().isDisabled(),
+  await reviewStatus.locator("input").first().isDisabled(),
 );
 ok(
   "畫面上看得到「已鎖定」狀態",

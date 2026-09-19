@@ -35,11 +35,15 @@ SHA-256，防止誤用 npm registry 的 0.18.5 或被替換的檔案。
    **不要**在手冊裡加「本版更新內容」之類的區塊——手冊只寫目前的功能與操作方式，
    版本沿革寫進本檔案清單第 6 項的 `CHANGELOG.md`。
    `tests/manual-version-log.test.mjs` 會擋下版本紀錄與維護敘事。
-4. `scripts/manual/build-pdf.mjs`、`build-docx.mjs` 的輸出檔名與頁尾
+4. `scripts/manual/build-pdf.mjs` 的輸出檔名與頁尾
    （**頁尾日期必須等於封面戳記的日期**）。
-5. `app/traffic-app.tsx` 裡兩個手冊下載連結的檔名。
+5. `app/traffic-app.tsx` 裡手冊下載連結的檔名。
+   手冊自 v2.1.64 起**只出 PDF**（Word 版與 `build-docx.mjs` 已移除），
+   畫面上不可以再出現 `.docx` 連結。
 6. `CHANGELOG.md` 最上面那一則的版號。
-7. 重新產生手冊，並**刪除** `public/` 與根目錄下舊版號的 `.pdf`／`.docx`。
+7. 重新產生手冊（`node scripts/manual/build-pdf.mjs`），把 `public/` 產出的那一份
+   **複製**到倉庫根目錄（不要各自重跑，PDF 內嵌產生時間，重跑會得到不同位元組），
+   並**刪除** `public/` 與根目錄下舊版號的 `.pdf`。
 
 備份格式若有變動，還必須提供能讀舊備份的還原處理，並在
 `tests/backup-completeness.test.mjs` 補上對應檢查。

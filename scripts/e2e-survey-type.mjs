@@ -19,6 +19,8 @@ import * as XLSX from "xlsx";
 import { serve } from "./serve.mjs";
 import { launchOptions } from "./chrome-path.mjs";
 
+
+
 const problems = [];
 const ok = (label, condition, detail = "") => {
   console.log(`${condition ? "✅" : "❌"} ${label}${detail ? ` — ${detail}` : ""}`);
@@ -118,7 +120,7 @@ const go = async (label) => {
 };
 
 /* 建立計畫 */
-await go("多計畫管理");
+await go("建立與管理計畫");
 await page.locator('.project-form input').nth(0).fill("115-A01");
 await page.locator('.project-form input').nth(1).fill("測試計畫");
 await page.locator('button:has-text("建立計畫")').click();
@@ -189,7 +191,19 @@ async function surveyTypesOnScreen() {
 async function surveyTypeByIntersection() {
   await go("流量核對工作台");
   await page.waitForTimeout(900);
-  const picker = page.locator(".audit-picker select").first();
+  /*
+   * ⚠️ 一定要**指名 label 是「路口」**的那一個 select。
+   * 這一頁在 v2.1.64 補上「資料季度」就地切換之後，`.audit-picker` 裡的
+   * 第一個 select 變成季度——用 .first() 的話這個函式會改成逐「季度」跑一輪，
+   * 回傳的清單只有一筆而且標的是季度名，兩項斷言於是同時對著同一個值
+   * 一個要求「＝平日」、一個要求「＝待設定」，必然有一邊紅。
+   * 紅的位置離真正的原因很遠，所以這裡把選取條件寫死成 label。
+   */
+  const picker = page
+    .locator(".audit-picker label")
+    .filter({ hasText: /^路口/ })
+    .locator("select")
+    .first();
   const count = await picker.locator("option").count();
   const result = [];
   for (let index = 0; index < count; index++) {
@@ -328,6 +342,82 @@ ok(
   pointCount >= 2,
   `${pointCount} 個資料點`,
 );
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  本季各路口的資料別：逐筆指定，而且只動被改的那一筆
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-11：「如果這一季 A 和 B 路段是在平日做的，
+ * C 和 D 路段是假日做的，這邊無法依照路段分別進行平日／假日的設定。」
+ *
+ * ⚠️ 這一段最重要的不是「改得動」，是「**只改到那一筆**」。
+ *   一次改到全部是最可怕的失敗：畫面上看起來成功了，
+ *   而其他路口的資料別被悄悄改掉，要到歷季趨勢少了一半才會發現。
+ */
+console.log("\n══ 本季各路口的資料別（逐筆指定）══");
+await go("流量核對工作台");
+await page.waitForTimeout(600);
+const typeRows = page.locator(".survey-type-row");
+const rowCount = await typeRows.count();
+ok("前置：本季有兩個以上路口，才看得到逐筆指定的表", rowCount >= 2, `${rowCount} 列`);
+if (rowCount >= 2) {
+  const before = await Promise.all(
+    Array.from({ length: rowCount }, (_, i) =>
+      typeRows.nth(i).locator("select").inputValue(),
+    ),
+  );
+  /* 挑一個「和目前不同」的值，避免選到同一個等於沒改 */
+  const target = before[1] === "假日" ? "平日" : "假日";
+  await typeRows.nth(1).locator("select").selectOption(target);
+  await page.waitForTimeout(900);
+  const after = await Promise.all(
+    Array.from({ length: rowCount }, (_, i) =>
+      typeRows.nth(i).locator("select").inputValue(),
+    ),
+  );
+  ok(
+    "改第 2 列真的改得動",
+    after[1] === target,
+    `${before[1]} → ${after[1]}（目標 ${target}）`,
+  );
+  const others = after.filter((_, i) => i !== 1);
+  const othersBefore = before.filter((_, i) => i !== 1);
+  ok(
+    "⚠️ 其他路口一個都沒有被連帶改掉",
+    others.join("|") === othersBefore.join("|"),
+    `改前 ${othersBefore.join("、")} ／ 改後 ${others.join("、")}`,
+  );
+}
+
+/*
+ * 側欄子項目：點了要跳到那一塊，而且那一塊要被「點名」。
+ * 使用者 2026-09-11：「左側欄位可以新增 OD 流量表、本季鎖定狀況、
+ * 成果審核狀態，讓使用者也可以直接從左側欄位快速跳轉。」
+ */
+console.log("\n══ 側欄子項目（這一頁有哪幾塊，點了跳過去）══");
+const navSections = await page.evaluate(() =>
+  [...document.querySelectorAll(".nav-section")].map((b) => b.textContent.trim()),
+);
+ok(
+  "流量核對工作台底下列出這一頁有哪幾塊",
+  ["OD 流量表", "本季鎖定狀況", "成果審核狀態"].every((label) =>
+    navSections.includes(label),
+  ),
+  navSections.join("、") || "（一個都沒有）",
+);
+if (navSections.includes("成果審核狀態")) {
+  await page.locator('.nav-section[data-goto-item="成果審核狀態"]').first().click();
+  await page.waitForTimeout(800);
+  const focused = await page.evaluate(() =>
+    [...document.querySelectorAll(".is-focused")].map((e) => e.id),
+  );
+  ok(
+    "點下去那一塊被點名，而且同一時間只有一塊",
+    focused.length === 1 && focused[0] === "audit-review",
+    focused.join("、") || "（沒有任何一塊被點名）",
+  );
+}
 
 console.log("\n══ 主控台錯誤 ══");
 ok("沒有 JS 例外", errors.length === 0, errors.slice(0, 3).join(" / "));

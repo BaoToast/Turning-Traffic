@@ -414,7 +414,12 @@ test("勾選了但沒有資料的段落會明講，而不是靜靜消失", () =>
     context({ compare: [], topFlow: null }),
     ["compare", "odMatrix"],
   );
-  assert.match(text, /跨計畫／多路口比較：目前範圍沒有可敘述的資料。/);
+  /*
+   * 段落標題取自 REPORT_ITEMS 的 label（DRAFT_SECTION_LABELS）。
+   * 「跨計畫／多路口比較」於 2026-09-09 正名為「各路口支線尖峰流量」——
+   * 那張表的資料來源只有目前這一個計畫，從來沒跨過計畫。
+   */
+  assert.match(text, /各路口支線尖峰流量：目前範圍沒有可敘述的資料。/);
   assert.match(text, /OD 轉向矩陣：目前範圍沒有可敘述的資料。/);
 });
 
@@ -510,7 +515,12 @@ test("同一個路口的平日與假日不會被當成「兩個路口」拿來�
     }),
     ["compare"],
   );
-  assert.match(text, /跨計畫／多路口比較：目前範圍沒有可敘述的資料。/);
+  /*
+   * 段落標題取自 REPORT_ITEMS 的 label（DRAFT_SECTION_LABELS）。
+   * 「跨計畫／多路口比較」於 2026-09-09 正名為「各路口支線尖峰流量」——
+   * 那張表的資料來源只有目前這一個計畫，從來沒跨過計畫。
+   */
+  assert.match(text, /各路口支線尖峰流量：目前範圍沒有可敘述的資料。/);
 });
 
 test("舊版匯入（沒有流向）的紀錄不會被宣稱「資料守恆」", () => {
@@ -565,4 +575,41 @@ test("分項結果超過上限時會說明還有幾筆", () => {
 test("計畫沒有名稱時不會產生空白開頭", () => {
   const text = buildReportDraft(context({ projectName: "" }), ["scope"]);
   assert.match(text, /（未命名計畫） 115Q1～115Q4 路口轉向交通量分析報告草稿/);
+});
+
+test("⚠️ 稽核表 I：選定的路口不在報表季度範圍內時，草稿要明講換了對象", () => {
+  /*
+   * 報表有**自己的**季度區間，而「目前選定的路口」跟著主工具列走。
+   * 兩者對不上時（例如報表範圍是 115Q2～115Q4、選定的路口只在 115Q1 調查過），
+   * 畫面端會一路退回 `latestBySeries.values().next().value`——
+   * 也就是匯入順序上的第一筆，別的路口、別的季、別的日別——
+   * 然後照樣把那一筆的支線流量與車種組成寫成正文。
+   *
+   * 退路本身要留著（不留的話整段草稿寫不出來），但**不可以安靜地用**。
+   *
+   * ⚠️ 一定要配一條「正常情況不可以叫」的對照（下一條）。
+   *   只驗「落到退路時會講」的話，一個「永遠講」的實作也會全綠，
+   *   而那等於每一份草稿都掛著一句沒有人問的警告。
+   */
+  const text = buildReportDraft(
+    {
+      ...context(),
+      focusIsSelected: false,
+      focusRequestedLabel: "中山路口（115Q1、平日）",
+    },
+    ALL,
+  );
+  assert.match(text, /不在這份報表的季度範圍內/, "要說出選定的那個不在範圍內");
+  assert.match(text, /中山路口（115Q1、平日）/, "要說出使用者選的是哪一個");
+  assert.match(text, /中正路口（115Q4、平日）/, "也要說出實際用了哪一筆");
+  assert.match(text, /季度區間/, "要告訴使用者怎麼修正");
+});
+
+test("⚠️ 稽核表 I 對照組：正常情況下不可以出現那句警告", () => {
+  const text = buildReportDraft({ ...context(), focusIsSelected: true }, ALL);
+  assert.ok(
+    !/不在這份報表的季度範圍內/.test(text),
+    "沒有落到退路卻警告＝噪音",
+  );
+  assert.match(text, /支線與車種的敘述以 中正路口（115Q4、平日） 為代表/);
 });

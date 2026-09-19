@@ -130,7 +130,7 @@ async function fireDrag(selector, type, payload) {
 }
 
 /* ── 準備一個計畫，並進到匯入頁 ── */
-await go("多計畫管理");
+await go("建立與管理計畫");
 await page.locator(".project-form input").nth(0).fill("115-DROP");
 await page.locator(".project-form input").nth(1).fill("拖曳測試計畫");
 await page.locator('button:has-text("建立計畫")').click();
@@ -248,7 +248,7 @@ ok(
 ok("沒有因此離開系統頁面", page.url() === urlBefore);
 
 /* ── 五、備份還原也要吃拖曳 ── */
-await go("備份、還原與版本");
+await go("備份與還原");
 await page.waitForTimeout(500);
 const restoreZoneCount = await page.evaluate(
   () => document.querySelectorAll(".upload-label").length,
@@ -305,7 +305,7 @@ ok(
  */
 /* 先切到有一般輸入框的分頁；備份頁上唯一的 input 是放置區裡的隱藏檔案欄，
    拿它來驗會變成恆真的假檢查（第一版就踩到了）。 */
-await go("多計畫管理");
+await go("建立與管理計畫");
 const textDrag = await page.evaluate(() => {
   const probe = (selector) => {
     const el = document.querySelector(selector);

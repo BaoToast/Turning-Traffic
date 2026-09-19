@@ -1,4 +1,4 @@
-import { canonicalIntersectionKey } from "./traffic.ts";
+import { canonicalIntersectionKey, round1 } from "./traffic.ts";
 /*
  * 這幾支都只是「照統計範圍取值」，尖峰與全日時段一體適用，
  * 所以參數型別是 ScopeKey 而不是 PeakKey——否則畫面切到全日時段時，
@@ -264,12 +264,22 @@ export function trendSeriesRecords(
   }).rows;
 }
 
-export type VehicleScheme = {
-  id: string;
-  name: string;
-  mappings: Record<string, string>;
-  createdAt: string;
-};
+/*
+ * ⚠️ VehicleScheme（車種歸類方案）已於 2026-09-15 整組移除。
+ *
+ * 使用者原話：「這個車種歸類方案保存功能可以拿掉，不需要記憶。因為套用後，
+ *   使用者還是得逐一確認當量參數是它要的，所花費的時間其實就等於它親自
+ *   輸入當量係數，這功能似乎就不太需要了」。
+ *
+ * 另外三個理由（一起記著，免得有人又加回來）：
+ *   ・按「套用」當下畫面毫無變化，它只影響**下一次匯入**——延遲生效的按鈕
+ *     最容易被當成壞掉。
+ *   ・它是跨計畫的全域範本，連「清除本機資料」都得為它多寫一段說明。
+ *   ・全日交通量沒有這個功能，拿掉之後三支一致。
+ *
+ * ⚠️ 每個計畫**自己的**車種歸類（mappingsByProject）完全不受影響——
+ *   那是資料的一部分，不是範本。
+ */
 
 export type RecordRevision = {
   id: string;
@@ -297,7 +307,94 @@ export type RecordRevision = {
 };
 
 /** 還原點最多保留幾「次操作」。超過就整批丟掉最舊的。 */
-export const REVISION_BATCH_LIMIT = 30;
+/**
+ * 計畫名稱的字數上限。
+ *
+ * 使用者實測把名稱設得很長時，左側／清單的計畫卡片會撐破邊界
+ * （全日交通量實測溢出 265px、路口轉向 60 字時溢出 431px）。
+ * 修法是兩件事一起做，缺一不可：
+ *   ① 這個上限，擋掉「整段文字貼進來」的極端情況；
+ *   ② CSS 的平衡換行（text-wrap: balance），讓上限以內的長名稱
+ *      平均分行而不是塞滿一行再溢出。
+ *
+ * 40 字是使用者定的：他現有最長的計畫名稱是 15 字，40 字很寬裕，
+ * 正常命名幾乎不會撞到。三支程式用同一個數字。
+ *
+ * ⚠️ 這個上限只擋**新輸入**。既有超過 40 字的名稱照常顯示、照常可以編輯
+ *    （只是不能再變長），不可以自動截斷別人已經存好的資料。
+ */
+export const PROJECT_NAME_LIMIT = 40;
+/*
+ * 計畫**編號**也要有上限。
+ *
+ * 使用者 2026-09-10 實測（附截圖）：
+ *   「計畫名稱沒問題了，但忘記限制計畫編號（三個程式都是），
+ *     當編號過長時會遮蓋到計畫名稱」
+ *
+ * ⚠️ 20 是「看得完又夠用」的長度：真實計畫代碼像 115-A01、11017-RKC02，
+ *    最長的一種是「年度＋標案號＋標段」約 16 字。
+ */
+export const PROJECT_CODE_LIMIT = 20;
+
+/**
+ * 截字，但**不會把已經超長的既有值一刀砍掉**。
+ *
+ * ⚠️ 直接 `slice(0, limit)` 會有一個很難發現的副作用：
+ *    舊資料裡本來就有 30 字的編號時，使用者只要點一下那個欄位、
+ *    什麼都沒改，onChange 也可能被觸發（輸入法、瀏覽器自動填），
+ *    於是**資料被無聲截短**。所以上限取「limit 與原值長度的較大者」：
+ *    既有的超長值可以原樣留著、可以刪短，但不能再變得更長。
+ */
+export function capText(next: string, previous: string, limit: number): string {
+  const allowed = Math.max(limit, previous.length);
+  return next.length <= allowed ? next : next.slice(0, allowed);
+}
+
+/**
+ * 「手動新增支線」的條數上限。
+ *
+ * 使用者 2026-09-10 指定：「新增支線處，可以有小字提醒（最多 7 個路口），
+ * 手冊則記錄新增支線上線是 7 個路口，超過會無法再新增」。
+ *
+ * ⚠️ 這是**產品決定，不是技術限制**，註解要寫清楚以免日後有人誤會。
+ * 實測（harness/arm-count-babe 那支演算法探針）：轉向解算
+ * （movementTargetIndex → closestDestination）在 **4～12 支**都是一對一，
+ * 每一支的左／直／右各自解到三個不同的目的支線，沒有重複。
+ * 唯一的例外是 3 支（三岔），那是幾何上必然的——三岔只有兩個去向。
+ *
+ * 也就是說 8 支以上算得出來，只是：
+ *   ・轉向圖的等角配置與數據卡版面是照 7 支以內設計的，更多支會很擠；
+ *   ・實務上 7 叉已經是極少見的路口。
+ * 所以上限訂在 7 是為了版面與實務，不是因為算不出來。
+ *
+ * ⚠️ **匯入不受這個上限限制**——匯入是照調查表實際有幾支就讀幾支，
+ * 不可以拿這個常數去擋匯入。擋了會讓真實資料進不來，那是嚴重得多的問題。
+ */
+export const MANUAL_ARM_LIMIT = 7;
+
+/**
+ * 還原點保留幾「次操作」。
+ *
+ * ⚠️ 2026-09-15 由 30 降到 **8**。
+ *
+ * 理由：畫面上的「版本差異與還原」那一塊已經整組移除（使用者裁示：
+ *   「使用者不會去使用，也不會去查看……如果你維護會用到，
+ *     那一樣放在你看的到的程式碼裡就好了」），所以這份紀錄現在是
+ *   **純維護用**，不是使用者的救援路徑。使用者真正會做的是
+ *   「刪掉那一季重新匯入」與「還原備份檔」。
+ *
+ * 使用者 2026-09-15：「要保留幾筆都交由你自己決定，主要你自己覺得夠用就好，
+ *   **不要明明只需要前 10 筆，你卻讓程式硬是留 100 筆來增加儲存空間的負荷**」。
+ *
+ * 選 8 的依據：維護時要回答的問題是「剛才那幾步做了什麼」，
+ * 8 次操作足以涵蓋一輪匯入＋幾次人工修正；再往前的價值很低，
+ * 而單一個七叉路口的快照實測就有 38.7 KB，一次批次匯入可以涵蓋幾十個路口，
+ * 留 30 次等於讓備份檔多帶好幾十 MB 沒有人會看的東西。
+ *
+ * ⚠️ 下面的 REVISION_BYTE_BUDGET 仍然要留著：筆數上限擋不住
+ *   「一次操作涵蓋幾十個路口」這種胖批次。
+ */
+export const REVISION_BATCH_LIMIT = 8;
 
 /**
  * 還原點總量上限（位元組）。
@@ -366,7 +463,7 @@ export function routePeakTotal(record: TrafficRecord, peak: ScopeKey) {
 export function conservationCheck(record: TrafficRecord, peak: ScopeKey) {
   const movement = recordPeakTotal(record, peak);
   const routes = routePeakTotal(record, peak);
-  const difference = Math.round((movement - routes) * 10) / 10;
+  const difference = round1(movement - routes);
   return { movement, routes, difference, valid: Math.abs(difference) < 0.11 };
 }
 
@@ -410,9 +507,9 @@ export function branchBalance(record: TrafficRecord, peak: ScopeKey) {
     return {
       id: approach.id,
       name: approach.name,
-      inbound: Math.round(inbound * 10) / 10,
-      outbound: Math.round(source * 10) / 10,
-      difference: Math.round((inbound - source) * 10) / 10,
+      inbound: round1(inbound),
+      outbound: round1(source),
+      difference: round1(inbound - source),
     };
   });
 }
@@ -473,66 +570,88 @@ export function quarterQualitySummary(records: TrafficRecord[]) {
   });
 }
 
-export function diagramCollisionWarnings(
-  record: TrafficRecord,
-  /** 要檢查哪一個顯示模式的版面；預設檢查駛入＋駛出。 */
-  mode: "both" | "inbound" | "outbound" = "both",
-  /** 要檢查哪一種圖面樣式的畫布尺寸；預設用正式版（畫布最大）。 */
-  style: "formal" | "standard" | "simple" = "formal",
-) {
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  匯出前排版預警：量真正畫出來的東西，不要另外估一份
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * ⚠️ 這一支在 v2.1.64 以前是**自己估位置**的：假設每個支線的數據框都排在
+ *    半徑 390 的圓周上（`cos(角度) × 390 ＋ 手動位移`）。使用者 2026-09-10
+ *    回報「我確認過卡片彼此沒重疊，為什麼還是跳警示」，原因就在這裡：
+ *
+ *    ① 支線**超過 4 個**時，繪圖端根本不是排在圓周上。它會改用外圍固定
+ *       格位（上排 4、右側 3、下排 4、左側 3），再用最近距離配位。
+ *       7 叉路口的實際版面與圓周估算**是兩個座標系**，必然對不上。
+ *    ② 「駛入＋駛出」模式每個支線畫的是**兩張卡**（沿切線左右分開），
+ *       舊估算一個支線只算一個點，連數量都不對。
+ *    ③ 位置還會被畫布邊界夾住（clamp），估算完全沒有這一段。
+ *
+ *    誤報只是吵人；同一個錯誤反過來會**漏報真正重疊的**，那才是危險的一邊。
+ *
+ * 現在的做法：繪圖端（diagramLayout）在**推出每一個 <g transform> 的同一行**
+ * 把該張卡的矩形記下來，這一支只吃那份矩形做真正的相交判斷。
+ * 檢查與繪圖用的是同一組數字，不可能再各說各話。
+ *
+ * ⚠️ 不要為了「省一次 SVG 組字串」而在這裡重新推算位置——那正是原本的錯。
+ *    量不到就不要報，寧可少報也不要報一個假的讓人去追。
+ */
+export type LayoutBox = {
+  /** card＝可拖曳的數據框；legend／center＝圖上保留給固定元件的區域。 */
+  kind: "card" | "legend" | "center";
+  /** 報給使用者看的名字（數據框用「支線名 · 駛入／駛出」）。 */
+  name: string;
+  /** 左上角座標與尺寸，與 SVG 的 translate 完全一致。 */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+/** 兩個矩形是否真的相交（相接不算，容忍 1px 的浮點誤差）。 */
+function rectsOverlap(a: LayoutBox, b: LayoutBox) {
+  const EPS = 1;
+  return (
+    a.x + a.w - EPS > b.x &&
+    b.x + b.w - EPS > a.x &&
+    a.y + a.h - EPS > b.y &&
+    b.y + b.h - EPS > a.y
+  );
+}
+
+/** 兩個矩形重疊面積占較小者的比例，用來過濾掉只擦到一點點的情形。 */
+function overlapRatio(a: LayoutBox, b: LayoutBox) {
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  if (w <= 0 || h <= 0) return 0;
+  const smaller = Math.min(a.w * a.h, b.w * b.h);
+  return smaller > 0 ? (w * h) / smaller : 0;
+}
+
+export function diagramCollisionWarnings(boxes: LayoutBox[] | null | undefined) {
   const warnings: string[] = [];
-  const points = record.approaches.map(function (approach) {
-    const rad = (approach.angle * Math.PI) / 180;
-    // 版面預警做粗略檢查：看目前要匯出的那個顯示模式實際套用的位移，
-    // 該模式沒調整過時才退回舊欄位，否則在只看駛入／駛出調整過的版面
-    // 會完全檢查不到重疊。
-    const layout = approach.cardLayouts?.[mode];
-    const offset =
-      layout?.cards?.inbound ||
-      layout?.cards?.outbound ||
-      approach.cardOffsets?.inbound ||
-      approach.cardOffsets?.outbound ||
-      approach.cardOffset || { x: 0, y: 0 };
-    return {
-      name: approach.name,
-      x: Math.cos(rad) * 390 + offset.x,
-      y: Math.sin(rad) * 390 + offset.y,
-    };
+  if (!boxes || !boxes.length) return warnings;
+  const cards = boxes.filter(function (box) {
+    return box.kind === "card";
   });
-  for (let left = 0; left < points.length; left++) {
-    for (let right = left + 1; right < points.length; right++) {
-      if (Math.abs(points[left].x - points[right].x) < 230 && Math.abs(points[left].y - points[right].y) < 125)
-        warnings.push(points[left].name + " 與 " + points[right].name + " 的數據框可能重疊");
-    }
-  }
-  // 舊版只比對數據框彼此。但圖上還有兩塊固定的東西：右下角的流向圖例，
-  // 以及正中央的路口名稱與尖峰時段。支線一多、或使用者把數據框往中間、
-  // 往右下拉之後，這兩塊照樣會被蓋住，匯出前檢查卻顯示「版面正常」。
-  const expanded = style === "formal" || (style === "standard" && record.approaches.length > 4);
-  const width = expanded ? 1200 : 1000;
-  const height = expanded ? 900 : 820;
-  const cx = width / 2;
-  const cy = expanded ? 470 : 430;
-  const HALF_W = 115;
-  const HALF_H = 62;
-  const overlaps = (
-    card: { x: number; y: number },
-    box: { minX: number; maxX: number; minY: number; maxY: number },
-  ) =>
-    card.x + HALF_W > box.minX &&
-    card.x - HALF_W < box.maxX &&
-    card.y + HALF_H > box.minY &&
-    card.y - HALF_H < box.maxY;
-  // 圖例：translate(width-280, height-26)，三組項目往右展開約 250、字高約 26。
-  const legendBox = { minX: width - 290, maxX: width - 20, minY: height - 44, maxY: height - 8 };
-  // 中央標籤：路口名稱在 cy-15、尖峰在 cy+15，估一個保守的方框。
-  const centerBox = { minX: cx - 150, maxX: cx + 150, minY: cy - 40, maxY: cy + 32 };
-  points.forEach(function (point) {
-    const card = { x: cx + point.x, y: cy + point.y };
-    if (overlaps(card, legendBox))
-      warnings.push(point.name + " 的數據框可能蓋住右下角的流向圖例");
-    if (overlaps(card, centerBox))
-      warnings.push(point.name + " 的數據框可能蓋住中央的路口名稱與尖峰時段");
+  const reserved = boxes.filter(function (box) {
+    return box.kind !== "card";
+  });
+  for (let left = 0; left < cards.length; left += 1)
+    for (let right = left + 1; right < cards.length; right += 1)
+      if (rectsOverlap(cards[left], cards[right]))
+        warnings.push(
+          cards[left].name + " 與 " + cards[right].name + " 的數據框重疊了",
+        );
+  /*
+   * 固定元件（右下角流向圖例、中央路口名稱與時段）用「重疊面積比例」而不是
+   * 單純相交：卡片邊緣擦到圖例一兩個 pixel 在圖上看不出來，報出來只會讓人
+   * 去追一個不存在的問題。真的蓋住時比例一定遠大於 4%。
+   */
+  cards.forEach(function (card) {
+    reserved.forEach(function (zone) {
+      if (overlapRatio(card, zone) > 0.04)
+        warnings.push(card.name + " 的數據框蓋住" + zone.name);
+    });
   });
   return warnings;
 }
@@ -596,10 +715,19 @@ export const REPORT_ITEMS: ReportItem[] = [
     hint: "同一路口各季度的尖峰總流量；可另外附上原生 Excel 折線圖。",
   },
   {
+    /*
+     * ⚠️ key 維持 "compare" **不可以改**——使用者存好的報表範本存的是這個
+     * 鍵，改了舊範本就對不上。改的只有顯示名稱與工作表名稱。
+     *
+     * 舊名叫「跨計畫多路口比較」、說明寫「各計畫…」，但它的資料來源是
+     * reportExportScope.records → projectRecords，**只有目前這一個計畫**，
+     * 從來沒有跨過計畫。跨計畫比較於 2026-09-09 依使用者授權整組移除之後，
+     * 這個名字會讓人以為移除沒做乾淨，所以一併正名。
+     */
     key: "compare",
-    sheet: "跨計畫多路口比較",
-    label: "跨計畫／多路口比較",
-    hint: "各計畫、各路口、各支線的尖峰轉向總量與駛入駛出量。",
+    sheet: "各路口支線尖峰流量",
+    label: "各路口支線尖峰流量",
+    hint: "每個路口、每條支線的上午／下午尖峰：轉向總量、駛出路口量、駛入路口量（PCU/hr）。",
   },
   {
     key: "odMatrix",
@@ -654,4 +782,103 @@ export function normalizeReportItems(value: unknown): ReportItemKey[] {
   return value
     .map(String)
     .filter(function (key) { return valid.has(key); }) as ReportItemKey[];
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ *  尖峰小時的「內部」與「附近」——兩張新圖的資料來源
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 這兩支回答的是既有圖表答不出來的兩個問題，而且**問的不是同一件事**：
+ *
+ *  ① peakQuarterHours()：**選定的那一小時裡面**，車流是平均分布還是
+ *     集中在某一段 15 分鐘？→ 四格 15 分鐘柱狀圖
+ *
+ *  ② peakWindowSeries()：**一整天裡**，每一個連續 60 分鐘各是多少？
+ *     尖峰是一根尖銳的峰，還是一片平坦的高原？→ 連續 60 分鐘折線圖
+ *
+ * ⚠️ 兩支都**只讀 sourceTrace.intervals**，不自己算任何交通量——
+ *    那些值是匯入當時就算好、已被既有測試釘住的。新圖不得產生新的算法。
+ */
+
+/** "07:15" → 435；讀不出來回 null（不可以回 0，0 是真的午夜十二點）。 */
+export function minutesOfClock(text: string | undefined | null): number | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(text ?? "").trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 24 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+/**
+ * 選定尖峰小時內的每一格（通常是四格 15 分鐘）。
+ *
+ * 回 [] 的情況有三種，各自有意義，呼叫端要分開講給使用者聽：
+ *   ・沒有逐格資料（舊版匯入的檔沒有 sourceTrace）
+ *   ・這個統計範圍沒有尖峰視窗（例如全日尖峰算不出來）
+ *   ・視窗內的格子不是 15 分鐘一格（例如整點一格的檔）
+ */
+export function peakQuarterHours(record: TrafficRecord, scope: ScopeKey) {
+  const intervals = record.sourceTrace?.intervals || [];
+  if (!intervals.length) return { cells: [], reason: "no-intervals" as const };
+  const window = record.peaks?.[scope as "AM" | "PM" | "DAY"];
+  const start = minutesOfClock(window?.start);
+  const end = minutesOfClock(window?.end);
+  if (start === null || end === null)
+    return { cells: [], reason: "no-window" as const };
+  const cells = intervals
+    .filter(function (item) {
+      return item.start >= start && item.end <= end;
+    })
+    .sort(function (a, b) {
+      return a.start - b.start;
+    });
+  if (!cells.length) return { cells: [], reason: "no-cells" as const };
+  /*
+   * 只有「每一格都是 15 分鐘」才算適用。
+   * 整點一格的檔會落在這裡回 not-quarter——那不是錯誤，是這張圖不適用，
+   * 畫面要顯示說明而不是畫一根柱子假裝有結果。
+   */
+  const quarter = cells.every(function (item) {
+    return item.end - item.start === 15;
+  });
+  if (!quarter) return { cells: [], reason: "not-quarter" as const };
+  return { cells, reason: "ok" as const };
+}
+
+/**
+ * 一整天裡**每一個**連續 60 分鐘視窗，**依時間排序**。
+ *
+ * ⚠️ 與 peakSensitivity() 的差別：那一支是「前 8 名、依大小排」，
+ *    這一支是「全部、依時間排」。畫成圖一定要用時間軸——
+ *    依名次排的折線圖只會畫出一條由高到低的斜線，看不出一天的形狀，
+ *    而且那又變成一張排行榜（使用者已明確表示排名沒有意義）。
+ */
+export function peakWindowSeries(record: TrafficRecord) {
+  const intervals = record.sourceTrace?.intervals || [];
+  if (!intervals.length) return [];
+  return intervals
+    .map(function (item) {
+      const selected = intervals.filter(function (candidate) {
+        return candidate.start >= item.start && candidate.start < item.start + 60;
+      });
+      /* 「連續」要逐格首尾相接，中間缺一格就不算——與 peakSensitivity 同一套判斷 */
+      let continuous = selected.length > 0 && selected[0].start === item.start;
+      for (let i = 1; continuous && i < selected.length; i += 1)
+        if (selected[i].start !== selected[i - 1].end) continuous = false;
+      if (continuous && selected[selected.length - 1].end !== item.start + 60)
+        continuous = false;
+      return {
+        start: item.start,
+        end: item.start + 60,
+        pcu:
+          Math.round(
+            selected.reduce(function (sum, c) { return sum + c.pcu; }, 0) * 10,
+          ) / 10,
+        vehicles: selected.reduce(function (sum, c) { return sum + c.vehicles; }, 0),
+        continuous,
+      };
+    })
+    .filter(function (item) { return item.continuous; })
+    .sort(function (a, b) { return a.start - b.start; });
 }

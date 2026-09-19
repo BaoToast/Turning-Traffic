@@ -20,9 +20,20 @@ import { serve } from "./serve.mjs";
 import { launchOptions } from "./chrome-path.mjs";
 
 const problems = [];
+/*
+ * detail 分兩種：有些是**佐證**（成功時也該印出來看），
+ * 有些是**失敗原因**（成功時印出來會讓人以為出事了）。後者包 failOnly()。
+ */
+const failOnly = (text) => ({ failOnly: text });
 const ok = (label, condition, detail = "") => {
-  console.log(`${condition ? "✅" : "❌"} ${label}${detail ? ` — ${detail}` : ""}`);
-  if (!condition) problems.push(label + (detail ? ` — ${detail}` : ""));
+  const text =
+    detail && typeof detail === "object"
+      ? condition
+        ? ""
+        : detail.failOnly
+      : detail;
+  console.log(`${condition ? "✅" : "❌"} ${label}${text ? ` — ${text}` : ""}`);
+  if (!condition) problems.push(label + (text ? ` — ${text}` : ""));
 };
 
 function makeWorkbook({ dateText, station, name, seed }) {
@@ -103,7 +114,7 @@ const go = async (label) => {
   await page.waitForTimeout(600);
 };
 
-await go("多計畫管理");
+await go("建立與管理計畫");
 await page.locator(".project-form input").nth(0).fill("115-P02");
 await page.locator(".project-form input").nth(1).fill("月份顯示測試計畫");
 await page.locator('button:has-text("建立計畫")').click();
@@ -174,6 +185,90 @@ ok("切到「調查月份」", /期別顯示：調查月份/.test(await toggleTe
 const monthText = await headerQuarterText();
 ok("季度下拉改成實際調查月份「115年2、3月」", /115年2、3月/.test(monthText), monthText);
 
+/*
+ * ── 使用者 2026-09-11 直接問的那一題 ───────────────────────────
+ *
+ * 「如果我這一季 115Q2 有 4 月和 5 月的調查，原本兩個同時在 115Q2 裡，
+ *   我調整成顯示月份後，資料會正常顯示出 4 月和 5 月的調查路段名稱嗎？」
+ *
+ * 這份測資就是那個情形（2 月兩站、3 月三站，全部掛 115Q1）。
+ *
+ * ⚠️ 上面那條「切換前後數字完全相同」雖然間接涵蓋了，但**它證明的是
+ *   『沒有變』，不是『本來就看得到』**——如果兩個月的路口從頭到尾都沒出現，
+ *   那一條照樣全綠。所以這裡直接點名兩個月份的路口名稱都要在畫面上。
+ *
+ * ⚠️ 同時釘住另一件事：切到月份**不會**把一季拆成兩個期別。
+ *   下拉裡只會有一個「115年2、3月」，不會冒出「115年2月」與「115年3月」兩項。
+ */
+/*
+ * ⚠️ 要在**列得出路口名稱的那一頁**量，不能在總覽儀表板量。
+ *   2026-09-11 依使用者授權，總覽只留兩張卡（本季調查 N 處、待確認品質項目），
+ *   路口名稱已經不在那一頁上了——在總覽量會得到 0 處，
+ *   看起來像「切換之後路口不見了」，其實是量錯地方。
+ */
+await go("各路口尖峰彙總");
+const listedIntersections = await page.evaluate(() => {
+  const text = document.body.innerText;
+  return {
+    feb: (text.match(/二月路口\d/g) || []).length,
+    mar: (text.match(/三月路口\d/g) || []).length,
+    splitOptions: [...document.querySelectorAll("option")]
+      .map((o) => o.textContent.trim())
+      .filter((t) => /^115年[23]月$/.test(t)),
+  };
+});
+ok(
+  "切到調查月份之後，2 月與 3 月做的路口名稱都還在畫面上",
+  listedIntersections.feb > 0 && listedIntersections.mar > 0,
+  `二月路口 ${listedIntersections.feb} 處、三月路口 ${listedIntersections.mar} 處`,
+);
+/*
+ * ── 逐筆的「調查日」欄（v2.1.65）────────────────────────────────
+ *
+ * 使用者 2026-09-11：「請新增讓我在切換顯示調查月份時，
+ *   也能看出哪一個路口／路段是在 X 月做的這項功能。」
+ *
+ * 期別標籤寫的是整季的合寫（「115年2、3月」），答不了「哪一筆是哪個月」。
+ * 這份測資正好是 2 月兩站、3 月三站，所以這一欄必須**同時**出現兩個月份。
+ *
+ * ⚠️ 只驗「有這一欄」不算數：整欄空白也會過。要驗它真的寫出兩個月份，
+ *   而且 2 月與 3 月的筆數與測資相符（2 站與 3 站）。
+ */
+const surveyDates = await page.evaluate(() => {
+  const table = document.querySelector(".table-scroll table");
+  if (!table) return { error: "找不到彙總表" };
+  const head = [...table.querySelectorAll("thead th")].map((h) =>
+    h.textContent.trim(),
+  );
+  const index = head.indexOf("調查日");
+  if (index < 0) return { error: "表頭沒有「調查日」這一欄", head };
+  return {
+    values: [...table.querySelectorAll("tbody tr")].map((tr) =>
+      (tr.children[index]?.textContent || "").trim(),
+    ),
+  };
+});
+ok(
+  "各路口尖峰彙總有「調查日」這一欄",
+  !surveyDates.error,
+  failOnly(surveyDates.error + (surveyDates.head ? `（表頭：${surveyDates.head.join("、")}）` : "")),
+);
+if (!surveyDates.error) {
+  const feb = surveyDates.values.filter((t) => /115年2月/.test(t)).length;
+  const mar = surveyDates.values.filter((t) => /115年3月/.test(t)).length;
+  ok(
+    "調查日逐筆寫出實際月份：2 月兩站、3 月三站",
+    feb === 2 && mar === 3,
+    `2 月 ${feb} 站、3 月 ${mar} 站｜實際值：${surveyDates.values.join(" ／ ")}`,
+  );
+}
+
+ok(
+  "一季不會被拆成兩個期別（下拉裡沒有單獨的「115年2月」「115年3月」）",
+  listedIntersections.splitOptions.length === 0,
+  failOnly("多出來的選項：" + listedIntersections.splitOptions.join("、")),
+);
+
 /* 最重要的一條：切換只換文字，數字一個都不可以動。 */
 const after = await dashboardText();
 const strip = (text) => text.replace(/115Q1/g, "§").replace(/115年2、3月/g, "§");
@@ -232,7 +327,22 @@ ok(
     return "完全相同";
   })(),
 );
-ok("量到的畫面確實有內容（不是拿空白畫面當通過）", rocText.length > 200, `${rocText.length} 字`);
+/*
+ * ⚠️ 門檻 2026-09-11 由 200 字降到 80 字，而且改成**同時**要求招牌字在裡面。
+ *
+ * 原因：總覽儀表板依使用者授權從五張卡減成兩張（拿掉最高流量路口、較上季、
+ * 待確認品質項目），這一頁的字數實測從 200 多字掉到 155 字，
+ * 於是這條「不是拿空白畫面當通過」的前置檢查變成紅的——**功能沒壞，是門檻過期**。
+ *
+ * 但不可以只把數字改小了事：這條存在的理由是「上面那兩條比對不可以拿兩張
+ * 空白畫面比出相同」。所以改成字數＋招牌字兩個條件，
+ * 空白畫面仍然過不了，而且以後再減卡片也不會誤紅。
+ */
+ok(
+  "量到的畫面確實有內容（不是拿空白畫面當通過）",
+  rocText.length > 80 && /本季調查路口/.test(rocText),
+  `${rocText.length} 字${/本季調查路口/.test(rocText) ? "、含招牌字" : "、**沒有**招牌字"}`,
+);
 
 /*
  * 全分頁掃一遍。

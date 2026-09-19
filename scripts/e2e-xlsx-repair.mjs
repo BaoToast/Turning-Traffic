@@ -44,7 +44,7 @@ await page.goto("http://localhost:8104/");
 await page.waitForTimeout(1500);
 
 await page
-  .locator('nav button:has-text("報表與批次輸出"), aside button:has-text("報表與批次輸出")')
+  .locator('nav button:has-text("批次輸出"), aside button:has-text("批次輸出")')
   .first()
   .click();
 await page.waitForTimeout(1000);

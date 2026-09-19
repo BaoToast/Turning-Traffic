@@ -40,6 +40,7 @@ export function makeRecord(over: Partial<ConclusionRecord> = {}): ConclusionReco
         totalVehicles: 6012,
         branches: [
           {
+            code: "A",
             name: "路口A",
             outboundByVehicleSafe: [
               { label: "機車", count: 3000 },
@@ -62,6 +63,7 @@ export function makeRecord(over: Partial<ConclusionRecord> = {}): ConclusionReco
             outflowFullDayVehicles: 11800,
           },
           {
+            code: "B",
             name: "路口B",
             outboundByVehicleSafe: null,
             inflowByVehicleSafe: null,
@@ -82,6 +84,7 @@ export function makeRecord(over: Partial<ConclusionRecord> = {}): ConclusionReco
         totalVehicles: 6500,
         branches: [
           {
+            code: "A",
             name: "路口A",
             outboundByVehicleSafe: null,
             inflowByVehicleSafe: null,
@@ -95,6 +98,7 @@ export function makeRecord(over: Partial<ConclusionRecord> = {}): ConclusionReco
             outflowFullDayVehicles: null,
           },
           {
+            code: "B",
             name: "路口B",
             outboundByVehicleSafe: null,
             inflowByVehicleSafe: null,
@@ -111,5 +115,11 @@ export function makeRecord(over: Partial<ConclusionRecord> = {}): ConclusionReco
       },
     },
     ...over,
-  } as ConclusionRecord;
+    /*
+     * ⚠️ 這裡原本是 `as ConclusionRecord`。那個轉型會**吃掉缺欄位的錯誤**：
+     *   2026-09-11 幫 ConclusionBranch 加上 code 之後，tsc 只在別處紅了一行，
+     *   這份樣本少了 code 卻一聲都不吭——樣本悄悄和真實資料長得不一樣，
+     *   之後所有用它的測試都是在測一個不存在的形狀。改成明確的回傳型別。
+     */
+  };
 }

@@ -1,10 +1,63 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;600;700&display=swap");
+/*
+ * ⚠️ 這裡原本有一行 @import，向 Google 抓 IBM Plex Sans 與 Noto Sans TC。
+ *   2026-09-13 依使用者決定拿掉，三支程式一致（另外兩支本來就沒有用網路字型）。
+ *
+ *   拿掉的理由不是省流量，是**離線時會安靜地變樣**：沒有網路、或公司網路
+ *   擋掉 fonts.googleapis.com 時，字型會退回下面的備援堆疊，而畫面上
+ *   沒有任何訊息——「我驗過的畫面」與「使用者看到的畫面」就不是同一個。
+ *   單檔試用版更是一定離線。
+ *
+ *   實測過影響：圖卡文字爆框 0 處、側欄文字被裁 0 項，版面寬高與所有數字
+ *   完全不變；唯一的差別是字形，以及右側小卡的「車種組成」不再被擠成兩行。
+ */
 
 :root {
+  /* 側欄收合鈕那一欄的寬度——格線與按鈕共用同一個值，不可以各寫各的。 */
+  --nav-collapse-col: 28px;
+  /*
+   * ⚠️ 上方功能列的高度要當成變數，因為**捲動定位要扣掉它**。
+   *   使用者 2026-09-11：「點了流量核對工作台下面4個分頁，全部跳轉畫面
+   *   都是把標題遮住，看不出我已經跳轉到什麼畫面，只有成果審核狀態正確跳轉」。
+   *   .topbar 是 position:sticky 浮在最上面，而 scrollIntoView({block:"start"})
+   *   會把目標的上緣對到**視窗**上緣——正好被這 72px 蓋掉。
+   *   （「成果審核狀態」看起來正常，只是因為它是最後一塊，捲到底捲不動而已，
+   *     不是那一個有特別處理。）
+   *   寫成變數是為了「改高度時不會忘了改另一處」——兩個數字分開寫遲早會不同步。
+   */
+  --topbar-h: 72px;
+  /*
+   * ⚠️ 主工具列的**實際高度**，由 app/main-toolbar.tsx 的 ResizeObserver
+   *   在執行時寫進來（收合 44px 左右、展開會高很多、窄視窗換行又更高）。
+   *   這裡的 0px 只是「還沒量到」的起始值——寫死任何非 0 的數字都是錯的，
+   *   因為收合／展開／換行都會讓它變。
+   */
+  --main-toolbar-h: 0px;
+  /*
+   * 吸頂元素（歷季趨勢圖、轉向預覽圖、品質總覽右欄）要讓開的總高度＝
+   * 上方功能列 ＋ 主工具列 ＋ 一點留白。
+   *
+   * ⚠️ 不可以讓各處各寫各的數字：主工具列是 2026-09-15 才加的，
+   *   原本那些 top: 12px / 88px 都是**主工具列還不存在時**算的，
+   *   加進來之後就全部被切掉上緣了。
+   */
+  --sticky-top: calc(var(--topbar-h) + var(--main-toolbar-h) + 12px);
   --navy: #102d38;
   --navy-2: #173d49;
+  /* 側欄專用：底色是這一支程式的辨識色，文字亮度三支共用同一組。 */
+  --side: #3a2350;
+  --side-ink: #eaf4fa;
+  --side-ink-strong: #ffffff;
   --ink: #17333d;
-  --muted: #6b7b80;
+  /*
+   * ⚠️ 白底上要 ≥ 4.5:1（WCAG AA）。舊值 #6b7b80 只有 **4.40:1**，
+   *   而全站有十幾處 `color: var(--muted)` 走它——
+   *   text-contrast 以前只認寫死的顏色，所以整條路從來沒被量過
+   *  （2026-09-15 把變數也納入掃描之後才看見）。
+   *   #647478 是 4.87:1，色相與明度幾乎一樣，但讀得清楚。
+   *   另外兩支本來就過關（全日交通量 5.82:1、交通服務水準 5.41:1），
+   *   改完三支一致。
+   */
+  --muted: #647478;
   --line: #dbe3e4;
   --paper: #f4f2eb;
   --panel: #fffefa;
@@ -38,16 +91,42 @@ button {
 .app-shell {
   min-height: 100vh;
 }
+/*
+ * ── 側欄 ─────────────────────────────────────────────────────
+ * 使用者 2026-09-10 定案，三支程式共用同一套尺寸、各自一個底色：
+ *   ・寬 248px、項目 16px、內距 12px 15px（比照交通服務水準的舒適度）
+ *   ・底色各自不同，讓人一眼看出開的是哪一支：
+ *       全日交通量 #0f3d31（綠，色相 164°）
+ *       路口轉向　 #3a2350（紫，色相 271°）  ← 這一支
+ *       交通服務水準 #17354d（藍，色相 210°）
+ *   ・文字用接近全白的 --side-ink，選取用純白。使用者的原話是
+ *     「文字亮白會比淡白色還清楚」；舊值 #aec0c6 在深底上只有 6.9:1，
+ *     現在的 #eaf4fa 是 12:1 以上。對比由 tests 把關，不要憑感覺改。
+ */
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
   width: 248px;
-  background: var(--navy);
+  background: var(--side);
   color: #fff;
   padding: 24px 17px 18px;
   display: flex;
   flex-direction: column;
-  z-index: 20;
+  /*
+   * ⚠️ 要**比主工具列（z-30）高**。
+   *
+   *   窄視窗（≤760px）時側欄是滑出來蓋在內容上的浮層，而主工具列在
+   *   .main 裡、z-index 30。側欄若比它低，滑出來之後**整條被工具列蓋住**：
+   *   看得到側欄的左半邊，右半邊的按鈕卻點不到——實測點「總覽儀表板」
+   *   時瀏覽器回報是 `<select data-testid="mt-quarter-to">` 攔截了點擊。
+   *   使用者看到的是「選單打開了，但按鈕沒反應」。
+   *
+   *   寬視窗沒事，因為那時 .main 有 margin-left:248px，兩者根本不重疊；
+   *   所以這個錯只在窄視窗出現，而且只有真的去點才發現得了。
+   *
+   * ⚠️ 但要**比視窗（modal，z-90）低**，否則開視窗時側欄會壓在上面。
+   */
+  z-index: 35;
 }
 .brand {
   display: flex;
@@ -77,8 +156,8 @@ button {
   letter-spacing: 0.01em;
 }
 .brand small {
-  font-size: 11px;
-  color: #9eb4bc;
+  font-size: 12px;
+  color: #cfe0ea;
   margin-top: 3px;
 }
 .sidebar nav {
@@ -89,16 +168,53 @@ button {
   width: 100%;
   border: 0;
   background: transparent;
-  color: #aec0c6;
-  padding: 10px 12px;
-  border-radius: 9px;
+  color: var(--side-ink);
+  padding: 12px 15px;
+  border-radius: 7px;
   display: flex;
   align-items: center;
   gap: 11px;
   text-align: left;
-  font-size: 13px;
+  /*
+   * ⚠️ 大分頁的字級**必須**比分類標題小、比小分頁大（16 > 14 > 12）。
+   *
+   * 使用者 2026-09-15（在交通服務水準上回報，三支同一套側欄，一起改）：
+   *   「分類標題與它下方的大分頁文字大小不要相同……文字大小請依此順序遞減，
+   *     分類標題（最大）＞大分頁＞小分頁，請將大分頁文字大小重新調整」。
+   *
+   * 2026-09-14 那一版把兩層都設成 16px、只靠字重（800 vs 400）分，
+   * 深色底上看不太出來，兩層看起來還是平的。
+   *
+   * ⚠️ 這條選擇器 `.sidebar nav button` (0,1,2) **也會打到分類標題那顆
+   *   `.nav-zone-toggle`**（它只寫 `font: inherit`，(0,1,0)，會被壓過去）。
+   *   所以下面另外用 `.sidebar nav .nav-zone-toggle` (0,2,2) 把分類標題
+   *   釘回 16px——只改這裡的話，三層會一起縮成 14px，等於沒有遞減。
+   */
+  font-size: 14px;
+  line-height: 1.35;
   margin: 2px 0;
   transition: 0.16s;
+  /*
+   * ⚠️ 這三行是「側欄文字不可以被裁切」的結構保證，不是微調。
+   *
+   * 使用者 2026-09-11：「原始處存格與換算來....後面的文字看不到了
+   * 根本不知那個分頁是什麼…如果固定寬度，那要注意文字不能被裁切到，
+   * 尤其畫面被放大或縮小時。三個程式都要注意這問題」。
+   *
+   * 瀏覽器對 <button> 的預設值是 white-space: nowrap（實測 computed 值），
+   * 側欄寬度又是固定的 248px——字一長或畫面一放大，就只能往右溢出，
+   * 而 .sidebar nav 的 overflow-y:auto 會讓 overflow-x 也變成 auto，
+   * 結果是長出橫向捲軸並把字切掉。
+   *
+   * 讓它**換行**（往下長）而不是往右長，側欄寬度就永遠夠用：
+   *   white-space: normal  → 允許斷行
+   *   overflow-wrap: anywhere → 中英數混排也斷得掉
+   *   min-width: 0 → 在 flex/grid 裡才真的縮得下來（預設 auto = min-content，
+   *                  那正是「縮不下去所以溢出」的原因）
+   */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .sidebar nav button > span {
   width: 24px;
@@ -108,6 +224,8 @@ button {
   display: grid;
   place-items: center;
   font-size: 11px;
+  /* 圖示是固定尺寸的方塊，不可以跟著被壓扁。 */
+  flex: none;
 }
 .sidebar nav button > b {
   margin-left: auto;
@@ -117,22 +235,126 @@ button {
   padding: 1px 6px;
   font-size: 10px;
 }
-.sidebar nav button:hover,
+.sidebar nav button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--side-ink-strong);
+}
 .sidebar nav button.active {
-  background: #1d4c59;
-  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--side-ink-strong);
+  /*
+   * ⚠️ 這裡**刻意不加粗**（2026-09-14）。
+   *
+   *   使用者：「大分頁文字被選擇後因為文字加粗，會導致文字換行，請修正，
+   *     ……看是否不要加粗就可以解決」
+   *
+   *   成因：側欄寬度固定，而 `.sidebar nav button` 是 white-space: normal
+   *  （那是為了「文字不可以被裁切」刻意設的，不能改回 nowrap）。
+   *   加粗之後同一串字變寬，剛好超過一行就掉到第二行——所以「選一個分頁，
+   *   那一列就自己多長一行、下面全部往下跳」。被選中時**只有樣式變、
+   *   寬度不變**，才不會有這個跳動。
+   *
+   *   選中的視覺區隔改由這三樣負責，都不影響文字寬度：
+   *     ①底色變亮（上面那一行）
+   *     ②文字變亮（--side-ink-strong）
+   *     ③左側的分區色條（.zone-* 的 ::before）加粗變亮（見下方）
+   */
+  box-shadow: inset 3px 0 rgba(255, 255, 255, 0.55);
+}
+.sidebar nav button.active::before {
+  opacity: 1;
+  width: 4px;
 }
 .sidebar nav button.active > span {
   background: #e7bd70;
   color: #17333d;
   border-color: #e7bd70;
 }
+/*
+ * ── 分類標題（一、二、三…）────────────────────────────────────
+ *
+ * 使用者 2026-09-14：「分類標題(一、二、三...)文字太小，可以比照
+ *   全日交通量那樣，並且附帶展開收合功能」
+ *
+ * ⚠️ 原本是 11px、letter-spacing 0.14em、text-transform:uppercase。
+ *   後兩者是給英文小標用的：uppercase 對中文完全沒有作用，
+ *   而 0.14em 的字距把「一　建立與匯入」拉得很散，反而更難讀。
+ *   中文小標不需要那兩樣，拿掉並放大。
+ */
+/*
+ * ⚠️ 字級要和**它底下那些分頁一樣大**（16px），而且更粗（800）。
+ *
+ *   使用者 2026-09-14：「目前交通服務水準的分類標題文字比大分頁還小，
+ *     看起來有點不舒適」——他說得對，而且這是版面層級寫反了：
+ *   分類標題是分頁的**上一層**，字卻比下一層還小，看起來像註解不像標題。
+ *
+ *   量過「全日交通量」的作法當基準（那是使用者指名要比照的）：
+ *   它的分類標題就是 16px／weight 800，和大分頁同一個字級、靠字重區分。
+ *   三支統一成這樣。
+ *
+ *   ⚠️ 一度改成 13px，是只想著「比原本的 10.5px 大就好」，
+ *     沒有去量它和分頁的相對關係——單看一個數字看不出「比下層還小」。
+ */
 .nav-group {
-  color: #6f929c;
-  font-size: 9px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  margin: 17px 12px 6px;
+  margin: 16px 6px 4px;
+  padding: 0;
+  color: #eaf4fa;
+  font-size: 16px;
+}
+.nav-zone-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  /* ⚠️ 只留一條 font-weight。先前一條 700、一條 800 疊在同一個規則裡，
+   *   看起來像兩種設定在打架，實際上永遠是後面那條贏——照抄的人會弄錯。 */
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/*
+ * ⚠️ 分類標題是側欄的最上層，字級要**最大**（16px）。
+ *   選擇器一定要寫成 `.sidebar nav .nav-zone-toggle` (0,2,2)：
+ *   `.nav-zone-toggle` 自己只有 (0,1,0)，會被 `.sidebar nav button` (0,1,2)
+ *   的 font-size 壓過去——那正是它跟著大分頁一起縮的原因。
+ */
+.sidebar nav .nav-zone-toggle {
+  font-size: 16px;
+}
+.nav-zone-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.nav-zone-toggle:focus-visible {
+  outline: 2px solid #c9a9ff;
+  outline-offset: 1px;
+}
+.nav-zone-toggle > i {
+  flex: none;
+  font-style: normal;
+  font-size: 11px;
+  opacity: 0.85;
+  /*
+   * ⚠️ 收合狀態靠**旋轉**表示，不是換一個字。
+   *   ▼（U+25BC）在 Big5 A1B9，微軟正黑體一定畫得出來；
+   *   ▸／▾（U+25B8／U+25BE）不在 Big5，某些電腦上會變成空白
+   *  （2026-09-15：它們原本寫成 \u25b8 跳脫，因此躲過了字形守門）。
+   *   inline 元素套不上 transform，所以要 inline-block。
+   */
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.nav-zone-toggle > i.is-collapsed {
+  transform: rotate(-90deg);
 }
 .side-foot {
   margin-top: auto;
@@ -142,8 +364,8 @@ button {
 .side-foot span,
 .side-foot small {
   display: block;
-  color: #8facb4;
-  font-size: 10px;
+  color: #cfe0ea;
+  font-size: 11px;
 }
 .side-foot i {
   display: inline-block;
@@ -161,7 +383,7 @@ button {
   min-height: 100vh;
 }
 .topbar {
-  height: 72px;
+  height: var(--topbar-h);
   border-bottom: 1px solid var(--line);
   background: rgba(255, 254, 250, 0.94);
   display: flex;
@@ -179,7 +401,7 @@ button {
 }
 .crumb {
   display: block;
-  color: #839094;
+  color: #6b787d;
   font-size: 10px;
   margin-bottom: 3px;
 }
@@ -204,6 +426,32 @@ button {
   color: var(--ink);
   padding: 8px 28px 8px 10px;
   outline: none;
+  /*
+   * ⚠️ <select> 的預設寬度是「最長的那個 option 有多寬」，沒有上限。
+   *   選項文字一旦變長（例如時段選項後面附了一句說明），整頁就會橫向溢出——
+   *   2026-09-10 實測，一句 38 字的說明把它撐到 590px，820px 的視窗溢出 86px。
+   *   選項文字該短是一回事，版面這一側也要擋住，兩道都要。
+   */
+  max-width: min(320px, 100%);
+}
+/*
+ * 計畫下拉的寬度上限。
+ *
+ * 原生 <select> 的寬度由**最寬的那一個 option** 決定，所以一個很長的
+ * 計畫名稱會把整個上方工具列往右推、把側欄擠出畫面（使用者實測的截圖裡
+ * 整頁出現橫向捲軸、側欄左半被切掉）。
+ *
+ * 字數上限（PROJECT_NAME_LIMIT = 40）已經把最壞情況縮小很多，
+ * 但 40 個中文字仍然約 440px。這裡再加一道寬度上限：
+ * 超過的部分由瀏覽器自己截斷顯示，展開下拉時仍看得到完整名稱。
+ * 兩道一起，工具列才不會被任何名稱推爛。
+ */
+.top-actions label > select {
+  max-width: 280px;
+  min-width: 0;
+}
+.top-actions label {
+  min-width: 0;
 }
 .demo-pill,
 .rule-badge,
@@ -230,6 +478,22 @@ button {
   padding: 34px;
   max-width: 1540px;
   margin: auto;
+}
+/*
+ * 側欄跳轉的落點要讓開浮在上面的功能列。
+ *
+ * ⚠️ 用 scroll-margin-top，不要在 JS 裡自己算 offset 再 window.scrollTo：
+ *   自己算的版本要處理平滑捲動、巢狀捲動容器、以及「捲到底捲不動」三種情況，
+ *   每一種都出過錯；scroll-margin-top 是瀏覽器在 scrollIntoView 時直接扣掉，
+ *   三種情況都不必特別處理。
+ *
+ * 選擇器寫成 `.content [id]` 而不是逐一列出區塊 id——
+ * 逐一列出的話，新增一個區塊就會漏掉一個（這正是 .is-focused 踩過的坑）。
+ * +18px 是留白，讓標題不要剛好貼在功能列下緣。
+ */
+.content [id] {
+  /* ⚠️ 主工具列也浮在上面，跳轉落點要一起扣掉，否則標題又會被遮住。 */
+  scroll-margin-top: calc(var(--topbar-h) + var(--main-toolbar-h) + 18px);
 }
 .page-head {
   display: flex;
@@ -337,7 +601,7 @@ button {
 }
 .kpi-top span {
   font-size: 11px;
-  color: #687b81;
+  color: #66797f;
   font-weight: 600;
 }
 .kpi-top i {
@@ -363,7 +627,7 @@ button {
 }
 .kpi small {
   font-size: 10px;
-  color: #859397;
+  color: #6a787d;
 }
 .dashboard-grid {
   display: grid;
@@ -392,6 +656,32 @@ button {
   margin: 0;
   font-size: 16px;
 }
+/*
+ * 停用中的選項：看起來就是不能按，而且旁邊一定要有一行說明。
+ * ⚠️ 只做灰掉不做說明，使用者會一直去點它然後回報「按鈕壞了」。
+ */
+.segmented-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.segmented-note {
+  margin: 0;
+  max-width: 46ch;
+  color: #5f6f74;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.segmented button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.segmented button:disabled:hover {
+  background: transparent;
+}
 .segmented {
   display: inline-flex;
   padding: 3px;
@@ -402,7 +692,7 @@ button {
 .segmented button {
   border: 0;
   background: transparent;
-  color: #748488;
+  color: #6a787c;
   border-radius: 6px;
   padding: 5px 10px;
   font-size: 10px;
@@ -574,17 +864,38 @@ button {
 }
 .quick-grid button small {
   font-size: 8px;
-  color: #8c989a;
+  color: #6c787b;
   margin-top: 2px;
 }
 .quick-grid button > b {
-  color: #96a2a4;
+  color: #6a787b;
 }
 .import-layout {
   display: grid;
   grid-template-columns: 1.35fr 0.85fr;
   gap: 16px;
   margin-bottom: 16px;
+  /*
+   * ⚠️ 兩欄的對齊方式**不一樣**，要分開處理：
+   *   ・左欄（上傳區）→ stretch，把整欄高度用滿。
+   *     它是拖放目標，變高只有好處：可以放的範圍更大、也不會留一片空白。
+   *   ・右欄（兩張說明卡片）→ 由 .import-side 的 align-content: start
+   *     讓卡片各自照內容高度、從上往下排，不會被拉長而在卡片裡面浮出空白。
+   * 只設一個 align-items 一定會犧牲其中一邊——使用者兩種留白都親自看到過。
+   */
+  align-items: stretch;
+}
+.import-layout > .upload-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+/* 右欄：兩張說明卡片上下疊，把整個右欄填滿，不要只放一張而留白。 */
+.import-side {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  min-width: 0;
 }
 .upload-card {
   padding: 34px;
@@ -648,7 +959,7 @@ button {
 }
 .upload-card > small {
   display: block;
-  color: #8a989b;
+  color: #6a787c;
   font-size: 9px;
 }
 .import-rules {
@@ -703,6 +1014,15 @@ button {
 .table-scroll {
   overflow: auto;
 }
+/*
+ * 表格裡「這一格沒有值，而且是有原因的」用這個顏色寫原因。
+ * ⚠️ 不可以留空白格：空白會被當成「這裡壞了」，而不是「原始檔就沒有」。
+ * --muted #647478 在白底上是 4.87:1，讀得到（對比由測試把關，不要憑感覺改）。
+ */
+.muted-cell {
+  color: var(--muted);
+  font-size: 9px;
+}
 .table-scroll table {
   width: 100%;
   border-collapse: collapse;
@@ -711,7 +1031,7 @@ button {
 .table-scroll th {
   padding: 10px 12px;
   background: #f3f5f1;
-  color: #708085;
+  color: #69787d;
   text-align: left;
   white-space: nowrap;
   font-size: 9px;
@@ -724,8 +1044,43 @@ button {
 }
 .table-scroll td small {
   display: block;
-  color: #889699;
+  /*
+   * ⚠️ 舊值 #889699 在**白底**上只有 2.92:1，遠低於 AA 的 4.5:1——
+   *   這是加斑馬紋之前就存在的問題，不是斑馬紋造成的，只是斑馬紋讓
+   *   守門測試把它抓了出來。#5f6f74 在白底 5.23、斑馬列 5.00、
+   *   hover 列 4.74，三種底色都過，而且是這份樣式表本來就在用的次要色。
+   */
+  color: #5f6f74;
   margin-top: 3px;
+}
+
+/*
+ * ── 表格可讀性：極淡斑馬紋（2026-09-10 使用者定案）──────────────
+ *
+ * 使用者原本想「每張表換一個顏色」，討論後定案不做——顏色是有意義的訊號，
+ * 拿來表達「這是第幾張表」這種沒有意義的區別，正是雜亂感的來源。
+ * 最後只做兩件事，兩件都是**在同一張表裡分行**，不是上顏色：
+ *
+ *   ① 極淡斑馬紋：底色與白底的相對亮度差 4.71%（自訂上限 5%）。
+ *      使用者的驗收線是「不要文字被背景色遮蔽或看的眼花撩亂」，
+ *      對比守「看得見」，亮度差守「不吵」，兩件事缺一不可。
+ *   ② 數字用等寬數字：這一項一點顏色都不加，卻解決同一個問題
+ *     （數字沒有上下對齊時，橫向讀錯行的機率會大幅上升）。
+ *
+ * ⚠️ hover 規則一定要**明確涵蓋偶數列**。只寫 `tr:hover` 的話，
+ *    它與 `tr:nth-child(even)` 具體度相同，誰後寫誰贏——
+ *    偶數列 hover 可能完全沒有反應，而奇數列有。
+ */
+.table-scroll tbody tr:nth-child(even) {
+  background: #f8fafb;
+}
+.table-scroll tbody tr:hover,
+.table-scroll tbody tr:nth-child(even):hover {
+  background: #eef5f6;
+}
+.table-scroll td,
+.table-scroll th {
+  font-variant-numeric: tabular-nums;
 }
 .table-scroll input,
 .geometry-list input {
@@ -760,12 +1115,12 @@ button {
   color: #8a4b08;
 }
 .warning-text {
-  color: #b16a15 !important;
+  color: #a96614 !important;
 }
 .empty-state {
   padding: 48px 20px;
   text-align: center;
-  color: #879598;
+  color: #6a787c;
 }
 .empty-state > span {
   display: grid;
@@ -800,21 +1155,91 @@ button {
   gap: 7px;
   align-items: center;
   font-size: 10px;
-  color: #708186;
+  color: #69787d;
 }
 .diagram-layout {
   display: grid;
   grid-template-columns: minmax(650px, 1fr) 268px;
   gap: 16px;
 }
+/*
+ * ⚠️ 置中 ＋ 可捲動時，一定要用 **safe** center。
+ *
+ * 使用者 2026-09-12（附截圖）：七岔路口時畫布比容器寬，下方出現橫捲軸，
+ * 「我可以確實的看到最右側邊緣的流量小卡，但最左側明顯被裁切」。
+ *
+ * 成因是 CSS 的置中規則：內容比容器寬時，一般的 center 會把內容的
+ * **左側推到容器起點之外**，而捲動範圍只到起點為止——於是右邊捲得到、
+ * 左邊永遠捲不到，那一段等於消失。`safe center` 的定義就是
+ * 「溢出時退回 start 對齊」，內容放得下時照樣置中，放不下時左緣切齊，
+ * 整張圖都捲得到。
+ *
+ * ⚠️ 下載的 PNG 不受影響（使用者實測也確認過）——那是重新序列化
+ *   整張 SVG 畫出來的，和畫面上怎麼裁切無關。
+ */
 .diagram-canvas {
   padding: 10px;
   overflow: auto;
   min-height: 610px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
 }
-.diagram-canvas svg,
+/*
+ * ⚠️ 置中要用**假元素吃掉剩餘空間**，不可以用 center 對齊。
+ *
+ * 使用者 2026-09-12 回報兩次：七岔路口時整張圖比容器寬，
+ * 「最右側邊緣的流量小卡看得到，但最左側明顯被裁切」，
+ * 按下「放大到原尺寸」之後「左邊仍舊被裁切且無法滾動到最左邊查看」。
+ *
+ * 成因是 CSS 的對齊規則：`justify-content:center`／`justify-items:center`
+ * ／`margin:auto` 在內容比容器寬時，會把內容的**左半邊推到容器起點之外**，
+ * 而可捲動範圍只往右延伸——左邊那一段永遠捲不到，等於消失。
+ * 我第一版改成 `safe center` 只修到 justify-content（管的是軌道），
+ * 真正把東西推出去的是 justify-items（管的是項目在軌道裡的位置），
+ * 所以症狀沒變。
+ *
+ * 這一版改用公認的作法：容器 flex，前後各放一個**零寬度、margin:auto**
+ * 的假元素。有剩餘空間時兩個 auto 平分 → 內容置中；
+ * 沒有剩餘空間時 auto 自動變 0 → 內容從左緣開始，整張都捲得到。
+ *
+ * ⚠️ 不可以改回任何一種 center：那是一個「看起來對、但左邊那一段
+ *   永遠拿不回來」的版面，而且下載的 PNG 是好的，所以更難發現。
+ */
+.diagram-canvas::before,
+.diagram-canvas::after {
+  content: "";
+  flex: 0 0 auto;
+  margin: auto;
+}
+/*
+ * ⚠️ 轉向圖的寬度要乘上 --canvas-scale，不可以固定 100%。
+ *
+ * 使用者 2026-09-11：「路口示意圖的各路口不要分這麼開嗎?看起來不好看，
+ * 能保持原中間路段原本的樣子就好，畫布增大只是增加四周空白處，
+ * 讓各路口轉向流量的小卡(駛入/駛出)有地方放」。
+ *
+ * 圖上的幾何本來就沒有跟著畫布放大（支線半徑是固定值），
+ * 看起來被拉開純粹是這一條 `width:100%` 造成的：支線多時 viewBox 變大，
+ * 整張圖被等比縮小塞進同樣寬的面板，中央路口跟著變小、空白跟著變大。
+ *
+ * --canvas-scale = 這張圖的畫布寬 ÷ 四支線時的畫布寬（由 tsx 傳進來），
+ * 四支線時剛好是 1，**十字路口的顯示尺寸一個像素都不變**。
+ * 超出面板的部分由上面 .diagram-canvas 的 overflow:auto 捲動。
+ *
+ * max-height 也要一起乘，否則畫布一高就被高度上限重新壓小，
+ * 等於這條規則白寫。
+ */
+.diagram-canvas svg {
+  /*
+   * ⚠️ flex 項目預設 flex-shrink:1 —— 比容器寬時會**被壓回去剛好塞滿**，
+   *   於是「放大到原尺寸」按了看起來沒反應（實測：七岔按了之後中央方塊
+   *   還是 107px，和沒放大一樣）。要放大就必須關掉收縮。
+   */
+  flex: 0 0 auto;
+  width: calc(100% * var(--canvas-scale, 1));
+  height: auto;
+  max-height: calc(680px * var(--canvas-scale-h, 1));
+}
 .geometry-preview svg {
   width: 100%;
   height: auto;
@@ -847,7 +1272,7 @@ button {
 .summary-card dt,
 .compare-card dt {
   font-size: 9px;
-  color: #859397;
+  color: #6a787d;
 }
 .summary-card dd,
 .compare-card dd {
@@ -896,7 +1321,7 @@ button {
   position: absolute;
   right: 16px;
   top: 15px;
-  color: #a4adaf;
+  color: #6c787b;
   font-size: 10px;
 }
 .compare-card > span {
@@ -914,7 +1339,7 @@ button {
 }
 .compare-card > strong small {
   font-size: 8px;
-  color: #879497;
+  color: #6b787c;
 }
 .mini-bar {
   height: 5px;
@@ -950,7 +1375,7 @@ button {
 .compare-flow-heading p {
   max-width: 640px;
   margin: 0;
-  color: #687a7e;
+  color: #67797d;
   font-size: 9px;
   line-height: 1.7;
 }
@@ -995,7 +1420,19 @@ button {
 .branch-flow-table td {
   text-align: right;
 }
-.branch-flow-table th:first-child,
+/*
+ * ⚠️ 「第一欄靠左」只適用**表格真正的第一欄**（支線名稱），
+ * 不可以寫成 `th:first-child`。
+ *
+ * 這張表的表頭有兩列：第一列是「支線(rowSpan2) / AM Peak(colSpan2) / PM Peak(colSpan2)」，
+ * 第二列是「駛出路口 / 駛入路口 / 駛出路口 / 駛入路口」。
+ * 第二列的第一個 th 是 :first-child，但它其實是表格的**第二欄**——
+ * 於是「AM Peak 的駛出路口」表頭被靠左、底下的數字靠右，
+ * 實測兩者差 58px，看起來就是標題和數字歪掉（使用者回報的第 5 項）。
+ *
+ * 改成只鎖定第一列裡那個 rowSpan 的 th，以及資料列的第一個 td。
+ */
+.branch-flow-table thead tr:first-child th:first-child,
 .branch-flow-table td:first-child {
   text-align: left;
 }
@@ -1044,6 +1481,18 @@ button {
   font-size: 12px;
   line-height: 1.7;
 }
+/*
+ * 歷季趨勢的「兩組季度是先後兩道」那一行。
+ * 刻意比 .trend-station-note 更輕（沒有色塊、沒有左邊線）：
+ * 它是常駐的說明，不是警告；做成警告的樣子會把真正的警告稀釋掉。
+ */
+.trend-range-note {
+  flex: 1 0 100%;
+  margin: 6px 0 0;
+  color: var(--muted, #667);
+  font-size: 11px;
+  line-height: 1.7;
+}
 .quarter-checks {
   display: flex;
   gap: 7px;
@@ -1068,7 +1517,7 @@ button {
   display: grid;
   gap: 4px;
   font-size: 9px;
-  color: #667d85;
+  color: #637981;
 }
 .quarter-range select {
   min-width: 112px;
@@ -1090,6 +1539,32 @@ button {
 .trend-chart {
   padding: 0 20px 15px;
 }
+/*
+ * ── 歷季趨勢圖：捲說明文字時把圖釘住 ───────────────────────────
+ *
+ * 使用者 2026-09-10：「當滾到看說明時，該圖片都能保持可見。」
+ *
+ * ⚠️ 三件事是同一個修法的三個面向，不要拆開改：
+ *   ① 釘住的東西必須**放得進視窗**。整個面板加上說明比視窗高的話，
+ *      sticky 只保證上緣貼住，被切掉的是最上面那幾行——也就是標題與單位，
+ *      那正是使用者回報「圖標題和單位就消失在畫面了」的原因。
+ *      所以圖要跟著縮：height: min(46vh, 390px)。
+ *   ② **不需要「取消固定」按鈕**。sticky 只在自己的包含區塊（.trend-layout）
+ *      裡黏住，捲出這一區就自動放開。會一直黏著代表包含區塊設成了整個內容區。
+ *   ③ ⚠️ 原本還有第三件事：「選擇器跟著一起釘住，換路段不必捲回最上面」。
+ *      **已於 2026-09-16 移除**（X-53）——使用者回報上下兩組一樣的
+ *      「路口／指標」分不出該動哪一個（「導致無法選擇路口」），
+ *      指名保留上方那一組完整的。圖照樣釘住，只是不再複製選擇器。
+ *
+ * ⚠️ 螢幕不夠高時**不啟用**。視窗矮的時候釘住只會把說明擠到看不見，
+ *   那比不釘更糟。門檻取 720px：釘住區約 420px，剩下 300px 給說明才讀得下去。
+ */
+/*
+ * ⚠️ 釘住本身的規則**不在這裡**，在檔案下方 ≥1400px 的那一段
+ *   `.trend-layout > .trend-chart`。這裡只放釘住區裡的選擇器樣式。
+ *   兩處都寫 position:sticky 會互相蓋掉，而且改一處另一處還在生效——
+ *   我第一版就是這樣，改了矮螢幕的門檻卻發現照樣黏著。
+ */
 .trend-chart svg {
   width: auto;
   height: auto;
@@ -1099,6 +1574,29 @@ button {
   width: 100%;
   overflow-x: auto;
   padding-bottom: 6px;
+}
+/*
+ * 「整體」是上下兩張圖，每一張上面要有自己的小標與**自己的單位**。
+ * 上圖是 PCU/hr（流率）、下圖是 PCU/調查時段（累計量），
+ * 只在面板標題寫一個單位的話，一定有一張是錯的。
+ */
+.trend-chart-caption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #e6eef0;
+  font-size: 13px;
+  color: var(--ink);
+}
+.trend-chart-caption strong {
+  font-weight: 800;
+}
+.trend-svg-scroll:first-of-type .trend-chart-caption {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 6px;
 }
 /*
  * ⚠️ 趨勢圖裡的文字外觀（格線、刻度、點上的數字、X 軸標籤、圖例、軸名稱）
@@ -1141,7 +1639,7 @@ button {
 }
 .trend-summary i.flat {
   background: #eef1ef;
-  color: #718084;
+  color: #6a787c;
 }
 .trend-pair,
 .trend-pcts {
@@ -1152,6 +1650,105 @@ button {
 .trend-pcts i {
   white-space: nowrap;
 }
+/*
+ * X-8：資料維護頁的「刪除單一季度」。
+ * ⚠️ 破壞性操作要看得出來是破壞性的：左側紅色色條＋紅字按鈕，
+ *   但不做成整片紅底——那會讓整頁看起來像出事了。
+ */
+
+/* X-48：檢查結果的季別篩選（這一頁自己的，不吃主工具列）。 */
+.issue-quarter-filter{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  margin-top:10px;
+  font-size:12px;
+  font-weight:800;
+  color:#27424f;
+}
+.issue-quarter-filter select{
+  padding:5px 9px;
+  border:1px solid #cbd7dd;
+  border-radius:6px;
+  font:inherit;
+  font-size:12px;
+  background:#fff;
+}
+/* X-44：「執行資料異常檢查」那一塊的狀態列。 */
+/*
+ * ⚠️ X-57（使用者 2026-09-17，附圖）：「資料異常檢查按鈕的欄位整個黏在畫面左側」。
+ *
+ *   成因：`.panel` **本身沒有內距**——這支的內距是掛在**特定子元素**上的
+ *   （`.panel > .panel-head`、`.panel > p`，見檔尾「卡片內的左緣對齊」那一組）。
+ *   這一塊用的是 `.panel-title`（全專案只有資料維護的兩塊在用），
+ *   而 `.panel-title` 從來沒有任何內距規則，於是標題、說明與按鈕
+ *   一路貼到卡片左邊框；隔壁的 `刪除單一季度` 看起來正常，
+ *   是因為 `.maintenance-delete` 自己寫了 padding。
+ *
+ *   更明顯的症狀是**同一張卡裡兩種縮排**：狀態列是 `<p>`，
+ *   吃得到 `.panel > p` 的 21px，所以「上次檢查：…」是縮的、
+ *   它上面那三樣是貼齊的——自己跟自己不對齊。
+ *
+ * ⚠️ 修法與隔壁那一塊**用同一組數值**（16px 18px 18px），
+ *   兩塊並排時左緣才會在同一條線上。
+ * ⚠️ 狀態列要把 `.panel > p` 那 21px 蓋回來，否則它會在卡片內距之外
+ *   再縮一層。`.maintenance-run > .maintenance-run-state` 是兩個 class，
+ *   特異度 (0,2,0) 高於 `.panel > p` 的 (0,1,1)。
+ */
+.maintenance-run{padding:16px 18px 18px}
+.maintenance-run .panel-title{align-items:flex-start;gap:14px}
+.maintenance-run-state,
+.maintenance-run > .maintenance-run-state{
+  margin:10px 0 0;
+  padding:8px 11px;
+  border-radius:7px;
+  background:#f1f5f8;
+  color:#3c5a6b;
+  font-size:12px;
+  line-height:1.7;
+}
+/* X-47：檢查結果每一列的數值明細（原本在詳情面板裡）。 */
+.issue-list .issue-figures{
+  display:block;
+  margin-top:4px;
+  color:#5a6b78;
+  font-size:11px;
+  line-height:1.75;
+}
+.maintenance-delete {
+  padding: 16px 18px 18px;
+  border-left: 4px solid #b4443c;
+  margin-bottom: 14px;
+}
+.maintenance-delete-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 10px;
+}
+.maintenance-delete-row label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 800;
+}
+.maintenance-delete-row select {
+  height: 34px;
+  min-width: 140px;
+  padding: 0 10px;
+  border: 1px solid #cad6df;
+  border-radius: 7px;
+  background: #fff;
+  font: inherit;
+}
+.maintenance-delete-impact {
+  flex: 1 1 260px;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.8;
+  color: var(--muted);
+}
 .quality-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -1161,10 +1758,34 @@ button {
 .quality-grid article {
   padding: 17px;
 }
+/* ⚠️ 那一句「不受主工具列條件影響」要橫跨整排，不可以被當成第五張卡。 */
+.quality-grid > .chart-inapplicable {
+  grid-column: 1 / -1;
+  margin: 0 0 2px;
+}
+/*
+ * X-58：這一塊的標題（側欄「資料異常檢查摘要」跳過來要看得到的那一行）。
+ * ⚠️ 一樣要橫跨整排，否則會被格線當成一張卡。
+ */
+.quality-grid > .quality-grid-head {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+}
+.quality-grid > .quality-grid-head > span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+.quality-grid > .quality-grid-head > h3 {
+  margin: 3px 0 0;
+  font-size: 15px;
+  color: var(--ink);
+}
 .quality-grid span,
 .quality-grid small {
   display: block;
-  color: #75868a;
+  color: #69787c;
   font-size: 9px;
 }
 .quality-grid strong {
@@ -1174,12 +1795,64 @@ button {
 }
 .issue-list > div {
   display: grid;
-  grid-template-columns: 12px 110px 70px 1fr auto;
+  /*
+   * ⚠️ X-49：訊息、數值明細、解決方式現在包在同一個 .issue-body 裡，
+   *   所以是**四**欄不是五欄。留著第五欄 auto 的話，.issue-body 會被
+   *   擠進 1fr、右邊空一條，長句子在窄欄裡折成十幾行。
+   */
+  grid-template-columns: 12px 110px 70px minmax(0, 1fr);
   gap: 10px;
-  align-items: center;
+  /* 一列的高度由最長的那一段決定，所以靠上對齊，不是置中。 */
+  align-items: start;
   border-top: 1px solid #e4e9e7;
   padding: 12px 20px;
   font-size: 10px;
+}
+.issue-list .issue-body {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+/*
+ * X-49「解決方式」：每一筆異常要怎麼處理。
+ * ⚠️ 顏色只是輔助，**類別的字本身就寫出來**（重新匯入／人工確認／畫面修正）——
+ *   只靠顏色的話，色弱的使用者與列印出來的紙本都分不出來。
+ */
+.issue-list .issue-resolution {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: start;
+  margin-top: 2px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: #f3f7f9;
+  color: #3d5563;
+  font-size: 11px;
+  line-height: 1.75;
+}
+.issue-list .resolution-kind {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+  color: #fff;
+}
+.issue-list .resolution-kind.kind-reimport { background: #b4443c; }
+.issue-list .resolution-kind.kind-confirm { background: #8f6712; }
+.issue-list .resolution-kind.kind-onscreen { background: #2f7d69; }
+.issue-list .resolution-goto {
+  grid-column: 2;
+  justify-self: start;
+  border: 1px solid #cfdadb;
+  background: #fff;
+  border-radius: 7px;
+  padding: 4px 10px;
+  color: var(--teal);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
 }
 .issue-list p {
   margin: 0;
@@ -1222,7 +1895,7 @@ button {
 }
 .name-rule i {
   font-style: normal;
-  color: #9aa5a7;
+  color: #6b787b;
 }
 .geometry-layout {
   display: grid;
@@ -1253,7 +1926,7 @@ button {
 }
 .geometry-list label {
   font-size: 8px;
-  color: #849397;
+  color: #69787d;
 }
 .geometry-list input {
   display: block;
@@ -1347,7 +2020,7 @@ button {
   min-width: 310px;
 }
 .flow-summary-control > span {
-  color: #708186;
+  color: #69787d;
   font-size: 10px;
 }
 .flow-summary-control .segmented {
@@ -1360,9 +2033,20 @@ button {
 
 .report-range {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /*
+   * ⚠️ 多了一顆「套用主工具列目前的條件」之後不可以再寫死兩欄——
+   *   第三顆會自己掉到第二列的左半邊，和上面的「結束季度」對不齊。
+   *   用 auto-fit 讓三個元素自己排，窄的時候整個疊成一欄。
+   */
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
   margin: 12px 0;
+  align-items: end;
+}
+.report-range button small {
+  display: block;
+  font-size: 11px;
+  opacity: 0.75;
 }
 .report-range label,
 .batch-project-list label {
@@ -1457,7 +2141,7 @@ button {
   font-size: 10px;
 }
 .version-panel time {
-  color: #809094;
+  color: #69787c;
 }
 .version-panel article > span {
   color: var(--teal);
@@ -1617,7 +2301,8 @@ input:focus {
     min-height: auto;
   }
   .diagram-canvas svg {
-    min-width: 680px;
+    /* 同上：沒有放大時不設下限，整張圖一定要放得進面板。 */
+    min-width: var(--canvas-min-width, 680px);
   }
   .quarter-checks {
     flex-wrap: wrap;
@@ -1635,13 +2320,14 @@ input:focus {
     grid-column: auto;
   }
   .issue-list > div {
-    grid-template-columns: 12px 85px 1fr;
+    grid-template-columns: 12px 85px minmax(0, 1fr);
   }
-  .issue-list p {
-    grid-column: 2/-1;
-  }
-  .issue-list button {
+  /* 窄螢幕：站號與內文各自換行佔滿，不再被 70px 那一欄夾住。 */
+  .issue-list > div > strong {
     grid-column: 3;
+  }
+  .issue-list .issue-body {
+    grid-column: 2 / -1;
   }
   .version-panel > article {
     grid-template-columns: 70px 1fr;
@@ -1690,6 +2376,23 @@ input:focus {
 .parameter-card,
 .calculator {
   padding: 22px;
+  /*
+   * ⚠️ min-width: 0 不是版面微調，是**結構性**的一條。
+   *
+   *   這三張卡片都是 grid item，grid item 的 min-width 預設是 auto＝
+   *   「不可以比內容的最小寬度還窄」。所以卡片裡只要有一個不換行的東西
+   *   （一顆徽章、一個長表格、一個 nowrap 的表頭），那個寬度就會一路往上
+   *   傳成卡片的最小寬度，再把整頁推寬——使用者看到的是整頁左右晃。
+   *
+   *   卡片裡的表格本來就包在 .table-scroll（overflow: auto）裡面，
+   *   放開 min-width 之後，寬表格是在**自己的框裡**橫捲，而不是推動整頁。
+   *   那才是 .table-scroll 存在的理由。
+   *
+   *   為什麼寫在這裡而不是去修那顆徽章：修徽章只擋得住這一次，
+   *   下一個人加一欄新表頭又會再撞一次。這一行是讓它撞不到。
+   *   （徽章那邊也一起改成可換行，兩層都做。）
+   */
+  min-width: 0;
 }
 .project-form h2,
 .calculator h2 {
@@ -1700,7 +2403,7 @@ input:focus {
 .calculator label,
 .quarter-entry {
   display: block;
-  color: #687b81;
+  color: #66797f;
   font-size: 10px;
   margin: 10px 0;
 }
@@ -1788,7 +2491,7 @@ input:focus {
 }
 .imported-quarter span {
   font-size: 9px;
-  color: #819094;
+  color: #6a787c;
   margin-top: 3px;
 }
 .imported-quarter > div:nth-child(2) {
@@ -1815,7 +2518,7 @@ input:focus {
   padding: 0 22px 18px;
 }
 .direction-mode-grid label {
-  color: #687b81;
+  color: #66797f;
   font-size: 10px;
 }
 .direction-mode-grid select {
@@ -1897,7 +2600,7 @@ input:focus {
 .capacity-cards span,
 .capacity-cards small {
   font-size: 8px;
-  color: #7c8d91;
+  color: #68797c;
   line-height: 1.5;
 }
 .capacity-cards p {
@@ -1928,7 +2631,7 @@ input:focus {
   font-size: 12px;
 }
 .calculator > small {
-  color: #7b898e;
+  color: #6b787d;
   line-height: 1.5;
 }
 .project-checks {
@@ -1958,7 +2661,7 @@ input:focus {
 .geometry-expanded label small {
   display: block;
   margin-top: 5px;
-  color: #7e8f93;
+  color: #68797c;
   font-size: 7px;
   line-height: 1.35;
 }
@@ -1987,7 +2690,7 @@ input:focus {
 }
 .vc-row span small {
   display: block;
-  color: #819094;
+  color: #6a787c;
   font-size: 7px;
   margin-top: 2px;
 }
@@ -2003,8 +2706,16 @@ input:focus {
 .trend-summary b {
   font-size: 9px;
 }
+/*
+ * ⚠️ 高度上限也要乘上 --canvas-scale。
+ *   這條規則寫在檔案後面，會蓋掉上面那條 `max-height: calc(680px * var(...))`。
+ *   只改上面那一條的話，七叉的圖會被這個 760px 夾住高度，
+ *   preserveAspectRatio 於是把整張圖縮小塞進去——**寬度改了等於白改**，
+ *   使用者看到的還是「中央路口變小、支線被拉開」。
+ *   （實測：寬度確實變成 1428px，但高度被夾在 760，路口方塊還是只有 115px。）
+ */
 .diagram-canvas svg {
-  max-height: 760px;
+  max-height: calc(760px * var(--canvas-scale-h, 1));
 }
 .report-card {
   min-height: 265px;
@@ -2082,7 +2793,7 @@ input:focus {
 }
 .import-period label {
   font-size: 9px;
-  color: #697b80;
+  color: #67797e;
 }
 .import-period input,
 .import-period select {
@@ -2122,13 +2833,16 @@ input:focus {
     grid-column: auto;
   }
 }
+/*
+ * ⚠️ X-47 把右側「異常原因與計算方式」面板整塊移除之後，這裡只剩一塊。
+ *   原本的兩欄（1fr + 330px）會留下一條 330px 的空白欄，
+ *   而檢查結果那張清單被擠在左邊那一半裡——長句子折成十幾行。
+ *   2026-09-16 改回單欄。
+ */
 .quality-layout {
   display: grid;
-  grid-template-columns: minmax(560px, 1fr) 330px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
-}
-.quality-layout .issue-list > div {
-  grid-template-columns: 12px 110px 70px 1fr auto;
 }
 .quality-layout .issue-list > div.selected {
   background: #eef7f3;
@@ -2137,7 +2851,8 @@ input:focus {
   padding: 22px;
   align-self: start;
   position: sticky;
-  top: 88px;
+  /* ⚠️ 原本寫死 88px，那是主工具列還不存在時算的，見 :root 的 --sticky-top。 */
+  top: var(--sticky-top);
 }
 .issue-detail h2 {
   font-size: 16px;
@@ -2158,7 +2873,7 @@ input:focus {
 }
 .issue-detail dt {
   font-size: 9px;
-  color: #718287;
+  color: #69787d;
 }
 .issue-detail dd {
   font-size: 10px;
@@ -2235,15 +2950,32 @@ input:focus {
 }
 .head-buttons label {
   font-size: 9px;
-  color: #6f8085;
+  color: #68787d;
 }
 .head-buttons label select {
   display: block;
   margin-top: 4px;
   min-width: 230px;
 }
+/*
+ * ⚠️ 「放大到原尺寸」時圖比容器寬，要**橫向捲得動**，不可以把它壓扁。
+ *   那時候字要看得清楚，所以有一個 880px 的下限。
+ *
+ * ⚠️ 但**沒有放大時這個下限一定要拿掉**（--canvas-min-width 由 tsx 設成 0）。
+ *
+ *   2026-09-13 用使用者提供的真實七叉檔重現到的事情：
+ *   螢幕 1440px 以下時面板可視寬只有 838／764／678px，SVG 卻被
+ *   `min-width: 880px` 釘在 880px——右邊整排圖卡（駛入/駛出 B、C、D）
+ *   **直接看不到**。而畫面上那一行小字還寫著
+ *  「目前整張圖都看得到（沒有被裁切）」，因為它只看 diagramScale，
+ *   根本不知道有這個下限。**系統等於在對使用者說一句不實的話。**
+ *
+ *   使用者 2026-09-12 指定過：「不要依靠捲動，直接能在畫面一眼看到成果，
+ *   避免使用者以為被裁切到了」。所以預設一定是「整張放得下」，
+ *   要放大看清楚是另外那顆按鈕的事。
+ */
 .diagram-canvas svg {
-  min-width: 880px;
+  min-width: var(--canvas-min-width, 880px);
 }
 .geometry-preview svg {
   min-width: 0;
@@ -2295,7 +3027,7 @@ input:focus {
 .project-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: stretch;
   border-top: 1px solid #e3e9e7;
   background: #fff;
@@ -2308,7 +3040,15 @@ input:focus {
 }
 .project-open {
   display: grid;
-  grid-template-columns: 100px 1fr 20px;
+  /*
+   * ⚠️ 中間那一軌一定要 minmax(0, 1fr)，不可以只寫 1fr。
+   *
+   * grid 的 1fr 最小值預設是 auto（＝ min-content）。計畫名稱是一整串
+   * 沒有空白的中文，min-content 就等於整串字的長度，於是這一軌被撐開、
+   * 整張卡片跟著變寬、再撐破外面的 .project-row。實測 60 字的名稱
+   * 溢出 431px。minmax(0, 1fr) 把最小值壓成 0，內容才不會反過來撐開容器。
+   */
+  grid-template-columns: 100px minmax(0, 1fr) 20px;
   gap: 12px;
   align-items: center;
   text-align: left;
@@ -2316,6 +3056,27 @@ input:focus {
   background: transparent;
   padding: 16px 20px;
   color: var(--ink);
+  min-width: 0;
+}
+/*
+ * 長計畫名稱要換行，而且要**平均分行**。
+ *
+ * 使用者的原話：「程式以總字數來評估第幾個字自動換行，這樣才整齊好看，
+ * 不會出現單獨幾個字換行而已，看起來就不會美觀」。
+ *
+ * `text-wrap: balance` 正是做這件事——瀏覽器會自己把各行長度調成接近，
+ * 而不是塞滿一行再把剩下兩三個字丟到下一行。不支援的瀏覽器會退回
+ * 一般換行（仍然不會溢出，只是分行不平均），是安全的降級。
+ *
+ * ⚠️ `white-space: normal` 一定要寫。這個元素的 nowrap 是從祖先繼承來的，
+ * 不覆寫的話上面兩條都不會生效——字根本不換行，談何平均分行。
+ * ⚠️ `overflow-wrap: anywhere`（不是 break-word）：中文長字串沒有空白，
+ * break-word 在部分瀏覽器對它不生效。
+ */
+.project-open strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 .project-open > span {
   font-size: 10px;
@@ -2327,6 +3088,15 @@ input:focus {
    */
   color: #076e66;
   font-weight: 700;
+  /*
+   * ⚠️ 計畫編號那一軌是固定 100px。編號太長時如果不換行，會直接壓到
+   * 隔壁的計畫名稱——使用者 2026-09-10 附截圖回報的就是這個。
+   * 已經加了 20 字的輸入上限，但**舊資料裡的長編號不會因此變短**，
+   * 所以版面這一側也要擋住，兩道都要。
+   */
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 .project-open strong,
 .project-open small {
@@ -2336,6 +3106,33 @@ input:focus {
   color: #5f6f74;
   font-size: 9px;
   margin-top: 4px;
+}
+/*
+ * ⚠️ 新增 class 就要同時寫樣式，否則整顆按鈕在版面上是「看不見的」
+ *   （這一支用的 reset 會把 border-width 歸零、background 設成透明）。
+ *   e2e-class-coverage.mjs 會掃這件事。
+ */
+.project-edit {
+  align-self: center;
+  margin-right: 8px;
+  border: 1px solid #c6cfd3;
+  background: #fff;
+  color: #3f5760;
+  border-radius: 7px;
+  padding: 6px 9px;
+  font-size: 9px;
+}
+.project-edit:hover {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+.project-form-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.project-form-actions button {
+  flex: 1 1 auto;
 }
 .project-delete {
   align-self: center;
@@ -2374,7 +3171,6 @@ input:focus {
   justify-content: space-between;
   gap: 18px;
   padding: 14px 18px;
-  margin-bottom: 16px;
   border-left: 4px solid var(--teal);
 }
 .lock-banner p {
@@ -2403,7 +3199,19 @@ input:focus {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 14px;
-  margin-bottom: 16px;
+}
+/*
+ * 流量核對工作台整頁的區塊間距由這一層決定。
+ *
+ * ⚠️ 子層**不要再各自寫 margin-bottom**。使用者 2026-09-11 回報
+ *   「原始儲存格與換算來源」和「本季成果尚未鎖定」黏很近，成因就是
+ *   .audit-kpis 與 .lock-banner 有寫 margin、.audit-panel 沒寫，
+ *   於是同一頁上出現兩種間距。父層一個 gap 管全部，新增區塊自動一致。
+ */
+.audit-stack {
+  display: grid;
+  gap: 18px;
+  align-content: start;
 }
 .audit-panel {
   overflow: hidden;
@@ -2469,7 +3277,7 @@ input:focus {
    * 原本是 12px 0，按鈕因此貼在卡片邊框上，比上面的支線列往左凸出 20px。
    */
   padding: 12px 20px 16px;
-  color: #687b80;
+  color: #67797e;
   font-size: 9px;
 }
 .collision-warning {
@@ -2503,7 +3311,7 @@ input:focus {
 }
 .geometry-card-preview-head p {
   margin: 0;
-  color: #718287;
+  color: #69787d;
   font-size: 10px;
 }
 .geometry-preview-switches {
@@ -2588,7 +3396,7 @@ input:focus {
 .help-steps p {
   min-height: 44px;
   margin: 0 0 12px;
-  color: #687c81;
+  color: #66797e;
   font-size: 10px;
   line-height: 1.6;
 }
@@ -2683,12 +3491,23 @@ input:focus {
 .check-ok { color: var(--teal); }
 .check-warn { color: #a85f18; }
 .export-preflight {
+  /*
+   * ⚠️ 一定要有下方間距。
+   *
+   *   使用者 2026-09-14（附圖）：「報表與批次輸出，紅框處黏在一起，
+   *     請保持間隔」——這一塊和下面的「這個計畫要匯出哪些分析結果」
+   *   中間完全沒有空隙。
+   *
+   *   成因是老問題：每一塊各自帶各自的 margin。這一塊一個都沒帶，
+   *   下面那一塊只帶 margin-bottom，兩者之間就是 0。
+   *   同一天在另外兩支程式上也踩到同一件事（間距 18/18/12/0/14/14）。
+   */
+  margin-bottom: 18px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 18px;
   padding: 14px 18px;
-  margin-bottom: 16px;
   border-left: 4px solid var(--teal);
 }
 .export-preflight.has-warning { border-left-color: #d18a23; background: #fffaf0; }
@@ -2703,6 +3522,24 @@ input:focus {
 .advanced-wide { grid-column: 1 / -1; }
 .od-table { min-width: 880px; }
 .od-table th:first-child { position: sticky; left: 0; background: #f4f8f6; }
+/*
+ * 最底下那一列是「駛入合計」（各欄加總）。它和最右欄的「駛出合計」是
+ * 同一件事的另一個方向，所以**兩者要長得一樣重**：加一條上框線把它與
+ * 資料列分開，底色比照第一欄的表頭色。
+ */
+.od-table tfoot th,
+.od-table tfoot td {
+  border-top: 2px solid #cfdedb;
+  background: #f4f8f6;
+  font-weight: 800;
+}
+.od-table tfoot th:first-child { position: sticky; left: 0; }
+.od-table-note {
+  margin: 10px 2px 0;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: #4a5f65;
+}
 @media (max-width: 900px) {
   .audit-kpis {
     grid-template-columns: 1fr;
@@ -2755,7 +3592,20 @@ input:focus {
    「全選」在同一頁會出現兩顆同名按鈕，自動化測試與輔助技術都分不出來。 */
 /* 報告文字草稿的整張卡片本來沒有寫內距，標題、說明與文字框全部貼著卡片邊框。 */
 .report-draft-panel{padding:20px;margin-bottom:18px}
-.report-draft-head-actions{display:flex;gap:8px;flex-wrap:wrap}
+.report-draft-head-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/*
+ * 報告文字草稿的「小數位數」。
+ * ⚠️ 與那一列的按鈕擺在一起，所以標籤要橫排並對齊中線，
+ *   否則那一列會被撐高一倍（按鈕與標籤各佔一行）。
+ */
+.report-draft-digits{
+  display:inline-flex;align-items:center;gap:6px;
+  font-size:12px;color:var(--muted);white-space:nowrap;
+}
+.report-draft-digits select{
+  padding:5px 8px;border:1px solid var(--line);border-radius:8px;
+  background:#fff;font-size:12px;color:var(--ink);
+}
 .report-items-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin:16px 0}
 .report-items-grid label{display:flex;gap:10px;align-items:flex-start;padding:11px 13px;border:1px solid #d9e3e6;border-radius:10px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s}
 .report-items-grid label:hover{border-color:#0e7c75}
@@ -2775,7 +3625,7 @@ input:focus {
 .report-template-row b{font-size:13px;color:#12333c}
 .report-template-row small{font-size:11.5px;color:#66787f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .report-template-row>span:last-child{display:flex;gap:6px;flex:none}
-.report-template-empty{margin:12px 0 0;font-size:12px;color:#6b7d84;line-height:1.6}
+.report-template-empty{margin:12px 0 0;font-size:12px;color:#67787f;line-height:1.6}
 .report-empty-hint{margin:8px 0 0;font-size:12px;color:#a9660f;line-height:1.6}
 
 /* 報告文字草稿：段落勾選的小方塊 ＋ 可直接編輯的全文欄位。 */
@@ -2787,13 +3637,44 @@ input:focus {
 .report-draft-box{display:grid;gap:10px}
 .report-draft-box textarea{width:100%;min-height:260px;padding:13px 14px;border:1px solid #cfdcdf;border-radius:10px;background:#fbfdfd;font-size:13px;line-height:1.85;color:#173a43;resize:vertical;font-family:inherit}
 .report-draft-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.report-draft-note{font-size:11.5px;color:#6b7d84;line-height:1.6;flex:1;min-width:200px}
+.report-draft-note{font-size:11.5px;color:#67787f;line-height:1.6;flex:1;min-width:200px}
 .help-downloads{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .help-downloads .help-download{white-space:nowrap}
 
 /* 匯入辨識結果的兩個動作：取消預覽（放棄整批）與確認寫入。
    之前只有「確認寫入」，要放棄整批只能一列一列按刪除。 */
-.preview-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+/*
+ * 匯入預覽的動作列：**在異常確認表的正下方、靠右，而且黏在面板底緣**。
+ *
+ * ⚠️ 這一項我搖擺過兩次，方向相反，以這一段為準：
+ *   ① 我先提 sticky（方便按到）。
+ *   ② 使用者說「確認匯入按鈕應該都要做在異常確認表單的右下處，
+ *      表示有確認過沒異常，使用者親自按確認」→ 我整個倒向「刻意製造摩擦、
+ *      不要 sticky」。**那是過度修正。**
+ *   ③ 使用者接著明講：「懶得看的使用者也能透過你說的 sticky 直接點確認
+ *      （這很方便）……但**我們總不能逼迫使用者非這樣做不可**。」
+ *
+ *   兩件事同時成立，不是二選一：
+ *     ・DOM 順序在異常表**之後**、靠右 → 語意上「上面都看過了才按」
+ *     ・sticky → **引導**你往下看，但**不擋住**想直接按的人
+ *
+ * ⚠️ 黏的是**面板底緣，不是視窗底緣**：sticky 元素在包含區塊捲過去之後
+ *   會自動放開，所以面板一離開畫面，按鈕就跟著走，不會一直卡在畫面下方。
+ *   不需要另外做「取消固定」的按鈕。
+ */
+/*
+ * 匯入明細的收合。乾淨的批次收起來、有事情的批次展開，
+ * 摘要那一行永遠看得到（收合的是明細，不是資訊）。
+ */
+.preview-details > summary{
+  cursor:pointer;padding:12px 21px;font-size:13px;line-height:1.7;color:var(--ink);
+  border-top:1px solid #e5eae8;background:#fbfdfc;
+}
+.preview-details > summary:hover{background:#f4f8f7}
+.preview-details > summary:focus-visible{outline:2px solid var(--teal);outline-offset:-2px}
+.preview-clean{color:#0b6a52;font-weight:800}
+.preview-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;padding:14px 21px 20px;border-top:1px solid #e5eae8;margin-top:2px;position:sticky;bottom:0;z-index:3;background:linear-gradient(180deg,rgba(255,255,255,.86),#fff 34%)}
+@media(max-width:620px){.preview-actions{justify-content:stretch;padding:12px 14px 16px}.preview-actions button{flex:1}}
 
 /* 讀取失敗時的搶救畫面。刻意做得很簡單：這個畫面出現時，主程式的任何
    狀態都不能被信任，所以它不依賴任何既有的版面類別。 */
@@ -2948,6 +3829,20 @@ button,.button,.help-download{white-space:nowrap}
   margin: 4px 0 6px;
   font-size: 16px;
 }
+/*
+ * 「套用主工具列目前的條件」與「符合條件 N 筆」擺在同一欄靠右。
+ * ⚠️ 不可以讓那顆鈕把筆數擠到換行——筆數是使用者判斷條件對不對的唯一依據。
+ */
+.conclusion-head-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.conclusion-head-actions button {
+  white-space: nowrap;
+}
 .conclusion-count {
   font-size: 12px;
   padding: 6px 12px;
@@ -3023,7 +3918,7 @@ button,.button,.help-download{white-space:nowrap}
   margin: 6px 0 0;
   font-size: 11.5px;
   line-height: 1.7;
-  color: #6b7d84;
+  color: #67787f;
 }
 .conclusion-metrics {
   display: grid;
@@ -3268,7 +4163,7 @@ button,.button,.help-download{white-space:nowrap}
   margin: 2px 0 6px;
   font-size: 11px;
   font-weight: 700;
-  color: #6b7d84;
+  color: #67787f;
   letter-spacing: 0.03em;
 }
 .conclusion-sublabel + .conclusion-checks {
@@ -3282,7 +4177,7 @@ button,.button,.help-download{white-space:nowrap}
   gap: 14px;
   flex-wrap: wrap;
   padding: 14px 21px;
-  margin-bottom: 14px;
+  /* ⚠️ 間距由 .audit-stack 的 gap 統一決定，這裡不可以再自己帶 margin。 */
 }
 .audit-picker label {
   display: flex;
@@ -3445,13 +4340,53 @@ button,.button,.help-download{white-space:nowrap}
 .period-date-alert li small { display: block; color: #6b7576; font-size: 10px; }
 .period-date-alert > small { display: block; font-size: 10px; color: #6b7576; }
 .period-date-alert .source-note { margin: 8px 0 0; border-left-width: 3px; }
+/*
+ * 「改用檔案日期的季別（114Q3）」那一顆。
+ *
+ * ⚠️ 它原本沒有任何樣式規則（`.link-button` 在這支只有 .card-position-field
+ *   底下有定義），所以會退回成一顆一般的實心按鈕——在淺黃／淺紅警示底上
+ *   變成整段最搶眼的東西，而它只是個補救動作，不該比警告本身更大聲。
+ *   全日交通量那支同一顆已經是這個長相，兩支對齊。
+ *
+ * 顏色 #0a5c5d 是量過的：在 #fff8e8 上 7.34:1、在 #fdeceb 上 6.80:1，
+ * 兩種底都遠高於 AA 的 4.5:1。（#0e7c75 只有 4.42:1，在紅底上不合格，
+ * 所以這裡不用品牌綠。）
+ */
+.period-date-alert .link-button {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #0a5c5d;
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+}
 /* 期別顯示切換（季別 ⇄ 調查月份）：只換畫面文字，不影響分組與計算。 */
+/*
+ * ⚠️ 份量要和「它多常被用到」相稱。
+ *
+ * 使用者 2026-09-13：「期別顯示：季別 和 年份顯示：民國年，這兩個功能鍵
+ * 不論是在哪個分頁，在三個程式裡，都顯得特別大顆，它的大小可以按照所在的
+ * 分頁或區塊中，調整成適當的大小嗎?」
+ *
+ * 這兩顆是**顯示格式**的切換（季別↔調查月份、民國↔西元），設定好幾乎不再動；
+ * 旁邊的季度／計畫下拉才是真正常改的。它們又跟著全站頁首出現在每一頁，
+ * 所以即使尺寸沒有溢出，份量也不該和主要篩選器一樣重。
+ *
+ * 這裡把高度收到 26px（同排下拉是 36px）、字級 10px，
+ * ⚠️ 但 white-space:nowrap 與內距保留，文字一個字都不能被裁——
+ *   側欄文字被裁那一條已經踩過同一個雷。
+ */
 .period-display-toggle {
-  border: 1px solid #cfd9da;
+  border: 1px solid #d7dfe0;
   background: #fff;
   border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 11px;
+  height: 26px;
+  padding: 0 11px;
+  font-size: 10px;
+  line-height: 24px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -3513,6 +4448,18 @@ button,.button,.help-download{white-space:nowrap}
  * 而且分不出哪一顆是破壞性的。這裡只補最小需要的排版與顏色，
  * 不動其他面板。
  */
+/*
+ * ⚠️ 這一層要自己補左右內距。
+ *   使用者 2026-09-11：「本季鎖定情況，右邊的文字非常黏在邊緣快要突破邊緣的
+ *   感覺，很有壓抑感」——兩顆按鈕貼著面板右緣。
+ *   成因：面板的內距是寫在**特定子元素**上的（.panel > .panel-head、
+ *   .panel > p），.panel 本身沒有 padding。.revision-list 是個 div，
+ *   兩條規則都套不到，於是整份清單直接貼齊面板邊框。
+ *   21px 與 .panel-head、.panel > p 對齊，左右一致才不會看起來歪掉。
+ */
+.revision-list {
+  padding: 0 21px 18px;
+}
 .revision-list article {
   display: flex;
   flex-wrap: wrap;
@@ -3631,7 +4578,7 @@ button,.button,.help-download{white-space:nowrap}
   min-width: 260px;
 }
 .presence-where small {
-  color: #718287;
+  color: #69787d;
   font-size: 11px;
   line-height: 1.6;
 }
@@ -3742,7 +4689,7 @@ button,.button,.help-download{white-space:nowrap}
 .manager-data > summary small {
   font-weight: 400;
   font-size: 11.5px;
-  color: #8296a4;
+  color: #637888;
 }
 .cross-search {
   display: block;
@@ -3849,9 +4796,98 @@ button,.button,.help-download{white-space:nowrap}
     grid-template-rows: auto 1fr;
     align-items: start;
   }
-  .trend-layout > .trend-chart { grid-area: chart; }
+  /*
+   * ★ 讀說明的時候，圖要一直看得見。
+   *
+   * 使用者的原話：「在滑動往下查看說明時，因為圖會跟著被滑離開畫面，
+   * 使用者無法邊看著說明，邊對照圖來理解文字說明，這是一個困難點。」
+   *
+   * 右欄的摘要＋說明比圖高，捲動時圖會先離開畫面。改成圖「黏」在視窗上緣，
+   * 右欄自己往上捲——一邊讀一邊對照，不必來回捲。
+   *
+   * ⚠️ 這條規則**只能寫在這個 ≥1400px 的區塊裡**。
+   *    1399px 以下是單欄（說明就在圖的正下方），那時候黏住會把說明擠出畫面。
+   * ⚠️ align-self 一定要 start：grid 項目預設 stretch，
+   *    被拉滿整列高度的元素沒有可以黏的空間，sticky 完全不會生效。
+   * ⚠️ max-height 用 100vh 減掉上下留白，圖本身比視窗高時才捲得動。
+   */
+  .trend-layout > .trend-chart {
+    grid-area: chart;
+    position: sticky;
+    /* ⚠️ 原本寫死 12px，那是主工具列還不存在時算的，見 :root 的 --sticky-top。 */
+    top: var(--sticky-top);
+    align-self: start;
+    max-height: calc(100vh - var(--sticky-top) - 12px);
+    /*
+     * ⚠️ 這裡原本是 `overflow: auto`，那正是使用者 2026-09-10 回報
+     *   「圖標題和單位就消失在畫面了」的**直接原因**：
+     *   面板比視窗高時，內容在面板裡自己捲動，被捲出面板上緣的
+     *   一定是最上面那幾行——標題與單位。
+     *
+     *   正確做法不是讓面板捲，而是讓**釘住的東西小到放得進視窗**：
+     *   下面那條把圖高壓成 min(46vh, 390px)，圖跟著縮，標題就不會被切。
+     *   橫向仍然要能捲（圖比欄寬時），所以只關掉縱向。
+     */
+    overflow-y: visible;
+    overflow-x: auto;
+  }
+  /*
+   * 圖跟著視窗高度縮。SVG 有 viewBox，設高度＋width:auto 會等比縮小，
+   * 不會變形。46vh 是實測值：900px 高的視窗上，釘住區含標題約 553px，
+   * 剩下的空間讀說明還很舒服。
+   */
+  .trend-layout > .trend-chart .trend-svg-scroll svg {
+    height: min(46vh, 390px);
+    width: auto;
+    max-width: 100%;
+  }
+  /*
+   * ⚠️ 「整體」是**兩張**圖，一張 46vh 的話兩張就是 92vh，
+   *   加上標題、單位、選擇器一定超出視窗——那就又回到使用者回報的
+   *   「圖標題和單位就消失在畫面了」（釘住區比視窗高，被切掉的是最上面）。
+   *   兩張圖時每張壓到 24vh：實測 900px 高的視窗上釘住區約 636px，
+   *   還留 240px 給說明。
+   *   scripts/e2e-trend-split.mjs 會實際量「釘住之後標題還看不看得到」。
+   */
+  .trend-layout > .trend-chart[data-charts="2"] .trend-svg-scroll svg {
+    height: min(24vh, 240px);
+  }
   .trend-layout > .trend-summary { grid-area: side; }
   .trend-layout > #trendScript { grid-area: note; margin: 0; }
+}
+/*
+ * ⚠️ 螢幕**不夠高**時不要釘住。
+ *   視窗矮的時候，釘住區佔掉一半以上的高度，說明就只剩兩三行看得到——
+ *   那比不釘更糟。
+ *   ⚠️ 這一條要寫在啟用規則**之後**才蓋得掉它（同具體度，後寫者贏）。
+ *
+ * ── 門檻從 720px 降到 660px（2026-09-11）──────────────────────
+ *
+ * 使用者回報：「原本我右邊往下滑看圖說明時，左邊的圖會保持可見，
+ * 但剛測試，圖會直接隨著畫面直接消失，功能是否壞掉了？」
+ *
+ * ⚠️ **功能沒有壞**，是這道門檻訂得太高，把很常見的一種螢幕擋在外面。
+ *   算給自己看：1920×1080 的螢幕、Windows 顯示縮放 **125%**（那是
+ *   1080p 筆電與多數外接螢幕的**出廠預設**），CSS 像素只剩 1536×864；
+ *   再扣掉分頁列、網址列、書籤列與工作列（合計約 150 實體像素 ÷ 1.25 ≈ 120），
+ *   可視高度大約 **712 CSS px**——剛好落在 720 之下，於是釘住被關掉。
+ *   而寬度 1536 仍然 ≥ 1400，所以**版面還是兩欄**——使用者看到的就是
+ *  「兩欄還在、圖卻不黏了」，完全像壞掉。
+ *
+ *   712px 下釘住區大約 440px（圖 46vh ≈ 327px ＋ 標題與單位約 90px），
+ *   還留 270px 讀說明，仍然可用。所以門檻降到 660，把這種螢幕納進來。
+ *
+ * ⚠️ 不可以整個拿掉。真正矮的視窗（例如 600px）釘住之後說明只剩兩三行，
+ *   那才是「比不釘更糟」的那種情況——e2e-trend-pin 用 620px 守這一條。
+ */
+@media (max-height: 659px) {
+  .trend-layout > .trend-chart {
+    position: static;
+    max-height: none;
+  }
+  .trend-layout > .trend-chart .trend-svg-scroll svg {
+    height: auto;
+  }
 }
 @media (max-width: 1399px) {
   /* ⚠️ 一定要 minmax(0,1fr)，不能只寫 1fr。
@@ -3860,4 +4896,1989 @@ button,.button,.help-download{white-space:nowrap}
      820px 溢出 284px）。檔案上方 max-width:1100px 那條規則本來就寫對了，
      是這一條後蓋掉它。 */
   .trend-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+/*
+ * 尖峰形狀的兩張圖（轉向進階分析頁最底下，預設收合）。
+ * 樣式刻意跟著既有的 .panel 走，只補 <details> 的收合外觀與說明文字排版。
+ */
+.peak-shape > summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--ink, #1c3b45);
+  padding: 14px 18px;
+  list-style: none;
+}
+.peak-shape > summary::-webkit-details-marker { display: none; }
+/*
+ * ⚠️ 展開箭頭用 ▼（U+25BC，Big5 A1B9）＋ CSS 轉角度。
+ *   **不可以**用 ▸／▾（U+25B8／U+25BE）——那兩個字不在 Big5 字集裡，
+ *   微軟正黑體畫不出來，某些電腦上會變成空白，看起來像這顆鈕壞掉。
+ *   使用者 2026-09-15：「這個圖示比較重要，是讓人可以展開／收合的按鈕，
+ *     所以請以**任何電腦都能看到**為前題去設計」。
+ *   ::before 裡只有箭頭、沒有文字，所以轉它很安全。
+ */
+.peak-shape > summary::before {
+  content: "▼";
+  display: inline-block;
+  margin-right: 6px;
+  color: #0c6f70;
+  font-size: 11px;
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+.peak-shape[open] > summary::before { transform: rotate(0deg); }
+.peak-shape > summary small { font-weight: 400; color: #66797f; font-size: 12px; }
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  尖峰小時內四格 15 分鐘分布／連續 60 分鐘流率：圖在左、說明在右、圖固定
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-15 定案（三支同步）：
+ *   「那應該一開始就要做成左右並排，然後圖固定在左邊？」
+ *   「連續 60 分鐘流率這一張要嘛補抽稀、要嘛維持整寬不並排……
+ *     但也請以可以看到完整數據圖為優先」
+ *
+ * ⚠️ 連續 60 分鐘流率**可以**並排，因為它的橫軸已經有抽稀
+ *   （peak-shape-charts.tsx 依可用寬度算得下幾個標籤再等間隔抽樣）。
+ *   如果哪天把抽稀拿掉，就要回頭把這一塊改成整寬——兩者是綁在一起的。
+ *
+ * ⚠️ 斷點用 **container query**（量這一區實際有多寬），不是 @media（量視窗）。
+ *   使用者踩過的雷：瀏覽器縮放 110% 之類的比例時右側說明欄會蓋住圖——
+ *   那正是因為斷點看的是視窗寬度，和這一區真正剩多少寬度是兩件事。
+ *
+ * ⚠️ 預設**單欄**，放得下才由 container query 改成兩欄。方向不可以顛倒：
+ *   不支援 container query 時會停在「兩欄擠在一起」，說明會蓋住圖。
+ */
+/*
+ * ⚠️⚠️ container-type 要下在**父層**（.peak-shape），不可以下在
+ *   .panel-body 自己身上。
+ *
+ *   一個元素**不能當自己的 container query 容器**——containment 只對
+ *   後代生效。第一版我把 container-type 寫在 .panel-body 上，結果是：
+ *     ・`.peak-shape-figure`（後代）的 position:sticky **有**生效
+ *     ・`.panel-body`（容器本身）的 grid-template-columns **沒有**生效
+ *   於是 sticky 是開的、版面卻還是單欄，圖照樣整寬、說明還在下面。
+ *   兩件事在同一個 @container 區塊裡，卻只有一半生效——
+ *   只看 CSS 完全看不出來，是量了 getBoundingClientRect 才發現的。
+ *
+ * ⚠️ 門檻要**加回內距**：.panel-body 左右各 18px，所以量在 .peak-shape 上
+ *   的門檻是 1040 + 36 = 1076，才等於「內容區有 1040px」。
+ */
+.peak-shape { container-type: inline-size; }
+.peak-shape .panel-body {
+  padding: 0 18px 16px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  /* ⚠️ start 不可省略：預設的 stretch 會把圖拉成整列高，sticky 就沒有
+     可以移動的空間，看起來像完全沒作用。 */
+  align-items: start;
+}
+.peak-shape .panel-body > .peak-shape-figure { min-width: 0; }
+/* 並排時說明不需要再往下推。 */
+.peak-shape .panel-body > .peak-shape-note { margin-top: 0; }
+@container (min-width: 1076px) {
+  .peak-shape .panel-body { grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.8fr); }
+  /*
+   * ⚠️ 釘住**只能**寫在這裡（說明在右側時）。
+   *   窄到說明掉到圖的下方時兩者是上下排的，圖若還釘著，
+   *   往下捲會滑到說明上面把字蓋住（圖底下是不透明的面板色）。
+   * ⚠️ top 用 --sticky-top（跟著主工具列的實際高度走），不可以寫死。
+   */
+  .peak-shape .panel-body > .peak-shape-figure {
+    position: sticky;
+    top: var(--sticky-top);
+  }
+}
+/* 使用者設定「減少動態」時不要跟著滑動。 */
+@media (prefers-reduced-motion: reduce) {
+  .peak-shape .panel-body > .peak-shape-figure { position: static !important; }
+}
+/*
+ * ⚠️ 高度只能寫在 CSS，不可以寫成 SVG 的 height="auto" 屬性。
+ * SVG 的 width／height 屬性收的是**長度**，"auto" 不是合法值，
+ * Chrome 會在主控台丟一行
+ *   `<svg> attribute height: Expected length, "auto".`
+ * 每重畫一次就多一行。圖照樣畫得出來（有 viewBox，瀏覽器會退回預設），
+ * 所以畫面看不出異狀——但主控台從此有固定噪音，
+ * 「有沒有錯誤」這件事就沒辦法一眼判斷了。
+ * 寬度給 100%、高度交給 CSS 的 auto，比例由 viewBox 決定。
+ */
+.peak-shape svg { display: block; width: 100%; height: auto; }
+/*
+ * 兩張圖的文字樣式。
+ * ⚠️ 這裡刻意**不寫 text-anchor**——對齊方式寫在各個 <text> 的屬性上，
+ * 而 CSS 的 text-anchor 會蓋過屬性。寫在這裡的話，
+ * 「第一個標籤靠左、最後一個靠右」那段防超出的處理會整個失效。
+ */
+.peak-shape svg text { font-size: 12px; fill: #5b6f75; font-weight: 600; }
+.peak-shape svg .grid-lines line { stroke: #e3ecee; stroke-width: 1; }
+.peak-shape svg .grid-lines text { font-size: 11px; fill: #7a8a8e; font-weight: 500; }
+.peak-shape svg .x-label { font-size: 11px; fill: #7a8a8e; }
+.peak-shape svg .axis-title,
+.peak-shape svg .y-axis-title { font-size: 12px; fill: #4a5f66; font-weight: 700; }
+.peak-shape-empty {
+  background: #fff8e6;
+  border-left: 4px solid #e0b84a;
+  border-radius: 0 8px 8px 0;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0;
+}
+.peak-shape-note {
+  margin-top: 12px;
+  max-width: 100ch;
+  background: #f6fafb;
+  border-left: 3px solid #0c6f70;
+  border-radius: 0 8px 8px 0;
+  padding: 12px 15px;
+}
+.peak-shape-note p { margin: 0 0 8px; font-size: 13px; line-height: 1.85; }
+.peak-shape-note p:last-of-type { margin-bottom: 0; }
+/* 「複製說明文字」與「下載 PNG」兩塊都靠右，但**類別要分開**（見 peak-shape-charts.tsx 的說明）。 */
+.peak-shape-copy,
+.peak-shape-download { margin-top: 10px; text-align: right; }
+
+/* 輸入框底下的小字備註（字數上限之類）。 */
+.field-note {
+  display: block;
+  margin-top: 4px;
+  color: #66797f;
+  font-size: 10px;
+  line-height: 1.6;
+  font-weight: 400;
+}
+
+/*
+ * 匯入預覽裡「需要人工確認」的列。
+ * 解析完成後畫面會自動捲到第一列這種列（見 traffic-app.tsx 的 setImportRows 之後），
+ * 所以要一眼認得出來。
+ */
+tr.needs-check > td {
+  background: #fff8e6;
+}
+tr.needs-check > td:first-child {
+  box-shadow: inset 3px 0 0 #e0b84a;
+}
+.preview-check-hint {
+  margin: 6px 0 0;
+  max-width: 72ch;
+  color: #7a5a12;
+  background: #fff8e6;
+  border-left: 3px solid #e0b84a;
+  border-radius: 0 6px 6px 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+/* 「新增支線」按鈕旁的上限提示。 */
+.arm-limit-note {
+  max-width: 26ch;
+  text-align: right;
+  margin-top: 6px;
+}
+
+/* 預覽裡有「在別的季度解析」的檔案時的警示（會擋住寫入）。 */
+.preview-period-alert {
+  margin: 6px 0 0;
+  max-width: 72ch;
+  color: #8a2b2b;
+  background: #fdecec;
+  border-left: 3px solid #d05a5a;
+  border-radius: 0 6px 6px 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+/*
+ * ⚠️ 「整批改了季別」刻意用**黃底**，不是紅底。
+ *
+ *   紅底代表「這樣做會出錯」，而這個情況資料其實會正確地寫進目前選的那一季，
+ *   只是要確認一下是不是故意的。用紅底的話使用者會以為自己做錯了，
+ *   於是取消重選——那正是 2026-09-11 實測遇到的狀況（擋過頭）。
+ *   顏色本身就是一種訊息，紅色要留給「真的不能按」的那一種。
+ */
+.preview-period-shift {
+  margin: 6px 0 0;
+  max-width: 72ch;
+  color: #7a5405;
+  background: #fdf7ea;
+  border-left: 3px solid #d99a19;
+  border-radius: 0 6px 6px 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+/*
+ * ── 係數的「套用範圍」面板（依季別 × 路口覆寫）─────────────────
+ *
+ * 使用者 2026-09-10：「我可以選擇哪一季＋哪一個路段，當量係數改變了，
+ * 寫入新的係數並套用然後重新計算，下面可以摘要，哪個路段在哪一季有修過
+ * 當量係數。」
+ */
+.factor-scope-panel {
+  padding: 18px 20px;
+  margin-bottom: 14px;
+}
+.factor-scope-picker {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: end;
+}
+.factor-scope-picker label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #5f6f74;
+  min-width: 0;
+}
+.factor-scope-picker select {
+  border: 1px solid #cfdadb;
+  background: #fff;
+  border-radius: 8px;
+  color: var(--ink);
+  padding: 7px 26px 7px 10px;
+  font: inherit;
+  max-width: min(280px, 60vw);
+}
+.factor-scope-state {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #41545a;
+}
+.factor-scope-summary {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #e6eef0;
+}
+.factor-scope-summary > strong {
+  font-size: 13px;
+}
+.factor-scope-summary p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #41545a;
+}
+.factor-scope-summary ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.factor-scope-summary li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid #e0eaec;
+  border-radius: 10px;
+  background: #f8fafb;
+  font-size: 13px;
+}
+.factor-scope-summary li > span {
+  font-weight: 800;
+}
+.factor-scope-summary li > small {
+  color: #5f6f74;
+  flex: 1 1 240px;
+}
+.factor-scope-note {
+  margin-top: 10px !important;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+/*
+ * ⚠️ 衝突區要**看得出來是警告**，但不可以紅到讓人以為壞掉了——
+ *   重疊是合法的設定，只是需要使用者知道現在生效的是哪一組。
+ */
+.factor-scope-conflict {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e8c98a;
+  border-left: 4px solid #d99a19;
+  border-radius: 10px;
+  background: #fdf7ea;
+}
+.factor-scope-conflict > strong {
+  font-size: 13px;
+  color: #7a5405;
+}
+.factor-scope-conflict li {
+  background: #fff;
+  border-color: #f0dcb4;
+}
+
+/*
+ * 參數頁的說明文字（歸類何時生效）。
+ *
+ * ⚠️ 刻意用中性的灰底而不是警示色：這不是「你做錯了」，
+ *   而是「這個設定的生效時機是這樣」。用紅底會讓使用者以為有問題。
+ */
+/*
+ * ⚠️ 這一塊**不可以**設 max-width。
+ *
+ * 使用者 2026-09-12（附截圖）：「上面那一小段說明文字的灰色背景請跟下半部
+ * 對齊，不然看起來像是缺了一塊，調整後上面的說明文字也能跟背景色塊一樣長度」。
+ *
+ * 成因：這裡原本有 max-width:78ch（為了行長好讀），但**它有背景色**，
+ * 而同一個容器裡下面那張卡片是滿版的。有背景色的區塊一旦比鄰居窄，
+ * 右側就會露出一段白，看起來像版面缺了一角——不是「留白」，是「破圖」。
+ *
+ * 規矩：**有背景色或外框的區塊，寬度要和同容器裡的鄰居一致**；
+ * 想控制行長就只限制文字（沒有背景的 <p>），不要限制有底色的盒子。
+ */
+.parameter-note {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-left: 3px solid #c3d2d6;
+  background: #f6f9fa;
+  border-radius: 0 6px 6px 0;
+  color: #41545a;
+  font-size: 12.5px;
+  line-height: 1.85;
+}
+/*
+ * ⚠️ #7b8a8f 在白底上只有 3.57:1，未達 AA——對比測試抓到的。
+ *   壓到 #5f6f74（4.90:1）：看起來仍是同一個灰，只是讀得到。
+ */
+.vehicle-map-fixed {
+  color: #5f6f74;
+}
+
+/* 參數頁的「用目前的設定重算」。 */
+.parameter-recompute {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid #d7e3e6;
+  border-radius: 10px;
+  background: #f8fafb;
+}
+.parameter-recompute > div {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.parameter-recompute strong {
+  font-size: 13px;
+}
+.parameter-recompute small {
+  color: #5f6f74;
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+/*
+ * ── 新車種要一眼看得出來 ───────────────────────────────────────
+ *
+ * 使用者 2026-09-11 實測漏看：畫面寫「辨識到 4 個原始車種」，
+ * 他以為就是系統內建的四大類（機車／小型車／大型車／特種車），
+ * 沒注意到第四個其實是「聯結車」——因為「新增車種」是灰色小字，
+ * 和「標準車種」長得幾乎一樣。他是看到當量係數是 1 才發現的。
+ *
+ * 新車種是**需要使用者做決定**的東西（獨立分析還是併入哪一類），
+ * 決定錯了整季的 PCU 都會不對。所以用黃底整列標示，
+ * 讓它在一排標準車種裡跳出來。
+ *
+ * ⚠️ 用黃色不用紅色：這不是錯誤，是「需要你看一眼並做決定」。
+ *   紅色會讓使用者以為檔案有問題。
+ */
+.vehicle-row-new > td {
+  background: #fdf7ea;
+}
+.vehicle-row-new > td:first-child {
+  box-shadow: inset 3px 0 0 #d99a19;
+}
+/*
+ * ⚠️ 底色是 #8a5a08 不是 #d99a19。
+ *
+ * 使用者 2026-09-11 提醒「標色要記得不要讓文字被背景色融合在一起」。
+ * 我第一版用 #d99a19（和其他警示區塊同一個橘），白字在上面實測只有
+ * **2.45:1**——遠低於 AA 的 4.5:1，字幾乎融進底色。
+ * 壓深到 #8a5a08 之後是 5.92:1，看起來還是同一個琥珀色，但讀得到。
+ * tests/text-contrast.test.mjs 已把這個組合釘住，改回去會紅。
+ */
+.vehicle-badge-new {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #8a5a08;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  /*
+   * ⚠️ 這裡原本是 white-space: nowrap，結果在 820／900px 寬度把整頁撐爆
+   *   （e2e-layout 量到橫向溢出 128px）。
+   *   「新增車種・請確認歸類」不換行 ≈ 137px，直接變成表格第一欄的最小寬度，
+   *   而表格的最小寬度又會變成整張卡片的最小寬度——一顆小徽章把整頁推寬。
+   *   改成可換行：寬螢幕下本來就不會換（欄位比它寬），窄螢幕才折成兩行。
+   */
+  white-space: normal;
+}
+.vehicle-new-count {
+  color: #7a5405;
+  font-style: normal;
+  font-weight: 800;
+}
+
+/*
+ * 沒有任何資料在使用的車種。
+ *
+ * 使用者 2026-09-11 實測：把整季刪掉重新匯入之後，舊的車種還留在表上，
+ * 當量顯示 1／1／1，他以為自己的合併設定沒生效。
+ *
+ * ⚠️ 用灰色不用黃色：這不是「需要你做決定」，只是「這一列現在沒在用」。
+ *   黃色要留給真正需要他判斷的新車種，兩種混用就都沒有提示力了。
+ */
+.vehicle-badge-orphan {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2f3;
+  border: 1px solid #cfdadb;
+  color: #4c5c61;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.parameter-orphans {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid #d7e3e6;
+  border-radius: 10px;
+  background: #fbfdfd;
+}
+.parameter-orphans > div {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.parameter-orphans strong {
+  font-size: 13px;
+}
+.parameter-orphans small {
+  color: #5f6f74;
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  原始儲存格與換算來源：收合式面板 ＋ 篩選列
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-11：「當資料很多時這張表會變得很長……希望平常保持收合，
+ * 以避免要滑好久才能到頁面底部」。
+ */
+.audit-trace > summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 21px;
+  cursor: pointer;
+  list-style: none;
+}
+.audit-trace > summary::-webkit-details-marker {
+  display: none;
+}
+/*
+ * 自己畫展開箭頭。用 ::after 而不是預設的 marker，才控制得住位置與顏色；
+ * 而且預設 marker 在中文字級下常常和標題不對齊。
+ */
+.audit-trace > summary::after {
+  /*
+   * ⚠️ ▼／▲（U+25BC／U+25B2）在 Big5（A1B9／A1B7），正黑體一定有。
+   *   這一顆是「文字＋箭頭」的藥丸，轉角度會連文字一起轉，
+   *   所以這裡改用上下兩個方向的三角形，不用旋轉。
+   *   原本寫的 ▾／▴（U+25BE／U+25B4）不在 Big5，某些電腦上會是空白。
+   */
+  content: "展開 ▼";
+  flex: none;
+  align-self: center;
+  padding: 4px 10px;
+  border: 1px solid #d7e3e6;
+  border-radius: 999px;
+  /* #40575d 在 #f8fafb 上是 7.7:1。 */
+  color: #40575d;
+  background: #f8fafb;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.audit-trace[open] > summary::after {
+  content: "收合 ▲";
+}
+.audit-trace > summary:hover::after {
+  border-color: #b9cfd4;
+  background: #eef4f6;
+}
+.audit-trace > summary:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: -2px;
+}
+.audit-trace > summary h2 {
+  margin: 3px 0 0;
+}
+.audit-trace > summary small {
+  display: block;
+  margin-top: 5px;
+  max-width: 68ch;
+  color: #5f6f74;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.audit-trace > .table-scroll,
+.audit-trace > p {
+  padding: 0 21px 18px;
+}
+.trace-filters {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 0 21px 14px;
+}
+.trace-filters label {
+  display: grid;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #5f6f74;
+}
+.trace-filters select {
+  height: 32px;
+  min-width: 130px;
+  padding: 0 9px;
+  border: 1px solid #cfd9da;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+}
+.trace-filters .link-button {
+  align-self: flex-end;
+  padding: 0 0 7px;
+  border: 0;
+  background: none;
+  /* #0a5c5d 在白底上是 7.9:1。 */
+  color: #0a5c5d;
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+}
+/*
+ * 「篩選不影響計算與匯出」這一句要獨佔一行、而且看得到。
+ * 使用者最容易誤會的就是「我篩選了，是不是交出去的東西也被篩掉了」。
+ */
+.trace-filter-note {
+  flex: 1 1 100%;
+  color: #5f6f74;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  流量核對工作台：時段切換列黏在畫面上緣
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-11：「在下面看資訊時，如果要切換 AM/PM peak 或其他時，
+ * 還得往上滑才能切換的到，這一分頁的切換功能列是不是應該做在一起」。
+ *
+ * ⚠️ 這一列在 JSX 裡是**與標題並列**的一層（.audit-sticky-bar），
+ *   不是標題的子元素。sticky 只能在自己父層的範圍內移動，
+ *   放在只有一百多 px 高的標題裡等於完全不會黏（實測 -1131px）。
+ *
+ * ⚠️ 釘住之後底下會滑過表格，一定要有**不透明底色**，
+ *   否則文字會和表格的數字疊在一起——那是「文字被背景吃掉」的另一種長相。
+ */
+.audit-sticky-bar {
+  position: sticky;
+  /*
+   * ⚠️ 要讓開上方功能列＋主工具列。寫 0 的話它的 z-index(20) 比
+   *   .topbar(10) 高，會直接蓋在上方功能列上。
+   */
+  top: calc(var(--topbar-h) + var(--main-toolbar-h));
+  z-index: 20;
+  margin: -8px 0 22px;
+  padding: 10px 14px;
+  border: 1px solid #e3ebed;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(23, 50, 77, 0.08);
+}
+.audit-sticky-bar .audit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+/* 標題區不再需要靠底對齊（右邊那一塊已經搬走了）。 */
+.audit-head {
+  align-items: flex-start;
+}
+/*
+ * ⚠️ 視窗很矮時（筆電外接螢幕直立、或瀏覽器縮放到 150%），
+ *   釘住的一列會吃掉太大比例的可視高度，反而更難看資料。低於 620px 高就不釘。
+ */
+@media (max-height: 620px) {
+  .audit-sticky-bar {
+    position: static;
+    box-shadow: none;
+  }
+}
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  .ghost：次要動作鈕（要看得出是按鈕）
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-11 在全日交通量回報：「『下載高清晰圖片』和『複製說明文字』
+ * 按鍵的顏色與背景色一樣，導致看不出這是兩個功能按鈕」。
+ *
+ * ⚠️ 查了之後發現**這一支也一樣**，而且更廣：全站有 6 顆按鈕寫著
+ *   className="ghost"，但整份 CSS 只定義過 `.revision-actions .ghost`
+ *   ——另外 5 顆（取消預覽、全部路口、套用範本、整個計畫都指定為平日、
+ *   複製說明文字）**完全沒有樣式**，只剩瀏覽器預設。
+ *
+ * ⚠️ 這一類「class 名稱存在但規則沒寫」不會有任何錯誤訊息，
+ *   畫面照樣長出來，只是長成別的樣子——所以特別容易活很久沒被發現。
+ *
+ * 顏色量過：#0c6f70 在 #f2fbfa 上是 5.4:1，過 AA 的 4.5:1。
+ *
+ * ⚠️ 寫在檔案**最後面**是刻意的：`.revision-actions .ghost` 的具體度
+ *   比這條高，所以還原點那一排「刪除」鈕維持它原本刻意的低調灰色，
+ *   不會被這條蓋掉（那顆的說明就在上面，是刻意不做醒目的）。
+ */
+.ghost {
+  min-height: 34px;
+  padding: 7px 13px;
+  border: 1px solid #9bc9c7;
+  border-radius: 8px;
+  background: #f2fbfa;
+  color: #0c6f70;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.ghost:hover:not(:disabled) {
+  background: #dff3f1;
+  border-color: #7bb8b6;
+}
+.ghost:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+.ghost:disabled {
+  border-color: #dbe3e5;
+  background: #f4f6f7;
+  color: #8d9ba1;
+  cursor: not-allowed;
+}
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  側欄子項目（目前這一頁有哪幾塊）
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-11：「左側欄位可以新增 OD 流量表、本季鎖定狀況、
+ * 成果審核狀態，讓使用者也可以直接從左側欄位快速跳轉，
+ * 也能知道流量核對工作表有什麼功能。」
+ *
+ * ⚠️ 顏色都量過（側欄底色是深紫 #3a2350）：
+ *   #dcd2e8 在 #3a2350 上是 10.6:1；純白 16.3:1。兩個都遠高於 AA。
+ *   底色沒有動，sidebar-contrast 測試量的那一組不受影響。
+ */
+.nav-sections {
+  display: grid;
+  gap: 1px;
+  margin: 2px 0 6px 34px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.22);
+}
+/*
+ * ⚠️ 選擇器一定要寫成 `.sidebar nav .nav-section`。
+ *
+ * 只寫 `.nav-section` 的話具體度是 (0,1,0)，會被上面的
+ * `.sidebar nav button` (0,1,2) 整組壓過去——實測 computed 值是
+ * font-size:16px、padding:12px 15px、display:flex，**這裡寫的 13px 與
+ * 6px 10px 從來沒有生效過**。字比預期大了 3px、左右內距多了 10px，
+ * 加起來就是「原始儲存格與換算來源」放不下而被裁掉的直接原因
+ * （實測格軌 190px > 容器 180px，側欄橫向溢出 21px）。
+ */
+.sidebar nav .nav-section {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: #dcd2e8;
+  /*
+   * ⚠️ 12px，與交通服務水準的小分頁同一級（使用者 2026-09-15：
+   *   「請套用三份程式，讓人可以明確分出層級」）。
+   *   三層量過是 16 / 14 / 12。
+   */
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.nav-section:hover {
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff;
+}
+.nav-section:focus-visible {
+  outline: 2px solid #c9a9ff;
+  outline-offset: 1px;
+}
+.nav-section.current {
+  color: #fff;
+  font-weight: 800;
+  box-shadow: inset 3px 0 #c9a9ff;
+}
+
+/*
+ * 被側欄點名的那一塊：外框＋微微抬起，**不換底色**。
+ * 使用者提醒過兩次「不要讓文字被背景色融合在一起」；
+ * outline 畫在方塊外面，不覆蓋任何一個字。
+ */
+/*
+ * ⚠️ 選擇器**故意只寫 .is-focused，不掛在特定元素上**。
+ *
+ * 原本寫的是 `.audit-panel.is-focused, .lock-banner.is-focused,
+ * .review-panel.is-focused`——只有這三種卡片吃得到樣式。姊妹專案
+ * （全日交通量）2026-09-11 就是這樣出事的：側欄新增了指向別種區塊的項目，
+ * className 有掛 is-focused、CSS 卻沒有對應規則，使用者點了完全沒反應
+ * （原話：「點本季總覽，對應的欄位邊框沒有像參數設定各分頁那樣有顯眼的提示」）。
+ *
+ * 這是「類別覆蓋」掃描的死角：class 名稱在 CSS 裡**找得到**，掃描器過關，
+ * 但它綁在別的元素上。解法不是再補一個元素名進來（下次新增卡片又會忘），
+ * 而是讓規則與元素脫鉤——只要掛上 is-focused 就一定看得見。
+ */
+.is-focused {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+  box-shadow: 0 14px 32px rgba(12, 111, 112, 0.2);
+}
+@keyframes audit-called {
+  0% {
+    outline-color: rgba(12, 111, 112, 0);
+  }
+  45% {
+    outline-color: var(--teal);
+  }
+  100% {
+    outline-color: var(--teal);
+  }
+}
+.is-focused {
+  animation: audit-called 1.2s ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .is-focused {
+    animation: none;
+  }
+}
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  本季各路口的資料別（平日／假日）
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-11：「如果這一季 A 和 B 路段是在平日做的、C 和 D 是假日，
+ * 這邊無法依照路段分別進行平日／假日的設定。」
+ *
+ * ⚠️ 目前正在看的那一筆用**左緣色條**標示，不換底色——
+ *   這一列裡有下拉、站號、路口名三種文字，換底色等於一次動到三種對比。
+ */
+.survey-type-grid {
+  margin: 14px 0 0;
+  padding: 13px 15px;
+  border: 1px solid #e3ebed;
+  border-radius: 10px;
+  background: #fbfcfd;
+}
+.survey-type-grid > b {
+  display: block;
+  font-size: 13px;
+  color: var(--ink);
+}
+.survey-type-grid > small {
+  display: block;
+  margin-top: 4px;
+  color: #5f6f74;
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+.survey-type-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 8px;
+  margin-top: 11px;
+}
+.survey-type-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid #e3ebed;
+  border-radius: 9px;
+  background: #fff;
+}
+.survey-type-row.current {
+  box-shadow: inset 3px 0 var(--teal);
+}
+.survey-type-row > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.survey-type-row > span b {
+  /* #5f6f74 在 #fff 上是 5.6:1。 */
+  color: #5f6f74;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.survey-type-row select {
+  flex: none;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #cfd9da;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+}
+.survey-type-row select:disabled {
+  background: #f4f6f7;
+  color: #8d9ba1;
+  cursor: not-allowed;
+}
+
+/*
+ * 總覽儀表板的統計範圍選擇器。
+ *
+ * 使用者 2026-09-11：「為什麼只分析上午尖峰而已，沒有下午尖峰、
+ * 全調查時段尖峰、全調查時段這類的小卡？」
+ * ——四張小卡一直都跟著統計範圍走，只是這一頁沒有地方可以改它。
+ */
+.dashboard-scope {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+}
+.dashboard-scope > span {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  /* #5f6f74 在白底上是 5.6:1。 */
+  color: #5f6f74;
+}
+
+/*
+ * 檔名別名清冊（路口名稱管理頁）。
+ *
+ * ⚠️ 新增 class 就要同時寫樣式——這一支的重置會把 border-width 歸零，
+ *   漏寫的區塊不是「沒裝飾」而是整塊看不見。e2e-class-coverage 會掃這件事。
+ */
+.alias-panel {
+  margin-top: 18px;
+}
+.alias-panel .inline-note {
+  padding: 0 21px 14px;
+}
+.alias-panel table td:last-child {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 每一張圖的「下載高解析圖片（PNG）」與一鍵下載全部圖檔
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-12：「每張圖都應該要有能直接提供高清晰圖片下載的功能」，
+ * 並指名三支程式同樣方式處理（外觀與全日交通量一致）：
+ * 主標一行、副標一行小字「只有圖，不含說明文字」。
+ *
+ * ⚠️ 按鈕**不可以** white-space:nowrap。它是兩行的、副標又長；不換行的話
+ *   在窄畫面會把整條標題列撐寬，整頁跟著左右捲動（備份卡片踩過一樣的坑）。
+ */
+.chart-png-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  height: auto;
+  min-height: 34px;
+  padding: 6px 12px;
+  line-height: 1.35;
+  white-space: normal;
+  text-align: left;
+}
+.chart-png-button small {
+  font-weight: 400;
+  font-size: 11px;
+  opacity: 0.72;
+}
+/* 幾何示意圖：原本是一張裸圖，現在外面包一層有抬頭的面板。 */
+.geometry-preview-wrap {
+  display: grid;
+  gap: 10px;
+}
+.geometry-preview-wrap > .panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 21px 0;
+}
+.geometry-preview-wrap > .panel-head h2 {
+  margin: 2px 0 0;
+}
+/* 圖卡排版預覽的那一排切換鈕要能換行，多一顆下載鈕之後才不會擠爆。 */
+.geometry-preview-switches {
+  flex-wrap: wrap;
+}
+
+/* 「一鍵下載全部圖檔」卡片裡的勾選列 */
+.chart-png-pick {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fbfdfd;
+  font-size: 12.5px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.chart-png-pick > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.chart-png-pick small {
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.chart-png-pick input:disabled + span {
+  opacity: 0.55;
+}
+/*
+ * 「這幾張在別的頁」的說明。
+ * ⚠️ 這一段一定要在：少了幾張圖而使用者不知道，比整個功能壞掉更危險
+ *   ——收到檔案的人看不出來少了東西。
+ */
+.chart-png-elsewhere {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-left: 3px solid #c3d2d6;
+  border-radius: 0 6px 6px 0;
+  background: #f6f9fa;
+  color: #41545a;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.chart-png-elsewhere b {
+  color: var(--ink);
+}
+.chart-png-elsewhere button {
+  margin: 6px 8px 0 0;
+}
+
+/*
+ * 危險區裡「什麼時候該用這裡」的說明。
+ *
+ * ⚠️ 這一段一定要在。使用者 2026-09-12 問的正是「這個一鍵清除本機資料
+ *   是否有需要作?」——會這樣問，就是因為畫面上看不出它和「刪計畫」
+ *   差在哪。功能講不清楚，等於不存在。
+ */
+.danger-zone-why {
+  margin: 8px 0 0;
+  padding: 9px 11px;
+  border-left: 3px solid #e0b4b4;
+  border-radius: 0 6px 6px 0;
+  background: #fdf6f6;
+  color: #5a4646;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.danger-zone-why b {
+  color: #7a2f2f;
+}
+
+/*
+ * 轉向圖的「放大到原尺寸」切換。
+ *
+ * ⚠️ 這一顆**只有在放不下時才會出現**（見 traffic-app.tsx 的說明）。
+ *   使用者 2026-09-12：「平常路口不大時，可以正常顯示圖，
+ *   那這個按鈕就不要顯示出來」。一顆按了沒差別的按鈕比沒有更糟——
+ *   使用者會以為自己按錯了，或以為功能壞了。
+ */
+.diagram-zoom {
+  grid-column: 1/-1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fbfdfd;
+}
+.diagram-zoom button {
+  flex: none;
+}
+.diagram-zoom button.active {
+  border-color: var(--teal);
+  background: var(--teal);
+  color: #fff;
+}
+.diagram-zoom small {
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+
+
+/*
+ * ── 橫跨中午的尖峰：匯入前的詢問視窗 ──────────────────────────
+ *
+ * 這個視窗會改變數字，所以每一列都要把「現在的候選是什麼、不選它的話會
+ * 變成什麼」寫清楚；只給四個選項而不給數字，使用者無從判斷。
+ */
+.noon-figures {
+  margin: 6px 0 10px;
+  font-size: 13px;
+  line-height: 1.8;
+  font-variant-numeric: tabular-nums;
+}
+.noon-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.noon-choices label {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+/* ── 需使用者確認的清單：類型標籤篩選 ─────────────────────────
+   使用者 2026-09-13：「我可以很直觀知道異常有幾個種類，可以選擇最重大的異常
+   先挑出來看哪幾筆，也不會因為筆數太多而沒注意到細節。」
+   ⚠️ 按下去要看得出來——只有顏色差一點的話，使用者不會知道現在看到的是
+     全部還是篩過的。 */
+.anomaly-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  /*
+   * ⚠️ 左右內距要和 .panel-head 一樣（20px 21px），標籤才會和卡片標題**切齊**。
+   *   少了它，標籤列的左緣比標題左緣少 9px——e2e-layout 的「卡片內元素與標題
+   *   左緣對齊」會紅，而且肉眼也看得出來那一排是歪的。
+   */
+  margin: 0 0 12px;
+  padding: 0 21px;
+}
+.anomaly-chip {
+  padding: 4px 11px;
+  border: 1px solid #d9c7ad;
+  border-radius: 999px;
+  background: #fff;
+  color: #7a5a1f;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.anomaly-chip:hover { background: #fdf6ea; }
+.anomaly-chip.on { background: #7a5a1f; border-color: #7a5a1f; color: #fff; }
+.anomaly-chip.clear { border-style: dashed; color: #5b7183; border-color: #c3ced6; }
+.anomaly-chip:focus-visible { outline: 2px solid #7fe3dd; outline-offset: 2px; }
+
+/* ── 大分頁那一列：文字區照舊換頁，最右側一顆獨立的收合鈕 ──────────
+ *
+ * ⚠️ 收合鈕**沒有**另外包一層 DOM：包一層的話 `nav > div > button`
+ *   就打不到大分頁按鈕，而八支既有守門都是那樣寫的。
+ *   兩顆並排改由這裡的格線負責，分區標題與小分頁那一塊橫跨兩欄。
+ */
+.sidebar nav > div {
+  display: grid;
+  /*
+   * ⚠️ 第二欄的寬度**寫死**，不可以用 auto（2026-09-14）。
+   *
+   *   使用者：「大分頁文字被選擇後……會導致文字換行」。
+   *   我一開始以為是「選中就加粗」造成的，把加粗拿掉之後**照樣換行**
+   *   ——是守門逐顆量高度才發現的（字重明明是 400，高度還是 48px → 67px）。
+   *
+   *   真正的原因是這一行：收合鈕（▾）**只有在那一頁被選中時才出現**，
+   *   而第二欄是 auto，所以它一出現就把第一欄（文字）擠窄了
+   *   （擠掉的寬度 ＝ 鈕寬 ＋ column-gap）。字剛好卡在一行邊緣的那幾顆
+   *  （道路與流向管理、各路口尖峰彙總、報表與批次輸出）就因此掉到第二行，
+   *   整個側欄跟著往下跳。
+   *
+   *   把第二欄固定成 28px，**不管收合鈕在不在，文字可用的寬度都一樣**，
+   *   選中前後就不會再有寬度變化。
+   *
+   * ⚠️ 這也是為什麼「加粗」看起來像兇手：它確實會讓字變寬，只是在這裡
+   *   不是主因。**沒有逐顆量過就不要下結論**。
+   */
+  grid-template-columns: minmax(0, 1fr) var(--nav-collapse-col);
+  column-gap: 6px;
+  align-items: stretch;
+}
+.sidebar nav > div > .nav-group,
+.sidebar nav > div > .nav-sections {
+  grid-column: 1 / -1;
+}
+/*
+ * ⚠️ 做成**看得出來是按鈕的小標籤**，不是一個很淡的三角形。
+ *   使用者 2026-09-14：「這個按鈕也非常淺……可以做一個小標籤寫著『展開』」。
+ */
+.sidebar nav .nav-collapse {
+  flex: none;
+  align-self: center;
+  /*
+   * ⚠️ 寬度必須等於格線第二欄的寬（28px）。
+   *   原本寫 30px，比欄寬多 2px，側欄因此永遠有 2px 的橫向溢出
+   *  （e2e-nav-layout 在 100%／125%／150% 三種縮放下都量到「溢出 2px」）。
+   *   兩個數字分開寫遲早會像這樣對不上，所以直接用同一個變數。
+   */
+  /*
+   * ⚠️⚠️ 選擇器**一定要寫成 `.sidebar nav .nav-collapse`**（0,2,0）。
+   *
+   *   只寫 `.nav-collapse`（0,1,0）會被 `.sidebar nav button`（0,1,2）壓過去——
+   *   那一條寫著 `width:100%; padding:12px 15px; border:0`，
+   *   於是這顆鈕的實際寬度變成 28（欄寬）＋15＋15 ＝ 30px，
+   *   比格線那一欄寬 2px，側欄因此永遠有 2px 橫向溢出。
+   *
+   *   這就是我們在交通服務水準踩過的那一顆雷的同一種長相：
+   *   **具體度**。當時是 `#charts`（1,0,0）壓過 `.view{display:none}`（0,1,0），
+   *   結果整個圖表區黏在每一頁最下面。改 width 改不動時，
+   *   先去看是不是有人具體度比你高，不要一直加 !important。
+   *
+   * ⚠️ 也要 border-box。這一顆有 1px 外框，content-box 下實際寬度是
+   *   28＋1＋1 ＝ 30px，剛好比格線那一欄寬 2px——側欄就永遠溢出 2px。
+   *   只把 width 改成變數是不夠的，我第一次就是這樣改完照樣紅。
+   */
+  box-sizing: border-box;
+  width: var(--nav-collapse-col);
+  padding: 5px 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #eaf4fa;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  /*
+   * ⚠️ 箭頭要**真的置中**（使用者 2026-09-17 附圖回報：三支的箭頭分別偏左、偏右）。
+   *
+   *   舊寫法只靠 `text-align`（而且還是從 `.sidebar nav button` 繼承來的
+   *   `text-align:left`）——▼ 這個字的字身框本來就不是左右對稱的，
+   *   加上按鈕寬度是固定的 28px，肉眼一定看得出偏一邊。
+   *   `line-height:1.2` 也讓它在垂直方向偏下。
+   *
+   *   改用 flex 置中：水平與垂直都交給版面算，不靠字形自己的重心。
+   *   `line-height:1` 是必要的——留著 1.2 的話 flex 置中的是「行框」，
+   *   字仍然會在行框裡偏下。
+   */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+/*
+ * ⚠️ 同 .nav-zone-toggle：收合狀態靠旋轉，不換字。
+ *   選擇器一樣要夠具體（0,2,0），否則會被 `.sidebar nav button`（0,1,2）壓過。
+ */
+.sidebar nav .nav-collapse[aria-expanded="false"] {
+  transform: rotate(-90deg);
+}
+.sidebar nav .nav-collapse {
+  transition: transform 0.15s;
+}
+.sidebar nav .nav-collapse:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #fff;
+}
+.sidebar nav .nav-collapse:focus-visible {
+  outline: 2px solid #7fe3dd;
+  outline-offset: 2px;
+}
+
+/* 「清除原始資料」旁邊的門檻備註（使用者 2026-09-14 指定的形狀）。 */
+.clear-source-note {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+/*
+ * ── 「檢查起點 → 終點流向」依起點分組 ────────────────────────────
+ *
+ * 使用者 2026-09-14：「只是把所有路口都做在同一畫面，容易看眼花…
+ *   一個路口就獨自展開收合。」
+ * 樣式跟著姊妹專案「全日交通量」的同名區塊走，三支看起來是同一套東西。
+ */
+.route-group {
+  border-top: 1px solid #dbe6ea;
+  padding: 8px 0;
+}
+.route-group:first-of-type {
+  border-top: 0;
+}
+.route-group > summary {
+  cursor: pointer;
+  padding: 4px 2px;
+  font-weight: 700;
+  color: #0c6f70;
+}
+.route-group > summary:hover {
+  color: #094a4b;
+}
+.route-group > .table-scroll {
+  margin-top: 8px;
+}
+
+/*
+ * ── 「用顏色檢視轉向」──────────────────────────────────────────
+ *
+ * 使用者 2026-09-14：「選一個路口，直接從圖片看轉向顏色」。
+ * 依他同意的排版：右欄看圖、**黏住**，左欄改設定時圖不會跑掉。
+ */
+.geometry-turn-preview {
+  position: sticky;
+  /* ⚠️ 原本寫死 12px，那是主工具列還不存在時算的，見 :root 的 --sticky-top。 */
+  top: var(--sticky-top);
+  align-self: start;
+}
+.turn-preview {
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 14px;
+}
+.turn-preview-pick {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #4b5f66;
+}
+.turn-preview-pick select {
+  width: 100%;
+  min-width: 0;
+}
+.turn-preview-svg {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  margin: auto;
+}
+.turn-arm {
+  stroke: #9bb0bd;
+  stroke-width: 22;
+  stroke-linecap: round;
+}
+/* 目前選的那一支加深，一眼看得出箭頭是從哪裡出發的。 */
+.turn-arm.is-from {
+  stroke: #7d96a6;
+}
+.turn-arm-mark {
+  fill: #fff;
+  stroke: #4a6b78;
+  stroke-width: 3;
+}
+.turn-arm-code {
+  font-size: 13px;
+  font-weight: 800;
+  fill: #17333d;
+  text-anchor: middle;
+}
+.turn-arm-name {
+  font-size: 11px;
+  font-weight: 700;
+  fill: #17333d;
+}
+.turn-center {
+  font-size: 13px;
+  font-weight: 800;
+  fill: #17333d;
+  /*
+   * ⚠️ 中央那行字**壓在支線的灰色路面上**（截圖看得很清楚）。
+   *   加一圈白色描邊當底，字才讀得出來。
+   *   paint-order 一定要寫，否則描邊會蓋在字上面，變成一團白。
+   */
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+.turn-legend-text {
+  font-size: 11px;
+  font-weight: 700;
+  fill: #3c5666;
+}
+.turn-preview-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.75;
+  color: #56707a;
+}
+.turn-preview-empty {
+  margin: 0;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: #fff4e5;
+  color: #8a5300;
+  font-size: 12px;
+}
+@media (max-width: 1100px) {
+  .geometry-turn-preview {
+    position: static;
+  }
+}
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  主工具列
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * ⚠️ 它在每一頁都看得到，所以**不可以吃掉太多高度**——使用者要看的是下面的圖。
+ *   三列、每列自動換行，窄視窗時自己疊起來。
+ * ⚠️ 不要用 position:sticky 把它釘在上面：那會在窄視窗吃掉半個畫面，
+ *   而且與既有的 header sticky 疊在一起會互相遮住。
+ */
+/*
+ * ⚠️ 它在**每一頁**都看得到，所以高度要省。
+ *   第一版排成三列，把畫面往下推了 120px 以上——
+ *   e2e-diagram 的拖曳測試因此抓不到圖卡（卡片被推出視窗），
+ *   而使用者要看的圖也被擠下去。改成一列自動換行。
+ */
+/*
+ * ── 主工具列 ─────────────────────────────────────────────────
+ *
+ * 使用者 2026-09-15：「固定在上方隨時可見，只是會做著展開的按鈕，
+ * 避免版面佔用過大」。所以：
+ *   ・sticky 釘在上方（捲到哪一段都看得到目前的條件）
+ *   ・收合之後只剩一列：展開鈕 ＋ 目前條件一句話 ＋ 回歸全部
+ *
+ * ⚠️ z-index 要比內容高、但比視窗（modal）低，否則視窗會被工具列蓋住。
+ */
+.main-toolbar {
+  position: sticky;
+  /*
+   * ⚠️ 要讓開上方功能列，不可以寫 0——.topbar 也是 sticky top:0，
+   *   而這一列的 z-index 比較高，寫 0 會直接蓋住上方功能列。
+   */
+  top: var(--topbar-h);
+  z-index: 30;
+  display: grid;
+  gap: 6px;
+  padding: 8px 22px 10px;
+  background: #f4f1fb;
+  border-bottom: 1px solid #ded5f2;
+}
+.main-toolbar.is-collapsed {
+  padding-bottom: 8px;
+}
+.main-toolbar-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+/*
+ * 主工具列的收合鈕。2026-09-16 使用者把名稱從「篩選條件」改成「主工具列收合」。
+ * ⚠️ 字變長了（4 字 → 6 字），所以明寫 nowrap 與行高，文字不可被裁。
+ */
+.mt-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  white-space: nowrap;
+  line-height: 1.8;
+  padding: 3px 11px;
+  border: 1px solid #cbbfe6;
+  border-radius: 999px;
+  background: #fff;
+  color: #4b3d6b;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.mt-toggle:hover {
+  border-color: #8b76c9;
+}
+.mt-toggle i {
+  font-style: normal;
+  /*
+   * ⚠️ 收合狀態靠**旋轉**表示，不是換一個字。
+   *   ▼（U+25BC）在 Big5 裡有，微軟正黑體一定畫得出來；
+   *   ▾／▸ 不在 Big5 裡，實機上會變成空白（2026-09-15 由 glyph-guard 抓到）。
+   *   display:inline-block 是必要的——inline 元素套不上 transform。
+   */
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.mt-toggle i.is-collapsed {
+  transform: rotate(-90deg);
+}
+/*
+ * 目前條件那一句。**一定要留著**——收合之後如果只剩一顆按鈕，
+ * 使用者要確認「現在依什麼在算」就得先展開，那比佔版面更糟。
+ */
+.mt-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #6b5f88;
+}
+.main-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px 16px;
+}
+/*
+ * ⚠️ 這一條**必須**存在：`display:flex` 的權重比瀏覽器內建的
+ *   `[hidden]{display:none}` 高，所以掛了 hidden 之後那一列**還是看得見**
+ *   （2026-09-15 實測：data-open 已經變 false，畫面卻沒收起來）。
+ *   用 hidden 控制顯示時，一定要自己補一條同選擇器的規則。
+ */
+.main-toolbar-row[hidden] {
+  display: none;
+}
+.mt-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #4b3d6b;
+}
+.mt-field > select {
+  font: inherit;
+  font-weight: 400;
+  padding: 6px 8px;
+  border: 1px solid #cbbfe6;
+  border-radius: 6px;
+  background: #fff;
+  color: #241b3a;
+  max-width: 260px;
+}
+.mt-field > select[multiple] {
+  min-width: 170px;
+}
+/*
+ * 自訂下拉那一格的標題（<div class="mt-field"> 裡的 <span>）。
+ * 與 <label> 版看起來要一模一樣，否則同一列的標題會有兩種字重。
+ */
+.mt-field > .mt-field-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #4b3d6b;
+}
+.mt-field > .multi-picker {
+  min-width: 170px;
+  max-width: 260px;
+}
+/*
+ * 說明文字只在**真的需要解釋**時才佔一行：
+ * 路口的「未選＝全部」與判定方式那一句是必要的，其餘的收成 title。
+ */
+.mt-field > select {
+  padding: 4px 8px;
+}
+/*
+ * 說明文字要**跟得上**旁邊的選單，但不可以比它搶眼。
+ * ⚠️ 不要用 ch 當寬度單位：ch 是數字 0 的寬度，中文字約 2ch，
+ *   寫 40ch 實際只裝得下約 20 個中文字（這個坑全日交通量踩過）。
+ */
+.mt-note {
+  font-size: 11px;
+  font-weight: 400;
+  color: #6b5f88;
+  line-height: 1.5;
+  max-width: 30em;
+}
+/*
+ * 「恢復預設條件」（X-10，使用者 2026-09-16）。
+ *
+ * ⚠️ 要和「回歸全部」**看得出不一樣**：那一顆是紫色的主要動作（有區塊脫離了，
+ *   是需要處理的狀態）；這一顆只是把條件歸零，所以做成安靜的灰色膠囊。
+ * ⚠️ 條件已是預設值時整顆不出現，所以不必做 disabled 樣式。
+ */
+.mt-reset-main {
+  align-self: center;
+  margin-left: auto;
+  padding: 7px 13px;
+  border: 1px solid #c8cfda;
+  border-radius: 999px;
+  background: #fff;
+  color: #46566b;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mt-reset-main:hover {
+  background: #eef2f6;
+  border-color: #9fabbb;
+}
+.mt-reset-main:focus-visible {
+  outline: 2px solid #46566b;
+  outline-offset: 2px;
+}
+/* ⚠️ 兩顆同時出現時，只有前面那一顆吃 margin-left:auto（都吃會被推開）。 */
+.mt-reset-main ~ .mt-detached .mt-reset-all,
+.mt-reset-main ~ .mt-reset-all {
+  margin-left: 10px;
+}
+.mt-reset-all {
+  align-self: center;
+  margin-left: auto;
+  padding: 7px 14px;
+  border: 1px solid #a88fe0;
+  border-radius: 999px;
+  background: #fff;
+  color: #4b2e94;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mt-reset-all:hover {
+  background: #efe7ff;
+}
+.mt-reset-all:focus-visible {
+  outline: 2px solid #7a4ed6;
+  outline-offset: 2px;
+}
+
+/*
+ * 脫離中的圖上掛的那一條。要看得出「這一張和別張不一樣」，
+ * 但不可以搶過圖本身——所以用左側色條，不用整塊底色。
+ */
+.chart-detach-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-left: 4px solid #7a4ed6;
+  border-radius: 0 8px 8px 0;
+  background: #f6f2ff;
+  color: #3f3160;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.chart-detach-reset {
+  padding: 5px 11px;
+  border: 1px solid #a88fe0;
+  border-radius: 999px;
+  background: #fff;
+  color: #4b2e94;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chart-detach-reset:hover {
+  background: #efe7ff;
+}
+
+/*
+ * 「這個條件對本圖不適用」。
+ * ⚠️ 用中性的提示色，不用紅色——它不是錯誤，是在解釋為什麼沒動。
+ *   紅色會讓使用者以為資料有問題（這一條在圖說文字那一輪討論過）。
+ */
+.chart-inapplicable {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-left: 4px solid #c9a227;
+  border-radius: 0 8px 8px 0;
+  background: #fdf8e6;
+  color: #5b4a12;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 900px) {
+  .main-toolbar {
+    padding: 10px 14px 12px;
+  }
+  .mt-field > select {
+    max-width: none;
+    width: 100%;
+  }
+  .mt-reset-all {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+
+/*
+ * ── 多選下拉（與全日交通量逐項相同）─────────────────────────
+ *
+ * 使用者 2026-09-15 指名：三支的「路段／路口」要同一種格式。
+ * ⚠️ 這一份是從全日交通量 app/globals.css 原樣搬過來的，
+ *   改動時**三支要一起改**，否則同一個元件在不同程式長得不一樣。
+ */
+.multi-picker{ position:relative; min-width:0; }
+.multi-picker-btn{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:6px;
+  width:100%;
+  min-width:0;
+  height:31px;
+  padding:0 7px;
+  border:1px solid #ccd9e1;
+  border-radius:7px;
+  background:#fff;
+  color:var(--ink);
+  font:inherit;
+  font-size:10px;
+  cursor:pointer;
+}
+.multi-picker-btn span{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.multi-picker-btn i{ font-style:normal; color:var(--muted); flex:none; }
+.multi-picker-btn:hover{ border-color:var(--teal); }
+.multi-picker-btn.on{
+  border-color:var(--teal);
+  background:#eef8f8;
+  font-weight:800;
+  color:var(--navy);
+}
+.multi-picker-panel{
+  position:absolute;
+  z-index:40;
+  top:calc(100% + 4px);
+  left:0;
+  width:max(220px,100%);
+  background:#fff;
+  border:1px solid #c6d6de;
+  border-radius:9px;
+  box-shadow:0 12px 30px rgba(20,60,80,.18);
+  padding:8px;
+}
+.multi-picker-head{ display:flex; gap:6px; margin-bottom:6px; }
+.multi-picker-head button{
+  flex:1;
+  border:1px solid #d7e3e9;
+  background:#fff;
+  border-radius:6px;
+  padding:5px 6px;
+  font:inherit;
+  font-size:10px;
+  font-weight:700;
+  color:var(--navy);
+  cursor:pointer;
+}
+.multi-picker-head button:hover{ border-color:var(--teal); }
+.multi-picker-list{
+  max-height:230px;
+  overflow:auto;
+  border:1px solid #e4edf1;
+  border-radius:6px;
+}
+.multi-picker-list label{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  padding:6px 8px;
+  font-size:11px;
+  cursor:pointer;
+  border-bottom:1px solid #f1f6f8;
+}
+.multi-picker-list label:last-child{ border-bottom:0; }
+.multi-picker-list label:hover{ background:#f3fafb; }
+.multi-picker-list input{ margin:0; flex:none; }
+.multi-picker-list span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.multi-picker-empty{ margin:0; padding:12px; text-align:center; color:var(--muted); font-size:11px; }
+.multi-picker-foot{ margin-top:6px; font-size:10px; color:var(--muted); }
+@media print{ .multi-picker-panel{ display:none; } }
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  L-2：「回歸全部」旁邊的浮動小卡（三支同一套樣式）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * ⚠️ 一定要 position:absolute（浮起來），**不可以**做成佔版面的展開清單。
+ *   使用者 2026-09-15：「我怕展開時候，整個主工具列會被擠的超大」。
+ *   浮起來的話，脫離 12 張和脫離 1 張，工具列的高度完全一樣。
+ */
+.mt-detached {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mt-detached-toggle {
+  border: 1px solid #cbd7dd;
+  background: #fff;
+  color: var(--navy);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.mt-detached-toggle:hover { background: #eef4f7; }
+/*
+ * ⚠️ 箭頭只能用 ▼（U+25BC，Big5 A1B9）＋ CSS 轉角度。
+ *   ▸／▾（U+25B8／U+25BE）不在 Big5，微軟正黑體畫不出來，實機上是空白。
+ */
+.mt-detached-toggle > i {
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1;
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+.mt-detached-toggle[aria-expanded="true"] > i { transform: rotate(0deg); }
+.mt-detached-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: min(320px, 80vw);
+  max-height: min(420px, 60vh);
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid #cbd7dd;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(23, 50, 77, 0.18);
+  text-align: left;
+}
+.mt-detached-lead {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: #4d6878;
+}
+.mt-detached-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+.mt-detached-item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: #f2f7f9;
+  color: var(--navy);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.mt-detached-item:hover { background: #e2eef3; }
+.mt-detached-item:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
+
+/*
+ * 逐格追溯表：被併走的車種要同時看得到「原始欄名」與「計入的類型」。
+ * ⚠️ 第二行用小字灰字——它是補充，不可以和原始欄名長得一樣重，
+ *   否則使用者會以為那是兩個不同的車種各一列。
+ */
+.trace-merged-into {
+  display: block;
+  margin-top: 2px;
+  /*
+   * ⚠️ 白底上要 ≥ 4.5:1（WCAG AA）。原本的 #6b7f86 只有 4.20:1，
+   *   text-contrast 的整份掃描抓到的。#5f767d 是 4.80:1，
+   *   色相與明度感覺幾乎相同，但讀得清楚。
+   */
+  color: #5f767d;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/*
+ * ── 結論草稿：條件用的兩個下拉（轉向別／車種）────────────────
+ *
+ * 它們與「時段」「資料別」同一格，是**篩選條件**不是敘述方式
+ *（2026-09-15 從「六、敘述方式」搬過來——擺在那裡會被讀成排版選項）。
+ * 兩個並排、標籤在左，與上面兩排核取方塊的左緣對齊。
+ */
+.conclusion-filter-row{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-top: 10px;
+}
+.conclusion-filter-row > label{
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.conclusion-filter-row select{
+  min-width: 118px;
+}
+
+/*
+ * 「已確認，不再提醒」（使用者 2026-09-17）。
+ * ⚠️ 已確認的那一筆用**淡化＋左側標線**表示，不可以只靠淡化——
+ *   列印成灰階或色弱時分不出來。
+ */
+.issue-list .resolution-ack {
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin-top: 4px;
+  border: 1px solid #cbd7dd;
+  background: #fff;
+  border-radius: 7px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: #3d5563;
+  cursor: pointer;
+}
+.issue-list .resolution-ack:hover {
+  border-color: #2f6f9e;
+  color: #2f6f9e;
+}
+.issue-list .resolution-ack.on {
+  background: #eef4f2;
+  border-color: #9dbfb4;
+  color: #2f7d69;
+}
+.issue-list > div.issue-acked {
+  background: #f7f9fa;
+  box-shadow: inset 3px 0 0 #2f7d69;
+}
+.anomaly-chip.ack-toggle {
+  border-style: dashed;
+}
+
+/* ── X-61：「報表與批次輸出」拆成成果交付／批次輸出 ────────────────
+ * ⚠️ 橫式大卡自己一段 .report-grid，所以要補上與上一排之間的間距
+ *   （原本它在同一個格線裡，間距是 gap 給的）。
+ */
+.report-grid-wide {
+  margin-top: 15px;
+}
+/*
+ * 兩張吃「成果交付」勾選的卡片上，那一顆跳過去的鈕。
+ * ⚠️ 它是相依關係的**唯一**出口，所以要看得出來可以按
+ *   （底線＋主色），不可以做成一句灰字。
+ */
+.report-card .report-items-link {
+  align-self: flex-start;
+  margin: 2px 0 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--teal);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.report-card .report-items-link:hover {
+  color: #0a5c5d;
+}
+.report-card .report-card-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+/*
+ * X-83：這兩張圖的標題（季別・路名）與「一次只看一季一路口」的提醒。
+ * ⚠️ 標題放在 .peak-shape-figure **裡面**（和 svg、下載鍵同一塊），
+ *   放外面會多出第三個直接子元素，把「圖在左、說明在右」那個版面撐破
+ *   （.peak-shape .panel-body 靠的就是剛好兩個直接子元素，見上面的註解）。
+ */
+.peak-shape-title{
+  margin:0 0 6px;
+  font-size:14px;font-weight:800;color:#22343f;
+  overflow-wrap:anywhere;
+}
+.peak-shape-scope{
+  margin:0 0 10px;
+  padding:9px 12px;
+  border-radius:8px;
+  border-left:3px solid #c4611c;
+  background:#fdf3e8;
+  color:#6d3d12;
+  font-size:12px;line-height:1.75;
 }

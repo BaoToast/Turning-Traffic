@@ -99,9 +99,22 @@ test("匯入頁不再展示「調查檔格式範本」與「已記住的實際�
     "還有地方自己寫 24 小時的門檻，沒有走 coversFullDay",
   );
   assert.match(appSource, /coversFullDay\(selected\.survey\)/);
-  /* 資料不足時要講清楚是「不適用」，不是給一個推估值。 */
-  assert.match(appSource, /全日時段與全日尖峰小時皆不適用/);
+  /*
+   * ⚠️ v2.1.64 起這一項的內容變了。
+   *   舊版：不足 24 小時 → 「全日時段與全日尖峰小時皆不適用」。
+   *   新版：全調查時段就是這份調查涵蓋的時段，4 小時的調查照樣有值，
+   *         所以畫面要講的是**涵蓋幾小時**，不是「不適用」。
+   *   「不以尖峰推估」那一句仍然要在——只是它現在套用的情形變成
+   *   「缺少逐時間格資料」，而不是「涵蓋不足 24 小時」。
+   */
+  assert.match(appSource, /本筆調查涵蓋/);
+  assert.match(appSource, /全調查時段與全調查時段尖峰都以這段涵蓋為準/);
   assert.match(appSource, /不以尖峰推估/);
+  assert.doesNotMatch(
+    appSource,
+    /全日時段與全日尖峰小時皆不適用/,
+    "舊的「不適用」說法還在，等於同一個畫面上同時講兩套規則",
+  );
 });
 
 test("deduplicates weekday and holiday geometry entries by canonical intersection", () => {

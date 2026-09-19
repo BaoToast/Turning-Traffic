@@ -94,7 +94,31 @@ export type ConclusionCondition = {
   peaks: PeakKey[];
   /** 空陣列＝全部路口。存的是 recordIntersectionKey。 */
   intersectionKeys: string[];
-  /** 空陣列＝全部支線。存的是支線名稱。 */
+  /**
+   * 空陣列＝全部支線。存的是**支線名稱的比對鍵**（見 typedNameKey()）。
+   *
+   * ⚠️ 為什麼是「比對鍵」而不是原字串：使用者 2026-09-11 實測發現，
+   *   同一個看起來一樣的名字在系統裡其實是兩個不同的字串。
+   *
+   *   成因：自動命名那一行寫的是 `"路口 " + code`——**「路口」和代碼中間
+   *   有一個半形空格**。使用者手動輸入時打的是「路口A」（沒有空格），
+   *   於是 `路口 A` ≠ `路口A`，兩者被當成兩條不同的支線。
+   *   他的原話：
+   *     「就算我手動改成『路口A』，他也不會被歸類到路口A裡面……
+   *       除非我 A 和 B 路段也手動輸入一次一模一樣的『路口A』才會歸在一起。」
+   *
+   *   所以**不是「預設的」與「手動的」被分成兩類**，是那個空格。
+   *   比對前一律過 typedNameKey()（NFKC、去空白與標點、統一全半形），
+   *   之後「只要名稱相同就歸在一起」才真的成立。
+   *
+   * ⚠️ 這裡**刻意用名稱而不是支線代碼**。一度改成代碼，使用者指出那會拿掉
+   *   他需要的彈性：「假設哪一天檔案第一條支線其實是路口D，只是這份資料
+   *   不小心被挪到了第一支線的位置，原本我希望我可以自己手動去修改名稱後，
+   *   讓程式把同樣名稱歸類在一起，現在反而作不到。」
+   *   名稱是**使用者可以修正的事實**，代碼是檔案給的位置——要以前者為準。
+   *
+   * 欄位名稱維持 branchNames：使用者存過的範本裡是這個鍵。
+   */
   branchNames: string[];
   /** 空陣列＝全部資料別（平日／假日）。 */
   surveyTypes: string[];
@@ -110,6 +134,19 @@ export type ConclusionCondition = {
    * 這樣使用者在分析頁怎麼看，草稿就怎麼寫；要固定成同一種也可以。
    */
   branchCompositionMode: BranchCompositionMode;
+  /*
+   * ── 轉向別與車種（使用者 2026-09-15 指名補上）────────────────
+   *
+   * 主工具列有這兩項，結論草稿以前**完全沒有**——使用者沒辦法出
+   * 「只看左轉」「只看大型車」這種題目。
+   *
+   * ⚠️ 兩者都是**逐筆紀錄的純轉換**（recordWithMovementFilter／
+   *   recordWithVehicleFilter，涵蓋 AM／PM／DAY／FULL 四個時段），
+   *   所以由畫面端在把紀錄交給草稿之前先套用，草稿本身不重算。
+   * ⚠️ 預設 "all"／"all" ＝改版前的行為，舊範本沒有這兩個鍵也一樣。
+   */
+  movement?: "all" | "left" | "through" | "right";
+  vehicle?: string;
 };
 
 /** 各支線各車種的呈現方式，對應車種組成分析頁的下拉選單。 */
@@ -134,6 +171,8 @@ export const DEFAULT_CONDITION: ConclusionCondition = {
   grouping: "byIntersection",
   digits: 1,
   branchCompositionMode: "follow",
+  movement: "all",
+  vehicle: "all",
 };
 
 export type ConclusionTemplate = {
@@ -143,8 +182,57 @@ export type ConclusionTemplate = {
   savedAt: string;
 };
 
+/**
+ * **使用者自己打進去的名稱**，比對前的正規化鍵。
+ *
+ * 只吸收「排版差異」，不吸收「內容差異」。
+ *
+ * 適用範圍：支線名稱、範本名稱……凡是**使用者可以自由輸入、而且他看不出
+ * 兩個字串到底哪裡不一樣**的欄位。系統自動解析出來的識別字（檔名推出來的
+ * 路段名稱、站號代碼）另有各自的規則，不走這一支。
+ *
+ * 為什麼需要它（2026-09-11 實測）：
+ *   ・自動命名寫的是 `"路口 " + code` → 存進去是「路口 A」（**有半形空格**）
+ *   ・使用者手動輸入時打的是「路口A」（沒有空格）
+ *   → 直接比字串的話，這兩個是不同的支線，而畫面上看起來一模一樣。
+ *
+ * 會被吸收的（都是**打字排版**上的差異，不改變名字本身）：
+ *   ・半形／全形空格，以及字串中間的空格
+ *   ・全形英數字（Ａ→A）與全形標點，由 NFKC 處理
+ *   ・全形／半形括號、各種破折號（～ ~ — – －）
+ *   ・逗號、句號、頓號、冒號、底線
+ *
+ * ⚠️ **大小寫刻意不吸收**：「路口A」與「路口a」視為**不同**的名稱。
+ *   使用者 2026-09-11 的指示：
+ *     「我建議是判定是不同，因為這不是比對前『正規化』的意思。」
+ *   他的分界很清楚：空格與全半形是**排版雜訊**，大小寫是**內容**。
+ *   一度寫成 toLocaleLowerCase() 併在一起，已依此拿掉。
+ *
+ * ⚠️ 不可以只做 trim()：問題出在**字串中間**的空格，trim 碰不到。
+ */
+export function typedNameKey(value: string): string {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[（]/g, "(")
+    .replace(/[）]/g, ")")
+    .replace(/[～~—–－-]/g, "~")
+    .replace(/[\s\u3000，,。．.、:：_]/g, "");
+}
+
 /** 一條支線在某個尖峰的數字。null＝這份資料沒有這個欄位（不是 0）。 */
 export type ConclusionBranch = {
+  /**
+   * 支線代碼（A／B／C…），來自原始檔的欄位順序。
+   *
+   * ⚠️ **篩選不用它**，篩選用的是名稱（見 ConclusionCondition.branchNames）。
+   *   理由是使用者 2026-09-11 指出的情境：「假設哪一天檔案第一條支線
+   *   其實是路口D，只是這份資料不小心被挪到了第一支線的位置」——
+   *   代碼只說明它排在第幾欄，不代表它是哪一條路；名稱才是可以被修正的事實。
+   *
+   * 留著它是為了**顯示**：同一個名稱橫跨兩個以上的代碼時（就是上面那種挪位
+   * 的情形），清單上把代碼一起標出來，使用者才看得出發生了什麼。
+   */
+  code: string;
   name: string;
   /*
    * 該支線「全調查時段」的逐車種輛數，分駛出與駛入兩組。
@@ -208,6 +296,13 @@ export type ConclusionMeta = {
    * 也不會動到任何數字。不傳就照原樣輸出，舊呼叫端與單元測試的行為不變。
    */
   showQuarter?: (quarter: string) => string;
+  /**
+   * 車種條件在畫面上的名稱。
+   *
+   * ⚠️ 由呼叫端傳進來，這裡**不查目錄**：目錄是計畫層級、只增不減的
+   *   原始車種表，會列出已經被併走的車種；兩邊各查各的遲早給出不同的名字。
+   */
+  vehicleLabel?: string;
 };
 
 /*
@@ -222,7 +317,8 @@ let quarterText: (quarter: string) => string = (quarter) => String(quarter ?? ""
 const PEAK_LABEL: Record<PeakKey, string> = {
   AM: "上午尖峰",
   PM: "下午尖峰",
-  DAY: "全日尖峰小時",
+  /* 2026-09-10 依使用者指定改名，三支一致。見 lib/traffic.ts 的 SCOPE_SHORT_LABELS。 */
+  DAY: "全調查時段尖峰",
 };
 
 function num(value: number | null | undefined, digits: number) {
@@ -419,8 +515,15 @@ export function selectRecords(
 
 function branchesOf(peakData: ConclusionPeakData, condition: ConclusionCondition) {
   if (!condition.branchNames.length) return peakData.branches;
+  /*
+   * 兩邊都過一次 typedNameKey()：
+   *   ・condition 裡存的可能是舊範本的原字串（例如「路口 A」）
+   *   ・branch.name 是這一筆資料目前的名稱
+   * 正規化之後比，舊範本才不會靜默失效（選不到任何支線，草稿卻照樣產出）。
+   */
+  const wanted = new Set(condition.branchNames.map(typedNameKey));
   return peakData.branches.filter(function (branch) {
-    return condition.branchNames.includes(branch.name);
+    return wanted.has(typedNameKey(branch.name));
   });
 }
 
@@ -721,7 +824,33 @@ function describeGrowth(
   return lines;
 }
 
-/** 範圍內誰最大誰最小——跨路口不可以相加，但可以比大小。 */
+/**
+ * 範圍內誰最大誰最小，以及**逐筆**列出每一個路口 × 季別 × 日別。
+ *
+ * ══════════════════════════════════════════════════════════════════════
+ *  ⚠️ 2026-09-16 起**不再寫「N 筆平均」**（使用者裁示）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 使用者原話：
+ *   「每一行展示一筆季別+日別的結果，例如 A路段 在114Q1 平日結果XXX
+ *     假日結果YYY，而不是要你平均起來，除非評估過後 某個數值是以平均
+ *     來呈現最佳。」
+ *
+ * 為什麼那個平均本來就不該寫：它把**不同路口、不同季別、不同日別**的
+ * 尖峰小時流量混成一個數字。那三個維度各自都不可比——
+ *  ・不同路口：量的是不同地點的車
+ *  ・不同季別：量的是不同時間的車
+ *  ・不同日別：平日與假日本來就是兩種不同的運作狀態
+ * 平均出來的值不對應真實世界任何一個路口在任何一個時段的流量。
+ *
+ * ⚠️ 最大／最小**保留**——那是在比大小，不是把數字混在一起，
+ *   而且使用者要的「誰最忙」正是靠它回答。
+ *
+ * ⚠️ 筆數太多時**不給任何合計或平均**，只說明還有幾筆、請用篩選縮小範圍。
+ *   給一個「總結數字」等於把剛剛拿掉的錯誤換個說法留著。
+ */
+/** 逐筆列出時最多幾行；超過就收起來並說明（與畫面上的小卡同一個數字）。 */
+const EXTREME_LINE_LIMIT = 12;
 function describeExtremes(
   records: ConclusionRecord[],
   peaks: PeakKey[],
@@ -731,7 +860,11 @@ function describeExtremes(
   for (const peak of peaks) {
     const points = records
       .map((record) => ({
-        label: `${record.station} ${record.name}（${quarterText(record.quarter)}）`,
+        label: `${record.station} ${record.name}（${quarterText(record.quarter)}${
+          record.surveyType && record.surveyType !== "待設定"
+            ? `・${record.surveyType}`
+            : ""
+        }）`,
         value: record.peaks[peak]?.totalPcu ?? null,
       }))
       .filter((point) => point.value !== null) as {
@@ -740,14 +873,22 @@ function describeExtremes(
     }[];
     if (points.length < 2) continue;
     const sorted = points.slice().sort((a, b) => b.value - a.value);
-    const mean =
-      points.reduce((sum, point) => sum + point.value, 0) / points.length;
     lines.push(
       `　${PEAK_LABEL[peak]}：最高為 ${sorted[0].label} ${num(sorted[0].value, digits)} PCU/hr，` +
-        `最低為 ${sorted.at(-1)!.label} ${num(sorted.at(-1)!.value, digits)} PCU/hr，` +
-        `${points.length} 筆平均 ${num(mean, digits)} PCU/hr。` +
-        `（各路口的尖峰小時不一定相同，此處僅比較大小，不做加總。）`,
+        `最低為 ${sorted.at(-1)!.label} ${num(sorted.at(-1)!.value, digits)} PCU/hr。` +
+        `（各路口的尖峰小時不一定相同，此處僅比較大小，不做加總，也不取平均。）`,
     );
+    if (sorted.length <= EXTREME_LINE_LIMIT)
+      for (const point of sorted)
+        lines.push(
+          `　　・${point.label}：${num(point.value, digits)} PCU/hr`,
+        );
+    else
+      lines.push(
+        `　　（共 ${sorted.length} 筆，逐筆列出過長，此處不列；` +
+          `不同路口、季別與日別的流量不可以相加，也不取平均，` +
+          `要看個別數值請縮小路口或季度範圍後重新產生。）`,
+      );
   }
   return lines;
 }
@@ -826,8 +967,64 @@ export function buildConclusion(
         ? `敘述時段：${peaks.map((p) => PEAK_LABEL[p]).join("、")}。`
         : "敘述時段：不敘述尖峰時段，只寫全調查時段的數值。"),
   );
-  if (condition.branchNames.length)
-    out.push(`只敘述指定支線：${condition.branchNames.join("、")}。`);
+  /*
+   * ── 條件與「不適用」一定要寫進草稿本身（使用者 2026-09-15）──────
+   *
+   * ⚠️ 這段文字會被整段貼進報告，而報告上看不到畫面——
+   *   看報告的人無從得知這些數字是「只算左轉」還是「全部轉向」。
+   * ⚠️ 「尖峰時段判定方式」則是**這一份草稿做不到的條件**，必須明講：
+   *   草稿的每一筆紀錄要同時提供上午／下午／全調查時段三個時段的數字，
+   *   而「各方向各自認定」是逐時段各自重新挑尖峰、每個時段得到一份
+   *   不同的紀錄——一筆紀錄裝不下三份。所以這裡一律是
+   *   「整個調查點同一時段」，也就是**可以相加**的那一種。
+   *   不寫的話，同一批資料在報告文字草稿與結論草稿會給出不同的尖峰量，
+   *   而兩份都看起來很合理。
+   */
+  out.push(
+    "統計條件：轉向別＝" +
+      (condition.movement === "left"
+        ? "左轉"
+        : condition.movement === "through"
+          ? "直行"
+          : condition.movement === "right"
+            ? "右轉"
+            : "全部轉向") +
+      "；車種＝" +
+      (meta.vehicleLabel || "全部車種") +
+      `；數值小數 ${digits} 位。`,
+  );
+  out.push(
+    "本數值不適用「尖峰時段判定方式」條件：結論草稿一律以「整個調查點同一時段」" +
+      "計算（各支線的尖峰在同一小時，可以相加）。要看「各方向各自認定自己的尖峰」" +
+      "的結果，請改用「成果交付」裡的報告文字草稿，或畫面上的路口轉向圖。",
+  );
+  out.push(
+    "本數值不適用「顯示數值」條件：草稿裡每一句各自標明自己的單位" +
+      "（PCU/hr、輛、%），不跟著主工具列的「顯示數值」切換。",
+  );
+  if (condition.branchNames.length) {
+    /*
+     * ⚠️ 不可以直接把 condition.branchNames 印出來。
+     *   它存的是 typedNameKey() 的輸出（小寫、去空白與標點），
+     *   直接印會變成「只敘述指定支線：路口a、路口b」——內部鍵值外洩到草稿裡，
+     *   而草稿是會被整段貼進報告的。
+     *   這裡回頭從實際挑到的資料取原本的名稱來寫；
+     *   一條都對不到時（例如舊範本指到已經改名的支線）才退回顯示鍵值，
+     *   那種情況本來就該讓使用者看見哪裡對不上。
+     */
+    const wanted = new Set(condition.branchNames.map(typedNameKey));
+    const shown = new Map<string, string>();
+    for (const record of chosen)
+      for (const peak of Object.values(record.peaks))
+        for (const branch of peak?.branches || []) {
+          const key = typedNameKey(branch.name);
+          if (wanted.has(key) && !shown.has(key)) shown.set(key, branch.name);
+        }
+    const names = condition.branchNames.map(function (value) {
+      return shown.get(typedNameKey(value)) ?? value;
+    });
+    out.push(`只敘述指定支線：${names.join("、")}。`);
+  }
   /* 沒有寫任何尖峰時，草稿裡不會出現 PCU/hr，這句說明反而讓人困惑。 */
   if (peaks.length)
     out.push(
@@ -845,7 +1042,7 @@ export function buildConclusion(
   if ((wantsBranchIn || wantsBranchOut) && peaks.length)
     out.push(
       "說明：各支線各車種輛數取自「車種組成分析」的『全調查時段道路方向車種數量』，" +
-        "單位是 輛／調查時段（整個調查期間的累計），不能和上面的 輛/hr 相比或相加；" +
+        "單位是 輛／調查時段（整個調查期間的累計），不能和尖峰的 輛/hr 相比或相加；" +
         /*
          * 只勾一個方向時，「呈現方式」那一項不會生效（雙向合計會把另一個
          * 方向的車也算進去，不是使用者要的）。這裡就照實寫出方向，
@@ -933,16 +1130,50 @@ export function buildConclusion(
     }
   } else {
     heading("整體結果");
-    for (const record of chosen.slice(0, 1)) {
-      out.push(`　代表紀錄：${recordTitle(record)}`);
-      for (const peak of peaks) out.push(...describePeak(record, peak, condition));
-      if (wants("composition")) out.push(...describeComposition(record, digits));
+    /*
+     * ⚠️ 稽核表 J：**代表紀錄不可以是「陣列的第一筆」**。
+     *
+     * 舊版寫 `chosen.slice(0, 1)`，而 selectRecords() 的排序是
+     * 「季度由小到大、再站號字典序」——所以那一筆是**最舊一季、站號最小**的。
+     * 報告要引用的通常是最新一季，挑法連方向都相反，而畫面上只寫著
+     * 「代表紀錄：…」，沒有人看得出它是怎麼挑的。
+     *
+     * 改成：取**最新一季**，而且把「怎麼挑的」與「沒有涵蓋到哪些」都寫出來。
+     * 系統仍然不替使用者決定要用哪一筆——它只是不再假裝「第一筆」是中立的。
+     * 這與 describeExtremes（稽核表 K／③）同一條規則：不取平均、不合計，
+     * 要嘛逐筆列出，要嘛講清楚這一行只代表哪一筆。
+     */
+    const representative = chosen.length
+      ? chosen.reduce(function (best, record) {
+          const diff = quarterKey(record.quarter) - quarterKey(best.quarter);
+          if (diff > 0) return record;
+          if (diff < 0) return best;
+          return record.station < best.station ? record : best;
+        })
+      : null;
+    if (representative) {
+      out.push(
+        `　代表紀錄：${recordTitle(representative)}` +
+          (chosen.length > 1 ? "（範圍內最新的一季；同季時取站號較小者）" : ""),
+      );
+      for (const peak of peaks)
+        out.push(...describePeak(representative, peak, condition));
+      if (wants("composition"))
+        out.push(...describeComposition(representative, digits));
     }
-    if (chosen.length > 1)
+    if (chosen.length > 1) {
+      const others = chosen
+        .filter((record) => record !== representative)
+        .map(recordTitle);
       out.push(
         `　（範圍內共 ${chosen.length} 筆；支線與車種這類不能跨路口相加的數字，` +
-          `僅以上列這一筆為代表。要逐筆寫出請改選「依路口分段」或「依季度分段」。）`,
+          `僅以上列這一筆為代表，其餘 ${others.length} 筆沒有寫進這一段：` +
+          (others.length <= EXTREME_LINE_LIMIT
+            ? others.join("、")
+            : `${others.slice(0, EXTREME_LINE_LIMIT).join("、")} 等`) +
+          `。要逐筆寫出請改選「依路口分段」或「依季度分段」。）`,
       );
+    }
   }
 
   if (wants("extremes") && condition.grouping !== "byQuarter") {

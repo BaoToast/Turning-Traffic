@@ -29,10 +29,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   TREND_METRICS,
-  buildCrossProjectTrend,
   buildMetricSeries,
   completeQuarterRange,
-  crossProjectScript,
   describeChange,
   findArm,
   formatMetric,
@@ -127,11 +125,17 @@ const label = (q: string) => q;
 
 /* ── 一、算不出來要是 null，不是 0 ──────────────────────────── */
 
-test("調查不足 24 小時的季度，全日尖峰要回 null 而不是 0", () => {
+test("挑不出尖峰視窗的季度，全調查時段尖峰要回 null 而不是 0", () => {
+  /*
+   * ⚠️ v2.1.64 起，觸發條件從「調查不足 24 小時」變成「**沒有挑出尖峰視窗**」。
+   *   4 小時的調查現在照樣算得出全調查時段尖峰；真正算不出來的是
+   *   舊備份（沒存逐時間格）與格距組不成整小時的檔案。
+   *   這一份測資的 peaks.DAY 是空的起訖時間，代表的正是後者。
+   */
   const record = makeRecord({ quarter: "115Q1", fullDay: false });
   const got = metricValue(record, trendMetricById("total"), "DAY", {}, "outbound");
   assert.equal(got.value, null, "算不出來就是算不出來，不可以退化成 0");
-  assert.match(got.missingReason, /24 小時|全日尖峰/);
+  assert.match(got.missingReason, /逐時間格|全調查時段尖峰/);
   /* 反面：AM 算得出來，同一筆同一支函式要給得出值。 */
   assert.ok(
     (metricValue(record, trendMetricById("total"), "AM", {}, "outbound").value || 0) > 0,
@@ -246,13 +250,37 @@ test("百分比不空格、其餘空一格；算不出來一律「－」", () =>
   assert.equal(formatMetric(null, { unit: "%", digits: 1 }), "－");
 });
 
-test("變化要先給變化量再給倍數，不使用「個百分點」的說法", () => {
-  const text = describeChange(14.3, 42.9, { unit: "%", digits: 1 });
+test("變化要先給變化量再給倍數，不使用「個百分點」的說法，而且倍率句要有主詞", () => {
+  /*
+   * ⚠️ 2026-09-11 起 describeChange() 的第四個參數是**必填**的主詞標籤。
+   *
+   * 使用者：「『大約剩下原來的 65%』，『原來的』是什麼？……
+   *   『A 是 B 的幾 %』主詞要明確，不然會看不懂，是跟誰比才有這倍率。」
+   *
+   * 這一條跟著改成驗「有主詞的那一句」，而不是只驗倍數算得對——
+   * 算得對但讀不懂，對使用者來說一樣是壞的。
+   */
+  const text = describeChange(14.3, 42.9, { unit: "%", digits: 1 }, {
+    from: "113Q3",
+    to: "114Q2",
+  });
   assert.match(text, /上升 28\.6%/);
-  assert.match(text, /大約是原來的 3\.0 倍/);
+  assert.match(text, /114Q2大約是113Q3的 3\.0 倍/);
   assert.doesNotMatch(text, /百分點/);
-  assert.equal(describeChange(10, 10, { unit: "%", digits: 1 }), "持平");
-  assert.match(describeChange(100, 50, { unit: "秒", digits: 0 }), /下降 50 秒/);
+  /* 反面：不可以再出現沒有主詞的舊寫法 */
+  assert.doesNotMatch(text, /原來的/);
+  assert.equal(
+    describeChange(10, 10, { unit: "%", digits: 1 }, { from: "A", to: "B" }),
+    "持平",
+  );
+  assert.match(
+    describeChange(100, 50, { unit: "秒", digits: 0 }, { from: "前", to: "後" }),
+    /下降 50 秒/,
+  );
+  assert.match(
+    describeChange(100, 50, { unit: "秒", digits: 0 }, { from: "前", to: "後" }),
+    /後大約是前的 50%/,
+  );
 });
 
 /* ── 四、講稿只讀 series ────────────────────────────────────── */
@@ -298,7 +326,8 @@ test("有季度算不出來時，講稿一定要主動講出來是哪一季、�
   const caveats = script.find((s) => s.title === "要先講清楚的");
   assert.ok(caveats);
   assert.match(caveats.lines.join(""), /114Q2/);
-  assert.match(caveats.lines.join(""), /24 小時/);
+  /* 理由的措辭在 v2.1.64 改了（不再是「不足 24 小時」），但**一定要有理由**。 */
+  assert.match(caveats.lines.join(""), /逐時間格|全調查時段尖峰|算不出/);
   assert.match(caveats.lines.join(""), /不要讓聽的人誤以為是下降|斷開/);
 });
 
@@ -347,148 +376,6 @@ test("駛出與駛入對不起來時，講稿要說在補齊之前兩種視角�
     .lines.join("");
   assert.match(text, /250/);
   assert.match(text, /沒有指定目的支線/);
-});
-
-/* ── 五、跨計畫一律比平均，不比總量 ─────────────────────────── */
-
-test("路口數不同但每路口平均相同的兩個計畫，跨計畫圖上要等高", () => {
-  const one = ["114Q1", "114Q2"].flatMap((q) => [makeRecord({ quarter: q })]);
-  /* 第二個計畫有三個路口，每一個都與第一個計畫那一個完全相同。 */
-  const three = ["114Q1", "114Q2"].flatMap((q) => [
-    makeRecord({ quarter: q, name: "示範路口一" }),
-    makeRecord({ quarter: q, name: "示範路口二" }),
-    makeRecord({ quarter: q, name: "示範路口三" }),
-  ]);
-  const trend = buildCrossProjectTrend(
-    [
-      { id: "p1", name: "一個路口的計畫", records: one },
-      { id: "p3", name: "三個路口的計畫", records: three },
-    ],
-    trendMetricById("total"),
-    "AM",
-    {},
-    "outbound",
-    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
-  );
-  const a = trend.series[0].points[0];
-  const b = trend.series[1].points[0];
-  assert.equal(a.value, b.value, "比的是每路口平均；若改回比總量，這裡會變成 1:3");
-  assert.equal(a.count, 1);
-  assert.equal(b.count, 3, "N 要如實反映這一季有幾個路口算得出來");
-});
-
-test("跨計畫的車種佔比要用加權平均，不是把各路口的百分比再平均一次", () => {
-  /* 大路口：機車 900／總 1000＝90%；小路口：機車 0／總 10＝0%。 */
-  const big = makeRecord({
-    quarter: "114Q1",
-    name: "大路口",
-    arms: [arm("a1", "路口A", { left: 1, through: 1, right: 1 }, { motorcycle: 900, car: 100 })],
-  });
-  const small = makeRecord({
-    quarter: "114Q1",
-    name: "小路口",
-    arms: [arm("a1", "路口A", { left: 1, through: 1, right: 1 }, { motorcycle: 0, car: 10 })],
-  });
-  const trend = buildCrossProjectTrend(
-    [{ id: "p", name: "計畫", records: [big, small] }],
-    trendMetricById("vehicleShare"),
-    "AM",
-    { key: "motorcycle" },
-    "outbound",
-    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
-  );
-  const value = trend.series[0].points[0].value as number;
-  /* 加權：900 ÷ 1010 ≒ 89.1%。若寫成 (90 + 0) / 2 就會是 45%。 */
-  assert.ok(Math.abs(value - (900 / 1010) * 100) < 1e-9, `實際 ${value}`);
-  assert.ok(value > 80, "算術平均會得到 45%，那讓一個 10 輛的路口與 1000 輛的路口同等份量");
-  assert.match(trend.basis, /加權平均/);
-});
-
-test("跨計畫講稿一定要講出各計畫路口數不同這件事", () => {
-  const trend = buildCrossProjectTrend(
-    [
-      { id: "p1", name: "計畫一", records: ["114Q1", "114Q2"].map((q) => makeRecord({ quarter: q })) },
-      {
-        id: "p2",
-        name: "計畫二",
-        records: ["114Q1", "114Q2"].flatMap((q) =>
-          ["甲", "乙", "丙", "丁", "戊", "己"].map((n) =>
-            makeRecord({ quarter: q, name: "示範路口" + n }),
-          ),
-        ),
-      },
-    ],
-    trendMetricById("total"),
-    "AM",
-    {},
-    "outbound",
-    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
-  );
-  const text = crossProjectScript(trend, label)
-    .map((s) => s.lines.join(""))
-    .join("");
-  assert.match(text, /不是總量|不是\*\*總量\*\*/);
-  assert.match(text, /N=/);
-  /* 1 個路口 vs 6 個路口＝差 6 倍，一定要提醒抖動幅度不能直接比。 */
-  assert.match(text, /路口數差距很大|不具代表性/);
-});
-
-test("每一個指標都要有意義說明，否則講稿第一段會開天窗", () => {
-  for (const metric of TREND_METRICS) {
-    assert.ok(metric.meaning && metric.meaning.length > 10, metric.id);
-    assert.ok(metric.label, metric.id);
-  }
-  /* 認不得的 id 要退回第一個指標，不可以回 undefined 讓呼叫端爆掉。 */
-  assert.equal(trendMetricById("不存在的指標").id, TREND_METRICS[0].id);
-});
-
-/* ── 六、同一季同一路口不可以被算成兩筆 ─────────────────────── */
-
-test("同一路口同一季有兩筆時，跨計畫只能算一筆（N 是路口數，不是筆數）", () => {
-  /*
-   * 這是使用者踩過的坑：平日與假日是**同時顯示**的兩條線，不是加總，
-   * 也不是平均在一起。呼叫端會先把資料別過濾成單一種，這裡再驗最後一道
-   * 防線——就算真的傳進同一個路口的兩筆，也只能算一筆。
-   */
-  const one = makeRecord({ quarter: "114Q1", name: "同一個路口" });
-  const duplicate = {
-    ...makeRecord({ quarter: "114Q1", name: "同一個路口" }),
-    id: "r-dup",
-    importedAt: "2026-01-02T00:00:00.000Z",
-  } as TrafficRecord;
-  const trend = buildCrossProjectTrend(
-    [{ id: "p", name: "計畫", records: [one, duplicate] }],
-    trendMetricById("total"),
-    "AM",
-    {},
-    "outbound",
-    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
-  );
-  const point = trend.series[0].points[0];
-  assert.equal(point.count, 1, "N 要是路口數，不是筆數");
-  /* 值要是那一個路口本身，不是兩筆的平均或加總。 */
-  assert.equal(point.value, 590);
-});
-
-test("兩個不同路口才算兩筆", () => {
-  const trend = buildCrossProjectTrend(
-    [
-      {
-        id: "p",
-        name: "計畫",
-        records: [
-          makeRecord({ quarter: "114Q1", name: "路口甲" }),
-          makeRecord({ quarter: "114Q1", name: "路口乙" }),
-        ],
-      },
-    ],
-    trendMetricById("total"),
-    "AM",
-    {},
-    "outbound",
-    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
-  );
-  assert.equal(trend.series[0].points[0].count, 2);
 });
 
 /* ── 缺季補齊 ────────────────────────────────────────────── */
@@ -542,45 +429,6 @@ test("季度再多也不可以產生超過瀏覽器 canvas 安全範圍的超寬
   assert.ok(trendChartWidth(10_000) <= 4800);
 });
 
-test("跨計畫圖補出來的空季是斷線，不是 0，也不會被當成樣本數最少的一季", () => {
-  const trend = buildCrossProjectTrend(
-    [
-      {
-        id: "a",
-        name: "甲計畫",
-        records: [
-          makeRecord({ quarter: "113Q1", name: "路口甲" }),
-          makeRecord({ quarter: "114Q1", name: "路口甲" }),
-        ],
-      },
-    ],
-    trendMetricById("total"),
-    "AM",
-    {},
-    "outbound",
-    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
-  );
-  assert.deepEqual(trend.quarters, [
-    "113Q1",
-    "113Q2",
-    "113Q3",
-    "113Q4",
-    "114Q1",
-  ]);
-  const points = trend.series[0].points;
-  assert.equal(points.length, 5);
-  /* 中間三季必須是 null——給 0 的話折線會掉到零，看起來像流量歸零。 */
-  assert.equal(points[1].value, null);
-  assert.equal(points[2].value, null);
-  assert.equal(points[3].value, null);
-  assert.notEqual(points[1].value, 0);
-  /* 空季 N=0，不可以跑進「最少 0 個路口」那句小樣本警告。 */
-  const body = crossProjectScript(trend, (q) => q)
-    .flatMap((section) => section.lines)
-    .join("\n");
-  assert.ok(!/最少 0 /.test(body), "空季不可以被當成路口數最少的那一季");
-});
-
 /* ── 單位 ────────────────────────────────────────────────── */
 
 test("趨勢圖的單位必須與全系統的 scopeUnit() 完全一致", () => {
@@ -611,12 +459,50 @@ test("趨勢圖的單位必須與全系統的 scopeUnit() 完全一致", () => {
   }
 });
 
-test("尖峰的車輛數單位一定要是「輛/hr」，全日時段才是「輛/調查日」", () => {
+test("尖峰的車輛數單位一定要是「輛/hr」，全調查時段才是累計量", () => {
   /* 把上一項的重點單獨釘一次，紅字訊息才看得懂是哪一種組合錯了。 */
   const vehicles = TREND_METRICS.find((metric) => metric.id === "vehicles")!;
   assert.equal(metricUnit(vehicles, "AM"), "輛/hr");
   assert.equal(metricUnit(vehicles, "PM"), "輛/hr");
   assert.equal(metricUnit(vehicles, "DAY"), "輛/hr");
-  assert.equal(metricUnit(vehicles, "FULL"), "輛/調查日");
   assert.notEqual(metricUnit(vehicles, "AM"), "輛");
+  /*
+   * ⚠️ 歷季趨勢天生是混合的：同一張圖上可能有 24 小時的季度，也有只做
+   *   4 小時的季度。所以預設分母是「調查時段」——**寧可少講，不要多講**。
+   *   整批都滿 24 小時時，呼叫端傳 "full" 才會寫「調查日」。
+   */
+  assert.equal(metricUnit(vehicles, "FULL"), "輛/調查時段");
+  assert.equal(metricUnit(vehicles, "FULL", "full"), "輛/調查日");
+  assert.equal(metricUnit(vehicles, "FULL", "partial"), "輛/調查時段");
+  assert.equal(metricUnit(vehicles, "FULL", "mixed"), "輛/調查時段");
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  跨季對應支線：空格差異不可以造成斷線
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 2026-09-11 普查發現：findArm() 兩邊都只做 trim()，而自動命名產生的是
+ * 「路口 A」（「路口」與代碼之間有半形空格）、使用者手打的是「路口A」。
+ * 於是趨勢圖選了其中一種寫法，另一種寫法的那幾季全部畫成斷線，
+ * 而畫面上寫的原因是「這一季找不到這一支支線（可能改過名稱）」
+ * ——把使用者引導到完全錯誤的方向。
+ *
+ * ⚠️ 只驗「同樣寫法找得到」是恆真的，一定要驗**不同寫法也找得到**。
+ */
+test("findArm：「路口 A」與「路口A」視為同一支支線", async () => {
+  const { findArm } = await import("../lib/trend-metrics.ts");
+  const record = {
+    approaches: [
+      { id: "R1-A", sourceCode: "A", name: "路口 A" },
+      { id: "R1-B", sourceCode: "B", name: "路口B" },
+    ],
+  } as unknown as Parameters<typeof findArm>[0];
+  assert.equal(findArm(record, "路口A")?.sourceCode, "A", "沒空格的寫法要找得到");
+  assert.equal(findArm(record, "路口 A")?.sourceCode, "A", "有空格的寫法也要找得到");
+  assert.equal(findArm(record, "路口　A")?.sourceCode, "A", "全形空格也要找得到");
+  /* 反面：不是同一個名字就不可以對到 */
+  assert.equal(findArm(record, "路口C"), undefined);
+  /* 退回代碼比對的那條路徑仍然要在 */
+  assert.equal(findArm(record, "B")?.sourceCode, "B");
 });

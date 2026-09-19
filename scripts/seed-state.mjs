@@ -27,7 +27,35 @@ function vehicleSplit(total, rnd) {
   return out;
 }
 
-function buildRecord({ id, station, name, arms, quarter, projectId, seed }) {
+function buildRecord({
+  id,
+  station,
+  name,
+  arms,
+  quarter,
+  projectId,
+  seed,
+  /*
+   * ⚠️ 刻意製造一筆「總數不一致」的異常。
+   *
+   * 使用者 2026-09-13 要求「檢查結果」要有類型標籤篩選，而
+   * **「可多選」這一條只有在測資造得出兩種以上類型時才驗得到**。
+   * 原本的種子資料只會產生「尖峰時段異常」一種，守門的多選那一段
+   * 等於永遠沒跑到——那正是最糟的假通過。
+   *
+   * 這裡讓其中一個路口的轉向合計與逐條流向加總差 5 PCU，
+   * 觸發 lib/traffic.ts 的 conservation 檢查（容差 0.11）。
+   */
+  /*
+   * ⚠️ 刻意讓其中一筆沒有調查日期 → 觸發「缺值」類型。
+   *
+   * 使用者 2026-09-13 要求「檢查結果」要有類型標籤篩選，而
+   * **「可多選」這一條只有在測資造得出兩種以上類型時才驗得到**。
+   * 原本的種子資料只會產生「尖峰時段異常」一種，守門的多選那一段
+   * 等於永遠沒跑到——那正是最糟的假通過。
+   */
+  missingDate = false,
+}) {
   const rnd = seeded(seed);
   const approaches = arms.map((code, index) => ({
     id: `${id}-${code}`,
@@ -81,6 +109,7 @@ function buildRecord({ id, station, name, arms, quarter, projectId, seed }) {
       move.rawVehicleTotal = Object.values(move.vehicle).reduce((sum, value) => sum + value, 0);
     }
 
+
   return {
     id,
     projectId,
@@ -89,7 +118,7 @@ function buildRecord({ id, station, name, arms, quarter, projectId, seed }) {
     name,
     rawName: name,
     quarter,
-    date: "2026-05-04",
+    date: missingDate ? "" : "2026-05-04",
     surveyType: "路口轉向",
     pceVersion: "training-1060310",
     peaks: { AM: { start: "07:15", end: "08:15" }, PM: { start: "17:30", end: "18:30" } },
@@ -126,7 +155,7 @@ const state = {
   activeProjectId: projectId,
   records: [
     buildRecord({ id: "R1", station: "S01-03", name: "示範1－示範一路口", arms: ["A", "B", "C", "D"], quarter: "115Q2", projectId, seed: 7 }),
-    buildRecord({ id: "R2", station: "S01-01", name: "示範1－示範交流道路口", arms: ["A", "B", "C", "D", "E", "F", "G"], quarter: "115Q2", projectId, seed: 11 }),
+    buildRecord({ id: "R2", station: "S01-01", name: "示範1－示範交流道路口", arms: ["A", "B", "C", "D", "E", "F", "G"], quarter: "115Q2", projectId, seed: 11, missingDate: true }),
     buildRecord({ id: "R3", station: "S01-03", name: "示範1－示範一路口", arms: ["A", "B", "C", "D"], quarter: "115Q1", projectId, seed: 13 }),
   ],
   nameMap: {},
@@ -142,7 +171,6 @@ const state = {
   vehicleCatalog: VEHICLES,
   vehicleMappings: {},
   formatMemories: [],
-  vehicleSchemes: [],
   recordRevisions: [],
 };
 

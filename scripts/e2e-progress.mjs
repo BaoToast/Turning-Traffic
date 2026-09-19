@@ -108,7 +108,7 @@ const go = async (label) => {
   await page.waitForTimeout(600);
 };
 
-await go("多計畫管理");
+await go("建立與管理計畫");
 await page.locator(".project-form input").nth(0).fill("115-PROG");
 await page.locator(".project-form input").nth(1).fill("進度提示測試計畫");
 await page.locator('button:has-text("建立計畫")').click();

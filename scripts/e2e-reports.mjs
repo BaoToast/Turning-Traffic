@@ -68,11 +68,19 @@ const savedFactor = await page.evaluate(async () => {
 ok("修改後的當量有寫入儲存", Number(savedFactor) === 1.8, String(savedFactor));
 
 // ── 需求5：報表匯出項目自選 ────────────────────────────────
-await go("報表與批次輸出");
+await go("成果交付");
 const itemCount = await page.locator(".report-items-grid label").count();
 ok("匯出項目清單有列出可分析項目", itemCount >= 8, `${itemCount} 項`);
 
+/*
+ * ⚠️ X-61（2026-09-17）：勾選那一排在「成果交付」，下載鈕在「批次輸出」，
+ *   兩者已經是**不同的大分頁**。所以 pick 與 download 各自先切到自己那一頁——
+ *   少了這一步，第二次 pick 會在批次輸出頁上找不到勾選清單而卡住。
+ *   （這也正是使用者擔心的「拆開之後彼此還有沒有關聯」：有，
+ *     而畫面上已經用兩顆「到『成果交付』調整」的鈕把它寫出來了。）
+ */
 const pick = async (labels) => {
+  await go("成果交付");
   // 先全部取消，再勾指定項目
   await page.locator('.report-items-actions button:has-text("全部取消")').click();
   await page.waitForTimeout(300);
@@ -82,6 +90,7 @@ const pick = async (labels) => {
   }
 };
 const download = async () => {
+  await go("批次輸出");
   const wait = page.waitForEvent("download");
   await page.locator('button:has-text("下載新版 .xlsx")').first().click();
   const dl = await wait;
@@ -105,6 +114,7 @@ ok("駛出表欄位只含駛出量，不含駛入量",
   headA.join(","));
 
 // 存成範本
+await go("成果交付");
 await page.locator(".report-template-create input").fill("A計畫－只要駛出尖峰流量");
 await page.locator('.report-template-create button:has-text("儲存目前勾選")').click();
 await page.waitForTimeout(500);
@@ -129,6 +139,7 @@ ok("C計畫：匯出車種組成＋駛出尖峰流量兩張表",
   bookC.SheetNames.join("、"));
 
 // 全選：所有項目都要有對應工作表
+await go("成果交付");
 await page.locator('.report-items-actions button:has-text("全選")').click();
 await page.waitForTimeout(400);
 const bookAll = await download();
@@ -143,6 +154,7 @@ ok("當量工作表標示新增車種的來源說明",
   JSON.stringify(truck?.["來源"]));
 
 // 套用範本 → 勾選整組還原
+await go("成果交付");
 await page.locator('.report-template-row:has-text("A計畫") button:has-text("套用")').click();
 await page.waitForTimeout(500);
 const restored = await page.evaluate(() =>
@@ -155,7 +167,7 @@ ok("套用範本後勾選完整還原",
 
 // 勾選記在計畫上：切到別的頁面再回來仍在
 await go("總覽儀表板");
-await go("報表與批次輸出");
+await go("成果交付");
 const persisted = await page.evaluate(async () => {
   const state = JSON.parse((await window.__readState()) || "{}");
   return { onProject: state.projects?.[0]?.reportItems, templates: (state.reportTemplates || []).length };
@@ -168,6 +180,7 @@ ok("報表範本已寫入儲存", persisted.templates === 1, `${persisted.templa
 // 全部取消時要擋下並說明
 await page.locator('.report-items-actions button:has-text("全部取消")').click();
 await page.waitForTimeout(300);
+await go("批次輸出");
 const disabled = await page.locator('button:has-text("下載新版 .xlsx")').first().isDisabled().catch(() => false);
 await page.locator('button:has-text("下載新版 .xlsx")').first().click().catch(() => {});
 await page.waitForTimeout(700);

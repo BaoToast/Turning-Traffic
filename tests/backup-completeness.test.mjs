@@ -34,7 +34,7 @@ const MUST_TRAVEL = [
   "catalogByProject",
   "mappingsByProject",
   "formatMemories",
-  "vehicleSchemes",
+  /* ⚠️ vehicleSchemes（車種歸類方案）已於 2026-09-15 移除，見 lib/final-features.ts。 */
   "reportTemplatesByProject",
   "conclusionTemplatesByProject",
   "recordRevisions",
@@ -43,6 +43,12 @@ const MUST_TRAVEL = [
    * 還原之後每一季匯入都會再問一次同樣的問題（那正是使用者抱怨過的事）。
    */
   "movementPresence",
+  /*
+   * 路口名稱別名（改名後的「舊名＝新名」）。
+   * 沒帶走的話，換一台電腦之後每一季匯入都會重新問「這個路口要不要併入」——
+   * 與上面那一條是同一類毛病，使用者兩次都親自撞到過。
+   */
+  "intersectionAliases",
 ];
 
 /** 每一項都必須是「每個計畫各自一份」，不可以是全機共用的一份。 */

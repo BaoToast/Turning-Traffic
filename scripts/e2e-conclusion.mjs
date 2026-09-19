@@ -498,8 +498,17 @@ ok(
  */
 await go("結論草稿產生器");
 await page.waitForTimeout(500);
+/*
+ * ⚠️ 用**第二個** fieldset，不要用 legend 的字串比對。
+ *   legend 在 2026-09-15 從「二、時段與資料別」改成
+ *   「二、時段、資料別、轉向別與車種」（轉向別與車種從「六、敘述方式」
+ *   搬進來——它們是篩選條件不是排版選項），
+ *   寫死字串的選擇器當場對不上，而失敗訊息只會說「小標題不見了」。
+ *   這一區的**位置**是穩定的（一、統計範圍／二、時段…／三、路口／四、支線），
+ *   以位置定位才不會因為改名就紅。
+ */
 const subLabels = await page.$$eval(
-  ".conclusion-field:has-text('時段與資料別') .conclusion-sublabel",
+  ".conclusion-field:nth-of-type(2) .conclusion-sublabel",
   (els) => els.map((el) => el.textContent.trim()),
 );
 ok(
@@ -533,9 +542,23 @@ if (await surveyTypeSelect.count()) {
   // 換到別的分頁再回來，確認真的寫進資料而不是只改了畫面
   await go("結論草稿產生器");
   await page.waitForTimeout(600);
+  /*
+   * 理由同上：以位置定位，不比 legend 的字串。
+   *
+   * ⚠️ 而且**不可以用 `:last-of-type`**：它比的是「同型別（div）的最後一個」，
+   *   不是「最後一個 .conclusion-checks」。這一格 2026-09-15 多了一個
+   *   `.conclusion-filter-row`（轉向別與車種）也是 div，於是 `:last-of-type`
+   *   跳去挑那一格，資料別一個都讀不到——而失敗訊息只會說「資料別不見了」。
+   *   改成把全部 .conclusion-checks 取出來、在 JS 裡拿最後一組。
+   */
   const typesNow = await page.$$eval(
-    ".conclusion-field:has-text('時段與資料別') .conclusion-checks:last-of-type label",
-    (els) => els.map((el) => el.textContent.trim()),
+    ".conclusion-field:nth-of-type(2) .conclusion-checks",
+    (groups) => {
+      const last = groups[groups.length - 1];
+      return last
+        ? [...last.querySelectorAll("label")].map((el) => el.textContent.trim())
+        : [];
+    },
   );
   ok(
     "更正後的資料別會出現在結論草稿的條件選項裡",
@@ -585,11 +608,46 @@ await page.waitForTimeout(500);
 /* ── 核對工作台可以自己換路口 ── */
 await go("流量核對工作台");
 await page.waitForTimeout(700);
-const picker = page.locator(".audit-picker select").first();
+/*
+ * ⚠️ 這裡一定要**指名 label 是「路口」**的那一個 select，不可以用 .first()。
+ *
+ * 實際踩到的坑（v2.1.64）：這一頁補上「資料季度」就地切換之後，
+ * `.audit-picker` 裡的第一個 select 變成季度，而 .first() 照樣抓得到、
+ * 照樣選得動、後面「換路口之後 OD 換算表跟著換」也照樣通過——
+ * 因為換季度一樣會換掉那張表。真正發生的事是**這一段從此沒有在測換路口**，
+ * 而且它把全站共用的季度改掉了，後面拿「車種組成分析頁」與草稿逐字比對的
+ * 那一項因此比到不同季的資料，紅在無辜的地方。
+ *
+ * 舊的斷言 `(await picker.count()) === 1` 也是假的：picker 已經 .first()，
+ * count() 永遠是 0 或 1，這一項不可能紅。改成先確認這一頁**同時**有
+ * 「資料季度」與「路口」兩個下拉，再各自指名取用。
+ */
+const pickerLabels = await page.locator(".audit-picker label").allInnerTexts();
+ok(
+  "核對工作台同時有季度與路口兩個下拉",
+  pickerLabels.some((t) => t.startsWith("資料季度")) &&
+    pickerLabels.some((t) => t.startsWith("路口")),
+  pickerLabels.map((t) => t.split("\n")[0]).join("、"),
+);
+const picker = page
+  .locator(".audit-picker label")
+  .filter({ hasText: /^路口/ })
+  .locator("select")
+  .first();
 ok("核對工作台有路口選擇器", (await picker.count()) === 1);
 if (await picker.count()) {
   const options = await picker.locator("option").allTextContents();
   ok("路口選擇器列出本季的路口", options.length >= 2, `${options.length} 個：${options.join("、").slice(0, 70)}`);
+  /*
+   * 選項必須真的是路口（站號＋全形空白＋路口名），不是季度。
+   * 這一項就是上面那個坑會踩紅的地方——季度選項長「111Q3（1 路口）」，
+   * 沒有站號分隔的全形空白。
+   */
+  ok(
+    "路口選擇器列的是路口而不是季度",
+    options.every((t) => /\u3000/.test(t)),
+    options.slice(0, 3).join("、"),
+  );
   const titleBefore = await page.locator(".panel-head h2, .audit-panel h2").first().innerText().catch(() => "");
   await picker.selectOption({ index: 1 });
   await page.waitForTimeout(800);

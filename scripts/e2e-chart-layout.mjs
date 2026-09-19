@@ -249,6 +249,8 @@ async function measure(stripStyle) {
       blanks: texts.filter((t) => !String(t.text).trim()).length,
       xLabels: texts.filter((t) => t.cls === "x-label").map((t) => t.text),
       pointValues: texts.filter((t) => t.cls === "point-value").map((t) => t.text),
+      /* 每個資料點都要帶 data-value（守門的參照物，與標籤顯示與否無關） */
+      dataValues: [...svg.querySelectorAll("circle[data-value]")].length,
       yTitle: texts.filter((t) => t.cls === "y-axis-title").map((t) => t.text)[0] || "",
       axisTitles: texts.filter((t) => t.cls === "axis-title").map((t) => t.text),
       hasStyle: Boolean(svg.querySelector("style")),
@@ -277,12 +279,34 @@ ok(
   screen.view?.[0] <= 4800,
   `${screen.view?.[0]}px`,
 );
+/*
+ * ⚠️ v2.1.64 起，資料點多的時候**數值標籤一個都不顯示**（改成滑鼠移上去才出現）。
+ * 使用者的原話：「資料一多，其實還是改成滑鼠移上去才顯示數值就很夠用，
+ * 這樣能一次解決標籤重疊的問題。」
+ * 所以這裡不能再要求「標籤數 ≥ 2」——0 個才是這個情境下的正確行為。
+ *
+ * 改成守兩件事：
+ *   ① X 軸標籤要抽樣（不可以 120 季印 120 個）
+ *   ② 標籤數不可以等於季數（等於就是完全沒抽樣，會疊成一片）
+ * 另外加一項：**每一個資料點都要有 data-value**——
+ * 那是守門反推驗證的參照物，也是使用者滑鼠移上去能看到數值的前提；
+ * 標籤可以不顯示，data-value 不能不在。
+ */
 ok(
-  "大量季度時 X 軸與數值標籤都要抽樣，不可全部擠在一起",
+  "大量季度時 X 軸標籤要抽樣，不可全部擠在一起",
   (screen.xLabels || []).length < quarters.length &&
-    (screen.pointValues || []).length < quarters.length &&
-    (screen.pointValues || []).length >= 2,
-  `X 軸 ${(screen.xLabels || []).length} 個／數值 ${(screen.pointValues || []).length} 個／共 ${quarters.length} 季`,
+    (screen.xLabels || []).length >= 2,
+  `X 軸 ${(screen.xLabels || []).length} 個／共 ${quarters.length} 季`,
+);
+ok(
+  "大量季度時數值標籤不可以每一季都印（會疊成一片）",
+  (screen.pointValues || []).length < quarters.length,
+  `數值標籤 ${(screen.pointValues || []).length} 個／共 ${quarters.length} 季`,
+);
+ok(
+  "每一個資料點都要帶 data-value（標籤可以不顯示，真值不能不在）",
+  (screen.dataValues || 0) >= 2,
+  `${screen.dataValues} 個帶 data-value 的資料點`,
 );
 ok(
   "畫面：最後一季一定要印出來（業主最在意「現在到哪了」）",
@@ -314,8 +338,13 @@ ok(
 );
 const vehiclePanel = await page.evaluate(() => ({
   unit: document.querySelector(".trend-chart .status-dot")?.textContent?.trim() || "",
+  /*
+   * 第一個資料點的真值。讀 data-value 而不是標籤——
+   * 標籤在資料點多的時候不再顯示（v2.1.64 起），讀標籤會拿到空字串，
+   * 底下那項「摘要要與圖上的點一致」就變成拿空字串去比對。
+   */
   firstPoint:
-    document.querySelector("#trend-svg text.point-value")?.textContent?.trim() || "",
+    document.querySelector("#trend-svg circle[data-value]")?.getAttribute("data-value") || "",
   firstSummary:
     document.querySelector(".trend-summary > div b")?.textContent?.trim() || "",
 }));
@@ -326,12 +355,26 @@ ok(
     !vehiclePanel.firstSummary.includes("PCU/hr"),
   JSON.stringify(vehiclePanel),
 );
-ok(
-  "右側摘要的數值要與圖上同一個實際車輛數資料點一致",
-  Boolean(vehiclePanel.firstPoint) &&
-    vehiclePanel.firstSummary.startsWith(vehiclePanel.firstPoint),
-  JSON.stringify(vehiclePanel),
-);
+{
+  /*
+   * 摘要是給人看的格式（有千分位、有單位），data-value 是原始數字，
+   * 所以要**取出數字再比**，不可以用 startsWith——
+   * 「5,456 輛/hr」不會以「5456」開頭。
+   * 容差取 1，吸收顯示端的四捨五入。
+   */
+  const summaryNumber = Number(
+    String(vehiclePanel.firstSummary).replace(/[^0-9.]/g, ""),
+  );
+  const pointNumber = Number(vehiclePanel.firstPoint);
+  ok(
+    "右側摘要的數值要與圖上同一個實際車輛數資料點一致",
+    Number.isFinite(summaryNumber) &&
+      Number.isFinite(pointNumber) &&
+      pointNumber > 0 &&
+      Math.abs(summaryNumber - pointNumber) <= 1,
+    JSON.stringify({ ...vehiclePanel, summaryNumber, pointNumber }),
+  );
+}
 
 /* 可編輯 Excel 內的原生圖表也必須跟著指標換標題與單位。 */
 const excelDownloadPromise = page.waitForEvent("download");
@@ -586,26 +629,27 @@ const axisCheck = await page.evaluate(() => {
   const vBottom = tickValues[tickValues.length - 1];
   const valueAt = (y) =>
     vBottom + ((yBottom - y) / (yBottom - yTop)) * (vTop - vBottom);
-  const dots = [...svg.querySelectorAll("circle")].filter(
-    (n) => Number(n.getAttribute("r")) === 7,
-  );
-  const labels = [...svg.querySelectorAll("text.point-value")].map((n) => ({
-    x: Number(n.getAttribute("x")),
-    value: Number(String(n.textContent).replace(/[^0-9.]/g, "")),
+  /*
+   * ⚠️ 真值一律讀資料點自己的 `data-value`，**不要讀畫面上的數值標籤**。
+   *
+   * v2.1.64 起，數值標籤在資料點多的時候不再永遠顯示（改成滑鼠移上去才出現，
+   * 使用者要求的，因為標籤在長期趨勢圖上必然互相重疊）。
+   * 舊寫法是抓 `text.point-value` 當參照物——標籤不在，這一整組斷言就
+   * 退化成「0 個點、誤差 0.0」的恆真狀態。**實測就是這樣紅在前置檢查的**，
+   * 那個前置檢查寫對了。
+   *
+   * 改讀 data-value 之後**比以前更強**：120 季那種密集情況以前根本驗不到
+   *（標籤被抽樣掉了），現在每一個點都驗得到。
+   *
+   * 這不會變成恆真：data-value 與圓點的 cy 是同一個運算式算出來的沒錯，
+   * 但這裡的 fromAxis 是**照格線反推**的，走的是另一套對應關係。
+   * v2.1.59 那種「點用 235、格線用 240」的錯照樣會讓兩者對不起來。
+   */
+  const dots = [...svg.querySelectorAll("circle[data-value]")];
+  const rows = dots.map((dot) => ({
+    labelled: Number(dot.getAttribute("data-value")),
+    fromAxis: valueAt(Number(dot.getAttribute("cy"))),
   }));
-  /* 長期間時數值標籤會抽樣；依 x 找所屬資料點，不可假設標籤與圓點一對一索引。 */
-  const rows = labels.map((label) => {
-    const dot = dots.reduce((nearest, candidate) =>
-      Math.abs(Number(candidate.getAttribute("cx")) - label.x) <
-      Math.abs(Number(nearest.getAttribute("cx")) - label.x)
-        ? candidate
-        : nearest,
-    );
-    return {
-      labelled: label.value,
-      fromAxis: valueAt(Number(dot.getAttribute("cy"))),
-    };
-  });
   const gap = Math.abs(lines[1] - lines[0]);
   return { rows, tickValues, gridGap: gap, span: vTop - vBottom };
 });

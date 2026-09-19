@@ -21,8 +21,17 @@
  *
  * ── 檢查方式 ──
  *
- * 掃出包裡所有符合本版檔名的手冊（.pdf 與 .docx），
+ * 掃出包裡所有符合本版檔名的手冊 PDF，
  * 逐一比對 SHA-256。只要有兩份不一樣就紅字，並印出各自的雜湊與位置。
+ *
+ * ⚠️ 這一支原本同時比對 .pdf 與 .docx。手冊自 v2.1.64 起**只出 PDF**
+ * （使用者：「使用手冊可以只提供PDF檔就好，WORD檔不是必須的」），
+ * Word 版的產生器與檔案都已移除，所以比對範圍縮到 PDF——
+ * 但它要守的性質**沒有變**：同一版手冊在包裡的每一份副本都必須來自同一次產生。
+ * 副本數量從 4 份（public 與根目錄各 pdf/docx）變成 2 份，
+ * 「public/ 更新了、根目錄忘了同步」這個實際踩過的坑照樣擋得住。
+ * 另外加一項：包裡不可以再出現任何 .docx 手冊——
+ * 舊檔沒刪乾淨的話，使用者會下載到一本停在舊版的手冊。
  *
  * 注意：PDF 內嵌產生時間，所以「同樣的 HTML 產生兩次」也會得到不同位元組。
  * 這正是要求各副本必須來自**同一次產生**（用複製，不是各自重跑）的原因；
@@ -62,10 +71,8 @@ function walk(dir, out = []) {
 }
 
 test("包裡每一份手冊副本都必須來自同一次產生", () => {
-  const base = `Turning-Traffic-${VERSION}-新手操作手冊`;
-  const files = walk(ROOT).filter((f) =>
-    [`${base}.pdf`, `${base}.docx`].includes(basename(f)),
-  );
+  const base = `路口轉向程式手冊_${VERSION}`;
+  const files = walk(ROOT).filter((f) => basename(f) === `${base}.pdf`);
   assert.ok(
     files.length > 0,
     "包裡找不到任何本版手冊——升版時可能忘了重新產生，或檔名對不上。",
@@ -74,14 +81,13 @@ test("包裡每一份手冊副本都必須來自同一次產生", () => {
   const byHash = new Map();
   for (const f of files) {
     const hash = createHash("sha256").update(readFileSync(f)).digest("hex");
-    const kind = f.endsWith(".pdf") ? "pdf" : "docx";
-    const key = kind + ":" + hash;
+    const key = "pdf:" + hash;
     if (!byHash.has(key)) byHash.set(key, []);
     byHash.get(key).push(relative(ROOT, f));
   }
 
   /* 同一種副檔名只能有一個雜湊。 */
-  for (const kind of ["pdf", "docx"]) {
+  for (const kind of ["pdf"]) {
     const groups = [...byHash.entries()].filter(([k]) => k.startsWith(kind + ":"));
     if (groups.length <= 1) continue;
     const detail = groups
@@ -94,4 +100,20 @@ test("包裡每一份手冊副本都必須來自同一次產生", () => {
         detail,
     );
   }
+});
+
+test("包裡不得殘留任何 Word 版手冊", () => {
+  /*
+   * 手冊自 v2.1.64 起只出 PDF。舊的 .docx 若沒刪乾淨，
+   * 檔名帶的是舊版號，內容也停在舊版——而它仍然會被上傳、仍然下載得到。
+   */
+  const stale = walk(ROOT)
+    .filter((f) => /新手操作手冊\.docx$/.test(basename(f)))
+    .map((f) => relative(ROOT, f));
+  assert.deepEqual(
+    stale,
+    [],
+    "包裡還留著 Word 版手冊，本專案已不再產生 .docx，請刪除：\n  " +
+      stale.join("\n  "),
+  );
 });

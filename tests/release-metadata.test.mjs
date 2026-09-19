@@ -58,11 +58,12 @@ test("更新紀錄沒有重複或倒序的版本號", () => {
 
 test("畫面上的手冊連結檔名帶著目前版本", async () => {
   const source = await readFile(new URL("../app/traffic-app.tsx", import.meta.url), "utf8");
-  for (const ext of ["pdf", "docx"])
-    assert.ok(
-      source.includes(`Turning-Traffic-${VERSION}-新手操作手冊.${ext}`),
-      `手冊 ${ext} 連結沒有跟著版本更新`,
-    );
+  assert.ok(
+    source.includes(`路口轉向程式手冊_${VERSION}.pdf`),
+    "手冊 PDF 連結沒有跟著版本更新",
+  );
+  /* 手冊自 v2.1.64 起只出 PDF，畫面上不可以再有 Word 連結。 */
+  assert.doesNotMatch(source, /新手操作手冊\.docx/, "畫面上又出現 Word 手冊連結");
 });
 
 /*

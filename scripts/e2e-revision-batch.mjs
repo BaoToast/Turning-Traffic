@@ -28,8 +28,12 @@ const SEED = JSON.parse(readFileSync(join(here, "seed-state.json"), "utf8"));
 
 const PORT = 8245;
 const FILES = 3;
-/* 與 lib/final-features.ts 的 REVISION_BATCH_LIMIT 對齊 */
-const BATCH_LIMIT = 30;
+/*
+ * ⚠️ 與 lib/final-features.ts 的 REVISION_BATCH_LIMIT 對齊。
+ *   2026-09-15 由 30 降到 8（畫面上的還原入口已移除，這份紀錄改為純維護用）。
+ *   兩邊寫死同一個數字是刻意的：改了一邊沒改另一邊，這一支會當場紅。
+ */
+const BATCH_LIMIT = 8;
 
 const problems = [];
 const ok = (label, condition, detail = "") => {
@@ -113,7 +117,7 @@ const browser = await chromium.launch(launchOptions());
     await page.locator(`nav button:has-text("${label}")`).first().click();
     await page.waitForTimeout(600);
   };
-  await go("多計畫管理");
+  await go("建立與管理計畫");
   await page.locator(".project-form input").nth(0).fill("A00-REV");
   await page.locator(".project-form input").nth(1).fill("還原點示範計畫");
   await page.locator('button:has-text("建立計畫")').click();
@@ -195,50 +199,66 @@ const browser = await chromium.launch(launchOptions());
     revisions[0]?.batchLabel || "（沒有 batchLabel）",
   );
 
-  /* ── 二、畫面上刪得掉，而且刪了不動資料 ── */
+  /* ── 二、畫面上**不可以**再出現還原點清單（2026-09-15 使用者要求移除）── */
+  /*
+   * ⚠️ 這一段原本驗的是「清單上有刪除鈕、有說明文字、刪了不動資料」。
+   *   2026-09-15 使用者裁示把整塊「版本差異與還原」從畫面移除：
+   *     「還原清單和還原此版本的按鈕，我是覺得使用者不會去使用，也不會去查看。
+   *       寧願直接刪除該季資料，重新匯入……如果你維護會用到，那一樣放在你
+   *       看的到的程式碼裡就好了，不用顯示給使用者看」
+   *     「我看不懂還原點會還原些什麼事情，不敢去賭」
+   *
+   *   所以這幾條**不是壞掉，是過時**：它們釘住的是已經被授權移除的介面。
+   *   直接刪掉會留下一個空洞（「有沒有真的移除」沒有人驗），
+   *   所以改成**反過來驗**：畫面上不可以再出現那些入口。
+   *
+   * ⚠️ 同時要驗**資料層照常運作**——使用者要的是「不要顯示給使用者看」，
+   *   不是「不要再產生還原點」。資料還在的證據就在上面第一段（還原點有建立、
+   *   涵蓋 3 個路口）與下面第三段（上限 8 次、整批進出）。
+   *   只驗「畫面上沒有」的話，「把還原點功能整個拿掉」也會變成綠的。
+   */
   await go("流量核對工作台");
   await page.waitForTimeout(1200);
-  const panelText = await page.evaluate(
-    () =>
-      document.querySelector(".audit-panel:last-of-type")?.innerText.replace(/\s+/g, " ") ??
-      document.body.innerText.replace(/\s+/g, " "),
+  const pageText = await page.evaluate(() =>
+    document.body.innerText.replace(/\s+/g, " "),
   );
   ok(
-    "還原點清單要說明「刪除不會影響現有資料」",
-    /刪除還原點不會影響現在畫面上的任何資料/.test(panelText),
-    panelText.slice(0, 90),
+    "畫面上不可以再有「版本差異與還原」那一塊",
+    (await page.locator('[data-testid="revision-history"]').count()) === 0,
+    `找到 ${await page.locator('[data-testid="revision-history"]').count()} 塊`,
   );
   ok(
-    `還原點清單要說明只保留最近 ${BATCH_LIMIT} 次操作`,
-    new RegExp(`最多保留最近 ${BATCH_LIMIT} 次操作`).test(panelText),
-    panelText.slice(0, 90),
+    "畫面上不可以再有「刪除這個還原點」按鈕",
+    (await page.locator('button:has-text("刪除這個還原點")').count()) === 0,
   );
-  const deleteButton = page.locator('button:has-text("刪除這個還原點")').first();
-  ok("要有「刪除這個還原點」按鈕", (await deleteButton.count()) > 0);
-
-  const before = await readState(page);
-  const beforeRecords = JSON.stringify(before?.records ?? []);
-  const clicked = (await deleteButton.count()) > 0;
-  if (clicked) {
-    await deleteButton.click();
-    await page.waitForTimeout(2500);
-  }
-  const after = await readState(page);
   ok(
-    "刪除還原點之後，還原點確實不見了",
-    batchCount(after) === 0,
-    `${batchCount(after)} 個批次`,
+    "畫面上不可以再有「還原此版本」按鈕",
+    (await page.locator('button:has-text("還原此版本")').count()) === 0,
+  );
+  ok(
+    "畫面上也不可以再留下還原點清單的說明文字",
+    !/刪除還原點不會影響現在畫面上的任何資料/.test(pageText),
+    pageText.slice(0, 80),
   );
   /*
-   * 沒有按到按鈕就不能算通過——否則「按鈕不存在」會讓這一項變成
-   * 恆真的假檢查（什麼都沒做，紀錄當然沒變）。
+   * ⚠️ 前置：這一頁要真的畫出來了。
+   *   整頁空白的話，上面四條「找不到」全部會變成恆真的假綠。
    */
   ok(
-    "刪除還原點不可以動到任何一筆紀錄",
-    clicked && JSON.stringify(after?.records ?? []) === beforeRecords,
-    clicked
-      ? `刪除前 ${(before?.records ?? []).length} 筆／刪除後 ${(after?.records ?? []).length} 筆`
-      : "沒有刪除鈕可以按，這一項不成立",
+    "前置：流量核對工作台真的畫出來了（空白的話上面四條恆真）",
+    pageText.length > 200,
+    `${pageText.length} 個字`,
+  );
+  /*
+   * ⚠️ 介面拿掉了，但**還原點資料照常產生**——這是使用者指定的：
+   *   「還原點資料本身照常繼續產生與保存……拿掉的只有畫面上那一顆
+   *     沒有人敢按的按鈕」。所以這裡再確認一次資料還在。
+   */
+  const still = await readState(page);
+  ok(
+    "⚠️ 介面拿掉了，但還原點資料**還在**（不是連功能一起刪掉）",
+    batchCount(still) > 0,
+    `${batchCount(still)} 個批次`,
   );
   ok("整段流程不可以有未捕捉的例外", errors.length === 0, errors.slice(0, 2).join(" | "));
   await context.close();
@@ -279,7 +299,7 @@ const browser = await chromium.launch(launchOptions());
   await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });
   await page.waitForTimeout(3000);
   /* 讀取後要有一次寫入，淘汰結果才會落地 */
-  await page.locator('nav button:has-text("多計畫管理")').first().click();
+  await page.locator('nav button:has-text("建立與管理計畫")').first().click();
   await page.waitForTimeout(600);
   await page.locator(".project-form input").nth(0).fill("A00-TRIM");
   await page.locator(".project-form input").nth(1).fill("上限測試");

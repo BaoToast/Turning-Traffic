@@ -253,13 +253,23 @@ test("匯出的圖檔名要帶資料別", () => {
     /zip\.file\(\s*\n\s*record\.station \+ "_" \+ peak \+ "\.png"/,
     "單檔 ZIP 的檔名少了資料別",
   );
-  const zipNames = [...appSource.matchAll(/zip\.file\(([\s\S]{0,400}?)\.png"/g)];
-  assert.ok(zipNames.length >= 2, "應該有兩處 ZIP 圖檔命名");
+  /*
+   * ⚠️ 只檢查「一筆一張、逐筆寫進 ZIP」的那幾處（body 裡有 record.station）。
+   *   v2.1.68 的「一鍵下載全部圖檔」另外會寫入幾何示意圖與圖卡排版，
+   *   它們是**目前選到的那一個路口一張**（selected.station），
+   *   一份 ZIP 裡只有一張，不可能同名互相覆蓋，也就沒有帶資料別的必要。
+   *   把它們一起要求會逼人在檔名裡塞一個沒有意義的欄位，
+   *   而真正要擋的「平日圖被假日圖覆寫」反而被稀釋掉。
+   */
+  const zipNames = [
+    ...appSource.matchAll(/zip\.file\(([\s\S]{0,400}?)\.png"/g),
+  ].filter(([, body]) => body.includes("record.station"));
+  assert.ok(zipNames.length >= 2, "應該有兩處逐筆寫入的 ZIP 圖檔命名");
   for (const [, body] of zipNames)
     assert.match(
       body,
       /record\.surveyType/,
-      "每一處 ZIP 圖檔命名都要帶 record.surveyType",
+      "每一處逐筆 ZIP 圖檔命名都要帶 record.surveyType",
     );
   for (const ext of ["svg", "png"])
     assert.match(
@@ -286,9 +296,37 @@ test("算不出來的統計範圍要寫「－」，不可以寫 0", () => {
     "車種組成明細仍在寫 0",
   );
   const computable = [...appSource.matchAll(/const computable =/g)];
-  assert.equal(computable.length, 3, "三處車種組成匯出都要判斷算不算得出來");
-  assert.match(appSource, /hasScopeValue\(record, scope\)/);
-  assert.match(appSource, /hasScopeValue\(record, compositionScope\)/);
+  assert.ok(
+    computable.length >= 5,
+    `匯出三處＋畫面兩處都要判斷算不算得出來（目前只有 ${computable.length} 處）`,
+  );
+  /*
+   * ⚠️ 這兩條在 v2.1.74（主工具列）之後要吃得下 viewRecord(record)。
+   *   「尖峰時段判定方式」上線後，畫面與匯出讀的是顯示用紀錄
+   *   `hasScopeValue(viewRecord(record), scope)`——判斷完全沒有拿掉，
+   *   只是換了一個引數寫法。守門要守的是「有沒有判斷」，
+   *   不是「有沒有照著某一種拼法寫」；寫死拼法只會逼人把判斷搬回去。
+   */
+  assert.match(appSource, /hasScopeValue\((?:viewRecord\()?record\)?, scope\)/);
+  assert.match(
+    appSource,
+    /hasScopeValue\((?:viewRecord\()?record\)?, compositionScope\)/,
+  );
+  /*
+   * ⚠️ v2.1.68 補的兩處是**畫面上**的。
+   *
+   * 舊版只有匯出判斷，畫面沒有：而上面 Segmented 的 disabledReason 是用
+   * current（整季全部路口）判斷的，只要整季裡有一個路口算得出來，
+   * 這個統計範圍就點得進來；但 KPI 的數字是從 selected（就那一個路口）
+   * 算的。於是「整季有人算得出來、我現在看的這一個算不出來」時，
+   * 選項是開的、KPI 寫 0 與 0.0%，而同一條件下 Excel 寫的是「－」。
+   * **0 會被直接抄進報告，被讀成「真的沒有車」。**
+   */
+  assert.match(
+    appSource,
+    /hasScopeValue\(selected, compositionScope\)/,
+    "畫面上的車種組成 KPI 也要逐筆判斷（不能只靠整季的 disabledReason）",
+  );
 });
 
 /* ── 季度：民國與西元都收，但一律存成民國年 ── */
@@ -369,10 +407,25 @@ test("切換鈕存在，而且季度選單的值一律是儲存值", () => {
    * 每次 render 換一個新函式的話那些 memo 等於失效，每次都要重組一整張 SVG。
    */
   assert.match(appSource, /const showQuarter = useCallback\(/);
+  /*
+   * ⚠️ 這一條在 v2.1.68 就過期了，但一直到 v2.1.70 才被發現。
+   *   v2.1.68 把 showQuarter 改成**同時**套兩層（期別寫法 ＋ 年份寫法），
+   *   相依也跟著多了 quarterLabels，這裡卻還寫著「只能是 yearStyle」，
+   *   於是 v2.1.68、v2.1.69 兩版交出去時這支測試是紅的。
+   *   守門過期比沒有守門更糟——它讓人以為那件事還被看著。
+   *
+   * ⚠️ 相依**必須兩個都有**：少 quarterLabels 會停在舊的期別文字，
+   *   少 yearStyle 會停在舊的年份寫法。
+   */
   assert.match(
     appSource,
-    /const showQuarter = useCallback\([\s\S]{0,200}?\n\s*\[yearStyle\],\n\s*\);/,
-    "showQuarter 的相依只能是 yearStyle",
+    /const showQuarter = useCallback\([\s\S]{0,400}?\n\s*\[quarterLabels, yearStyle\],\n\s*\);/,
+    "showQuarter 的相依必須同時有 quarterLabels 與 yearStyle",
+  );
+  assert.match(
+    appSource,
+    /quarterLabels\.labels\[value\] \?\? quarterInYearStyle\(value, yearStyle\)/,
+    "showQuarter 必須同時套上期別寫法與年份寫法兩層",
   );
   /*
    * <option> 的 value 一定要是儲存的季度。文字換成西元年、值也跟著換的話，
@@ -544,8 +597,48 @@ test("匯入路徑要接上範圍檢查，且不合格時不能按下選檔", ()
   );
   /* 不合格時輸入框下方要當場說明，而不是仍顯示「將存成…」 */
   assert.match(appSource, /surveyPeriodInputMessage\(importPeriodCheck\.reason\)}\s*\n\s*<\/small>/);
-  /* 預覽後若又把年度改成錯誤值，寫入按鈕與 commit 本身都要擋住。 */
-  assert.match(appSource, /disabled=\{!importRows\.length \|\| !importPeriodReady\}/);
+  /*
+   * 預覽後若又把年度改成錯誤值，寫入按鈕與 commit 本身都要擋住。
+   *
+   * ⚠️ 這裡刻意**不**寫死成 `disabled={!importRows.length || !importPeriodReady}`
+   *    一種長相——理由與這支測試上面第一則、以及下一則 rocYear 那則完全相同。
+   *    v2.1.64 把條件加嚴成「另外還要沒有季別不一致的預覽列」
+   *    （預覽改成累加之後，可能有在別的季度解析的列混在裡面），
+   *    行為只有變嚴格，寫死長相的斷言卻會紅字。
+   *    那就是「守門測試從防止分歧變成鎖住實作」，同一個坑這支已經踩過兩次。
+   *
+   * 現在只要求：那顆按鈕的 disabled 條件裡**同時**用到
+   * importRows.length 與 importPeriodReady，兩個都不能被拿掉。
+   */
+  /*
+   * ⚠️ 定位方式在 v2.1.66 換過一次，原因值得寫下來。
+   *
+   *   舊寫法是 `appSource.indexOf("確認寫入") - 900`——用**畫面文字**當錨點。
+   *   後來季別提示文案裡也出現了「確認寫入」這四個字（「…按下『確認寫入』會…」），
+   *   而且出現在按鈕**之前**，indexOf 就抓到了錯的地方，測試紅字但按鈕其實是對的。
+   *   這正是這支測試自己講過兩次的那個坑的變形：錨點綁在**會被改的東西**上。
+   *
+   *   現在改成錨在 `onClick={commitImport}`——那是程式接線，不是文案，
+   *   改文案不會動到它；真的要改它，本來就該重看這則守門。
+   */
+  const commitHandlerAt = appSource.indexOf("onClick={commitImport}");
+  assert.ok(commitHandlerAt > 0, "找不到 onClick={commitImport}");
+  const buttonAt = appSource.lastIndexOf("<button", commitHandlerAt);
+  assert.ok(buttonAt > 0, "找不到「確認寫入」按鈕的起頭 <button");
+  const commitButton = appSource.slice(buttonAt, commitHandlerAt);
+  /*
+   * 前置檢查：確認真的只框到一顆按鈕。
+   * 沒有這一行的話，萬一 lastIndexOf 抓錯而框進半支檔案，
+   * 下面兩則斷言會因為「整個檔案裡本來就有這些字」而**永遠綠燈**。
+   */
+  assert.ok(
+    commitButton.length < 2000 && !commitButton.includes("</button>"),
+    "定位範圍不像一顆按鈕，守門會失效",
+  );
+  const commitDisabled = /disabled=\{[\s\S]*?\n\s*\}/.exec(commitButton);
+  assert.ok(commitDisabled, "找不到「確認寫入」按鈕的 disabled 條件");
+  assert.match(commitDisabled[0], /importRows\.length/);
+  assert.match(commitDisabled[0], /importPeriodReady/);
   assert.match(appSource, /function commitImport\(\) \{[\s\S]*?if \(!importPeriodCheck\?\.ok\)/);
 });
 

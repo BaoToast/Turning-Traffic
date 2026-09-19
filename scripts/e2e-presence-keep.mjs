@@ -139,7 +139,7 @@ const go = async (label) => {
   await page.waitForTimeout(600);
 };
 
-await go("多計畫管理");
+await go("建立與管理計畫");
 await page.locator(".project-form input").nth(0).fill("A00-KEEP");
 await page.locator(".project-form input").nth(1).fill("先保留示範計畫");
 await page.locator('button:has-text("建立計畫")').click();

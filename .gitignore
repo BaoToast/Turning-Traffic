@@ -44,3 +44,6 @@ dev.stderr.log
 /outputs/
 /work/
 *.tsbuildinfo
+
+# 稽核用截圖（肉眼檢查），不是交付內容
+/.probe-shots

@@ -18,6 +18,8 @@ import * as XLSX from "xlsx";
 import { serve } from "./serve.mjs";
 import { launchOptions } from "./chrome-path.mjs";
 
+
+
 const problems = [];
 const ok = (label, condition, detail = "") => {
   console.log(`${condition ? "✅" : "❌"} ${label}${detail ? ` — ${detail}` : ""}`);
@@ -116,7 +118,7 @@ const go = async (label) => {
   await page.waitForTimeout(600);
 };
 
-await go("多計畫管理");
+await go("建立與管理計畫");
 await page.locator(".project-form input").nth(0).fill("115-P01");
 await page.locator(".project-form input").nth(1).fill("期別檢查測試計畫");
 await page.locator('button:has-text("建立計畫")').click();
@@ -186,6 +188,49 @@ ok("B 預覽面板顯眼標示日期與期別不一致", /不一致/.test(bAlert
 ok("B 提示裡寫出檔案裡的日期", /2026-08-05/.test(bAlert), bAlert.slice(0, 180));
 ok("B 提示裡寫出日期屬於哪一季", /115Q3/.test(bAlert), bAlert.slice(0, 180));
 ok("B 提示裡寫出來源儲存格", /平日!/.test(bAlert), bAlert.slice(0, 180));
+
+/*
+ * ── B2：一鍵「改用檔案日期的季別」 ────────────────────────────
+ *
+ * 使用者 2026-09-11：「如果我有 N 份檔案 只要有一個錯 我就得全部重選
+ * 會蠻辛苦的」。系統既然已經算出檔案日期屬於 115Q3，就不該叫他自己回去打字。
+ *
+ * ⚠️ 這裡刻意連「按下去之後年與季**兩個**欄位都真的變了」一起量。
+ *   這顆按鈕最容易寫錯的就是只設其中一個——畫面會停在半套狀態，
+ *   看起來像「按了沒反應」，而且不會有任何錯誤訊息。
+ */
+const switchButton = page.locator('button:has-text("改用檔案日期的季別")');
+ok(
+  "B 提供一鍵改成檔案日期的季別",
+  (await switchButton.count()) > 0,
+  `按鈕文字：${(await switchButton.count()) ? await switchButton.first().innerText() : "（找不到）"}`,
+);
+if (await switchButton.count()) {
+  ok(
+    "B 那顆按鈕上要寫出要改成哪一季（不可以只寫「改用檔案日期」）",
+    /115Q3/.test(await switchButton.first().innerText()),
+    await switchButton.first().innerText(),
+  );
+  await switchButton.first().click();
+  await page.waitForTimeout(800);
+  const picked = await page.evaluate(() => {
+    const selects = Array.from(document.querySelectorAll(".import-period select, .import-period input"));
+    return selects.map((el) => el.value).join("|");
+  });
+  ok(
+    "B 按下去之後年與季兩個欄位都真的變成 115 / Q3",
+    /(^|\|)115(\||$)/.test(picked) && /(^|\|)3(\||$)/.test(picked),
+    `欄位值：${picked}`,
+  );
+  ok(
+    "B 切換之後提示跟著更新成「一致」（不是停在舊的警告）",
+    !/不一致/.test(await alertText()),
+    (await alertText()).slice(0, 160),
+  );
+  /* 改回去，後面的 B 段仍然要驗「不一致時會跳二次確認」 */
+  await preview([wrongQuarter], { year: "115", quarter: "1" });
+  ok("B 改回 115Q1 之後警告回來（證明上一項不是恆真）", /不一致/.test(await alertText()));
+}
 
 const before = await writtenCount();
 await go("季度批次匯入");

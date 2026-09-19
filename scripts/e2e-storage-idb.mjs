@@ -74,7 +74,7 @@ const browser = await chromium.launch(launchOptions());
   page.on("dialog", (d) => d.accept());
   await page.goto(base, { waitUntil: "networkidle" });
   await page.waitForTimeout(1800);
-  await page.locator('nav button:has-text("多計畫管理")').first().click();
+  await page.locator('nav button:has-text("建立與管理計畫")').first().click();
   await page.waitForTimeout(600);
   await page.locator(".project-form input").nth(0).fill("A00-IDB");
   await page.locator(".project-form input").nth(1).fill("儲存位置示範計畫");
@@ -192,7 +192,7 @@ const browser = await chromium.launch(launchOptions());
    *    要驗的是「**程式真的把它讀出來並顯示**」，所以看畫面上的計畫名稱，
    *    再做一次寫入、確認 700 筆連同新資料一起被寫回去。
    */
-  await page.locator('nav button:has-text("多計畫管理")').first().click();
+  await page.locator('nav button:has-text("建立與管理計畫")').first().click();
   await page.waitForTimeout(1200);
   const shown = await page.evaluate(() =>
     document.body.innerText.replace(/\s+/g, " "),

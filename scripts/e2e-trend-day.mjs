@@ -75,9 +75,10 @@ const summary = (await page.locator(".trend-summary").first().innerText())
   .replace(/\s+/g, " ").trim();
 console.log("   右側摘要：", summary.slice(0, 220));
 
-ok("右側摘要沒有出現「全日尖峰 0 PCU/hr」",
-  !/全日尖峰\s*0\s*PCU\/hr/.test(summary), summary.slice(0, 160));
-ok("算不出來時顯示「－」", /全日尖峰\s*－/.test(summary), summary.slice(0, 160));
+/* 名稱在 v2.1.64 改為「全調查時段尖峰」，要驗的事情沒變：0 與「－」不可以混為一談。 */
+ok("右側摘要沒有出現「全調查時段尖峰 0 PCU/hr」",
+  !/全調查時段尖峰\s*0\s*PCU\/hr/.test(summary), summary.slice(0, 160));
+ok("算不出來時顯示「－」", /全調查時段尖峰\s*－/.test(summary), summary.slice(0, 160));
 ok("上午／下午尖峰照樣有數字（不可以被一起擋掉）",
   /AM Peak\s*[\d,.]+\s*PCU\/hr/.test(summary) && /PM Peak\s*[\d,.]+\s*PCU\/hr/.test(summary),
   summary.slice(0, 160));

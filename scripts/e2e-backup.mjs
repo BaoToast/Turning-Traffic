@@ -124,7 +124,7 @@ async function seedAndReload(value) {
 }
 
 async function gotoBackup() {
-  await page.locator('nav button:has-text("備份、還原與版本")').first().click();
+  await page.locator('nav button:has-text("備份與還原")').first().click();
   await page.waitForTimeout(500);
 }
 
@@ -148,7 +148,7 @@ async function grabDownload(locator) {
  * B 電腦是空白的，正好每次都踩到。
  */
 await seedAndReload(null);
-await page.locator('nav button:has-text("多計畫")').first().click();
+await page.locator('nav button:has-text("建立與管理計畫")').first().click();
 await page.waitForTimeout(600);
 {
   const inputs = page.locator(".panel input");
@@ -276,6 +276,47 @@ if (singleJson) {
     "併入後兩個計畫的審核狀態都保留",
     (merged.records || []).every((r) => r.review?.status === "已確認"),
   );
+
+  /*
+   * ── 5. 計畫缺少識別碼的備份要被擋下，而且不可以動到現有資料 ──
+   *
+   * ⚠️ 計畫的 id 是主鍵：每一筆路口季度資料靠 projectId 掛在計畫底下。
+   *   舊版只檢查 kind 與 records 是不是陣列，projects 裡面長什麼樣完全沒看：
+   *     ・`projects: [{}]` → fallbackId 是 undefined，整批紀錄的 projectId
+   *       也變成 undefined，還原「成功」，但每一個畫面都篩不到它們——
+   *       資料還在，使用者看到的是空的，而且沒有任何訊息。
+   *   這是 2026-09-12 在交通服務水準那一支實測到的同一顆雷（那邊是
+   *   `{"kind":"TLM_PORTFOLIO_PACKAGE"}` 會清空全部計畫卻報「備份已載入」），
+   *   三支程式都要擋。
+   */
+  const before = merged;
+  for (const [label, broken] of [
+    ["計畫沒有識別碼", { ...singleJson, projects: [{ name: "沒有 id 的計畫" }] }],
+    ["計畫識別碼是空字串", { ...singleJson, projects: [{ id: "", name: "空 id" }] }],
+    ["計畫清單是空陣列", { ...singleJson, projects: [] }],
+  ]) {
+    await page
+      .locator(".backup-grid input[type=file]")
+      .first()
+      .setInputFiles({
+        name: "壞掉的備份.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(JSON.stringify(broken)),
+      });
+    await page.waitForTimeout(1200);
+    const after2 = await page.evaluate(async () =>
+      JSON.parse((await window.__readState()) || "{}"),
+    );
+    ok(
+      `⚠️ ${label}的備份被擋下，原有資料完全沒變`,
+      (after2.projects || []).length === (before.projects || []).length &&
+        (after2.records || []).length === (before.records || []).length &&
+        (after2.records || []).every((r) => r.projectId),
+      `計畫 ${(after2.projects || []).length}／${(before.projects || []).length}、` +
+        `紀錄 ${(after2.records || []).length}／${(before.records || []).length}、` +
+        `沒有 projectId 的紀錄 ${(after2.records || []).filter((r) => !r.projectId).length} 筆`,
+    );
+  }
 }
 
 ok("沒有 JS 例外", errors.length === 0, errors.slice(0, 3).join(" / "));

@@ -16,6 +16,8 @@ import { fileURLToPath } from "node:url";
 import { serve } from "./serve.mjs";
 import { launchOptions } from "./chrome-path.mjs";
 
+
+
 const here = dirname(fileURLToPath(import.meta.url));
 const seed = readFileSync(join(here, "seed-wide.json"), "utf8");
 
@@ -27,21 +29,30 @@ const ok = (label, condition, detail = "") => {
 
 const VIEWS = [
   "總覽儀表板",
-  "多計畫管理",
+  /*
+   * v2.1.64：「多建立與管理計畫」改名為「建立與管理計畫」（頁內的跨計畫趨勢圖移除，
+   * 但建立／刪除計畫仍然只有這一頁做得到）；
+   * 「跨計畫／多路口比較」整頁移除，頁內那兩組表格改掛在新的
+   * 「各路口尖峰彙總」；「備份、還原與版本」改名為「備份與還原」。
+   * 這份清單是**版面檢查要走過的每一頁**，名字對不上就整頁沒被量到，
+   * 所以要跟著改，不可以只把不存在的那幾個刪掉了事。
+   */
+  "建立與管理計畫",
   "季度批次匯入",
-  "資料品質檢查",
+  "資料維護",
   "路口名稱管理",
   "車種轉向當量",
   "道路與流向管理",
   "路口轉向圖",
   "車種組成分析",
   "各路口駛入／駛出流量",
-  "跨計畫／多路口比較",
+  "各路口尖峰彙總",
   "歷季趨勢比較",
   "流量核對工作台",
   "轉向進階分析",
-  "報表與批次輸出",
-  "備份、還原與版本",
+  "成果交付",
+  "批次輸出",
+  "備份與還原",
   "新手操作手冊",
 ].map((label) => [label, label]);
 
@@ -265,10 +276,29 @@ async function measure() {
       }
     }
 
+    /*
+     * ── 按鈕文字被裁掉 ────────────────────────────────────────
+     *
+     * 使用者 2026-09-16：「不要再出現文字超過按鍵大小或被背景色遮蔽的狀況」。
+     *
+     * ⚠️ 既有的「橫向溢出」抓不到這一種：按鈕本身乖乖待在版面裡，
+     *   溢出的是**按鈕裡面的字**。判準是 scrollWidth > clientWidth。
+     * ⚠️ 沒畫出來的按鈕一律跳過，否則整支恆紅。
+     */
+    const clippedButtons = [];
+    for (const el of document.querySelectorAll("button")) {
+      if (!el.getClientRects().length) continue;
+      const text = (el.textContent || "").trim();
+      if (!text) continue;
+      const over = el.scrollWidth - el.clientWidth;
+      if (over > 1)
+        clippedButtons.push(`「${text.slice(0, 16)}」多 ${Math.round(over)}px`);
+    }
     return {
       view,
       padLeft,
       padRight,
+      clippedButtons: clippedButtons.slice(0, 6),
       misaligned: misaligned.slice(0, 8),
       misalignedCount: misaligned.length,
       flushHeads: flushHeads.slice(0, 6),
@@ -304,6 +334,11 @@ for (const [id, label] of VIEWS) {
   ok(`${label}：主內容右緣沒有貼住視窗`, m.minRightGap >= -0.6, `${m.minRightGap}px`);
   ok(`${label}：整頁沒有橫向溢出`, m.overflow <= 1, `${m.overflow}px`);
   ok(
+    `${label}：按鈕文字沒有被裁掉`,
+    m.clippedButtons.length === 0,
+    m.clippedButtons.join("；"),
+  );
+  ok(
     `${label}：卡片內沒有文字貼著邊框`,
     m.stuckCount === 0,
     m.stuck.map((s) => `${s.text}（距卡片左緣 ${s.gap}px，內距 ${s.cardPadLeft}px，卡片 ${s.card}）`).join("；"),
@@ -335,7 +370,18 @@ for (const width of WIDTHS) {
   for (const [, label] of VIEWS) {
     if (!(await gotoView(label))) continue;
     const m = await measure();
-    if (m.overflow > 1) bad.push(`${label} 溢出 ${m.overflow}px`);
+    /*
+     * 溢出要一併講出「是哪一個元素」。
+     * 只報 px 的話，下一個人得自己重跑一次瀏覽器才知道要改哪裡——
+     * 我這次就重跑了一次。
+     */
+    if (m.overflow > 1)
+      bad.push(
+        `${label} 溢出 ${m.overflow}px` +
+          (m.wide.length ? `（${m.wide.map((w) => `${w.el}@${w.right}`).join("、")}）` : ""),
+      );
+    if (m.clippedButtons.length)
+      bad.push(`${label} 按鈕文字被裁 ${m.clippedButtons.length} 處（${m.clippedButtons[0]}）`);
     if (m.minLeftGap < -0.6) bad.push(`${label} 左貼邊 ${m.minLeftGap}px`);
     if (m.minRightGap < -0.6) bad.push(`${label} 右貼邊 ${m.minRightGap}px`);
     if (m.stuckCount > 0) bad.push(`${label} 文字貼卡片 ${m.stuckCount} 處`);

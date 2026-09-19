@@ -28,6 +28,8 @@ import { serve } from "./serve.mjs";
 import { launchOptions } from "./chrome-path.mjs";
 import { installStateHelpers } from "./read-state.mjs";
 
+
+
 /* 與 e2e-progress.mjs 相同的匿名版型，不含任何真實調查資料。 */
 function makeWorkbook({ sheetName, dateText, station, name }) {
   const rows = Array.from({ length: 10 }, () => Array(56).fill(null));
@@ -122,7 +124,7 @@ const go = async (label) => {
   await page.waitForTimeout(600);
 };
 
-await go("多計畫管理");
+await go("建立與管理計畫");
 await page.locator(".project-form input").nth(0).fill("115-REIMPORT");
 await page.locator(".project-form input").nth(1).fill("重複匯入測試計畫");
 await page.locator('button:has-text("建立計畫")').click();
