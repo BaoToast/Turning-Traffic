@@ -36,7 +36,8 @@
 - 3 個需要特定真實附件的自動測試依既定條件略過，未描述為通過。
 - 本輪新增的是合成多日期活頁簿的完整資料流驗證；不是三個特定真實附件的替代品。
 - v2.1.80 手冊 PDF 已完成點陣化目視檢查；本輪未另以 Microsoft Excel／桌面 PDF 閱讀器重做 Excel／匯出 PDF 的人工開啟。v2.1.79 的 Microsoft Excel／Foxit 結果只保留為歷史證據，不描述成這次重新驗證。
-- 本機最終主 JS `assets/index-Dimc0N1p.js` SHA-256：`1BD37BED7B3E4A8A46F8FDFD2F43E4FE599ED61849E7207FE8CF567FD2A04D24`；手冊 SHA-256：`AAB15A9AD22114F104A29347088C33BE2B866E824015EE0C6C120BAA888B6E44`。線上雜湊、Actions／Pages run 與舊版 404 要在 push 後補記。
+- 功能／發布 commit：`937c306baa572ced640d6885ae553ed5a5ab86c9`。GitHub「建置與測試」run `35516856347` 與 `pages build and deployment` run `35516855416` 均成功。
+- 帶版號首頁回應 HTTP 200；線上主 JS `assets/index-Dimc0N1p.js` 與本機 SHA-256 均為 `1BD37BED7B3E4A8A46F8FDFD2F43E4FE599ED61849E7207FE8CF567FD2A04D24`；線上／本機 v2.1.80 手冊均為 `AAB15A9AD22114F104A29347088C33BE2B866E824015EE0C6C120BAA888B6E44`。舊 v2.1.79 主資產 `assets/index-D2lY7Qv1.js` 與 `路口轉向程式手冊_v2.1.79.pdf` 均為 HTTP 404。
 
 ## v2.1.80（2026-09-20）Claude 二次複查 ＋ 大檢查
 

@@ -370,7 +370,8 @@ GitHub 證據：
 - sticky 遮蓋守門涵蓋 1120–1600px 與 1420／1421 邊界，共 131 個命中取樣點；八叉守門涵蓋 16 張卡、文字、裁切、碰撞與 20° 壓力案例。手冊 PDF 19 頁已完整點陣化檢視，未見截字、重疊、黑塊或表格溢出。
 - 本次沒有另以 Microsoft Excel／桌面 PDF 閱讀器重做 v2.1.79 的匯出開啟驗證；不得把歷史 Office／Foxit 證據描述成 v2.1.80 本次重新驗證。3 個需特定真實附件的自動測試仍依既定條件略過。
 - `LAST_CALC_CHANGE_VERSION` 維持 v2.1.64；v2.1.80 不變更交通量、PCU、尖峰挑選或流向判定。
-- 本次最終 Pages 主資產為 `assets/index-Dimc0N1p.js`，本機 SHA-256 `1BD37BED7B3E4A8A46F8FDFD2F43E4FE599ED61849E7207FE8CF567FD2A04D24`；手冊 SHA-256 `AAB15A9AD22114F104A29347088C33BE2B866E824015EE0C6C120BAA888B6E44`。GitHub Actions、Pages run、線上雜湊與舊版 404 證據須在 push 後補入。
+- 功能／發布 commit `937c306baa572ced640d6885ae553ed5a5ab86c9`；GitHub「建置與測試」run `35516856347` 與 `pages build and deployment` run `35516855416` 均成功。
+- 最終 Pages 主資產為 `assets/index-Dimc0N1p.js`，線上／本機 SHA-256 均為 `1BD37BED7B3E4A8A46F8FDFD2F43E4FE599ED61849E7207FE8CF567FD2A04D24`；v2.1.80 手冊線上／本機 SHA-256 均為 `AAB15A9AD22114F104A29347088C33BE2B866E824015EE0C6C120BAA888B6E44`。帶版號首頁回應 200；舊 v2.1.79 主資產 `assets/index-D2lY7Qv1.js` 與手冊均為 HTTP 404。
 
 ### 12.6 正式發布
 
