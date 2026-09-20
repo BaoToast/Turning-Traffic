@@ -75,4 +75,10 @@ Claude 說明所稱 v2.1.78 → v2.1.79 沒有新增計算變更是正確的；�
 
 ## 發布證據
 
-發布 commit、GitHub Actions、Pages、線上 SHA-256 與舊資產 404 證據將在推送並完成線上驗證後補入本節；未完成前不得宣稱正式發布完成。
+- 功能／發布 commit：`3a401d03d5e6bc8832733bbb5a3d744087269fad`（`Release Turning Traffic v2.1.79`）。
+- GitHub「建置與測試」run `35477494692`：success。
+- GitHub `pages build and deployment` run `35477493555`：success。
+- 帶版號首頁 <https://baotoast.github.io/Turning-Traffic/?v=2.1.79> 回應 200，引用 `assets/index-D2lY7Qv1.js` 與 `assets/index-ChnT-NVq.css`。
+- 線上／本機主 JS SHA-256 均為 `6084FFC16B7F55AF7326A6B8D7041C9B60DBCD235C5708CA22F2A172B4EBE422`。
+- 線上／本機 v2.1.79 PDF SHA-256 均為 `5D614A00F00A39E57C36D903093524B86AD0593F58697FFCCC1999B6B6C02343`。
+- 舊主資產 `assets/index-DSVt1yFb.js`、舊 v2.1.63 PDF 與 DOCX 線上均為 HTTP 404。

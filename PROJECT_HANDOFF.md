@@ -24,7 +24,7 @@
 - 目前正式程式版本：`v2.1.79`
 - 交接文件建立前的 `HEAD`／已發布文件基準：`a4f93f29c25242a0faddcdf562a38b16f1012ceb`（`Document v2.1.63 release verification`）
 - v2.1.63 功能發布 commit：`ef5e56e028dbbba87b4529b87b0ae40341dd66fe`
-- v2.1.79 的正式發布 commit 是本文件目前所在的 release commit；新 GPT 必須以 `git log -1`、`git rev-parse HEAD` 與遠端 `main` 實際核對，不可把聊天中的雜湊當成不變常數。
+- v2.1.79 功能／發布 commit：`3a401d03d5e6bc8832733bbb5a3d744087269fad`（`Release Turning Traffic v2.1.79`）。本文件可能另有後續驗證提交；新 GPT 必須以 `git log -1`、`git rev-parse HEAD` 與遠端 `main` 實際核對當下最新基準。
 
 本文件所在提交就是目前工程基準；不要企圖把該提交自己的雜湊硬寫回同一個提交，否則會形成無限自我參照。新 GPT 接手時必須以 `git rev-parse HEAD` 取得當下最新 HEAD。上列 `a4f93f...` 只保留作為 v2.1.63 歷史發布驗證基準。
 
@@ -337,6 +337,7 @@ GitHub 證據：
 - 匯出 10 個可選工作表的 Excel 與 5 頁 PDF。Excel 已由真正的 Microsoft Excel 開啟，10 個工作表、表格與原生圖表可辨識，無修復／毀損提示；PDF 已由 Foxit PDF Editor 開啟並辨識 5 頁，且 5 頁全部點陣化檢視無截斷。v2.1.79 使用手冊 19 頁亦全部點陣化檢視通過。
 - 最新 audit 仍為 10 項開發／建置工具鏈警示（4 moderate、6 high），production dependencies 為 0；未使用破壞性的 `npm audit fix --force`。
 - `LAST_CALC_CHANGE_VERSION` 維持 v2.1.64。v2.1.79 相對 v2.1.78 沒有新增計算變更；但從舊正式版 v2.1.63 升到 v2.1.79 的整體差異包含 v2.1.64 的「全調查時段尖峰不再要求 24 小時」計算口徑變更，禁止把整段升級誤述為完全不動計算。
+- GitHub「建置與測試」run `35477494692` 與 `pages build and deployment` run `35477493555` 均成功。帶版號首頁回應 200；線上／本機主 JS SHA-256 均為 `6084FFC16B7F55AF7326A6B8D7041C9B60DBCD235C5708CA22F2A172B4EBE422`，v2.1.79 PDF 均為 `5D614A00F00A39E57C36D903093524B86AD0593F58697FFCCC1999B6B6C02343`。舊 v2.1.63 主資產、PDF 與 DOCX 均為 HTTP 404。
 
 ### 12.5 正式發布
 
