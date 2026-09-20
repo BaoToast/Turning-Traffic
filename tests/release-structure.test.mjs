@@ -563,3 +563,66 @@ test("根目錄的網站建置產物是本版（可發布環境才檢查）", ()
       `assets/ 複製到根目錄（並刪掉舊雜湊的檔案）。`,
   );
 });
+
+/*
+ * ── 「更新說明」寫出來的資產檔名與 SHA-256 必須是這一包裡真的那一份 ──
+ *
+ * 2026-09-20 大檢查抓到：v2.1.79 交付包的「【更新說明】請先讀我.txt」寫著
+ *   本版主資產為 assets/index-C0pvj8lC.js，SHA-256 = 3478…
+ * 但那一包的 assets/ 裡**根本沒有那個檔案**，實際是 index-D2lY7Qv1.js
+ * （SHA-256 = 6084…）。升版重建之後忘了回頭改這一段，而且**沒有任何檢查在看它**。
+ *
+ * 這一段不是裝飾：收件方（GPT／使用者）就是照它去核對「線上那一份是不是我這一包」。
+ * 寫錯等於把核對步驟變成一定對不上，或更糟——對上了另一份不存在的東西。
+ *
+ * ⚠️ 刻意迴避的假通過：
+ *   一、只驗「有寫雜湊」不算數——寫錯的也有寫。這裡是**照檔名真的算一次再比**。
+ *   二、只驗「雜湊格式對」不算數——64 個十六進位字元的錯字照樣過。
+ *   三、前置檢查：真的從文字裡抓到兩筆（JS 與 CSS），抓不到就紅，
+ *       不可以因為段落被改寫而安靜地變成恆真。
+ */
+test("更新說明寫的資產檔名與 SHA-256 就是這一包裡的那一份", () => {
+  const NOTE = "【更新說明】請先讀我.txt";
+  if (!has(NOTE) || !has("assets")) return; // 只有原始碼的包沒有這一層
+
+  const text = read(NOTE);
+  const pairs = [
+    ...text.matchAll(/(assets\/[^\s，,]+\.(?:js|css))[^\n]*\n\s*([0-9a-f]{64})/g),
+  ].map((m) => ({ file: m[1], sha: m[2] }));
+
+  assert.ok(
+    pairs.length >= 2,
+    `${NOTE} 的發布建置段落裡抓不到「檔名＋SHA-256」兩筆（實際 ${pairs.length} 筆）——` +
+      `段落被改寫過的話請一併更新這個檢查，不可以讓它安靜地變成恆真`,
+  );
+  assert.ok(
+    pairs.some((p) => p.file.endsWith(".js")) &&
+      pairs.some((p) => p.file.endsWith(".css")),
+    `${NOTE} 要同時寫出主資產（.js）與樣式表（.css）`,
+  );
+
+  for (const { file, sha } of pairs) {
+    assert.ok(
+      has(file),
+      `${NOTE} 寫著 ${file}，但這一包的 assets/ 裡沒有這個檔案——` +
+        `重建之後忘了更新這一段（實際有：${readdirSync(join(root, "assets")).join("、")}）`,
+    );
+    const real = createHash("sha256")
+      .update(readFileSync(join(root, file)))
+      .digest("hex");
+    assert.equal(
+      real,
+      sha,
+      `${NOTE} 寫的 ${file} SHA-256 與實際檔案不符`,
+    );
+  }
+});
+
+test("試用版產生器會自行建立交付資料夾", () => {
+  const source = read("scripts/build-tryout.mjs");
+  assert.match(
+    source,
+    /mkdirSync\(outDir,\s*\{\s*recursive:\s*true\s*\}\)/,
+    "全新工作區沒有上層 out/ 時，build:tryout 仍必須能直接產生交付檔",
+  );
+});

@@ -1,6 +1,6 @@
 import * as XLSX from "xlsx";
 /* 調查日期的標籤優先、排除清單與曆日驗證只由共用模組判定。 */
-import { findSurveyDate } from "./period-date.ts";
+import { findSurveyDate, findAllSurveyDates } from "./period-date.ts";
 
 /**
  * 尖峰時段。三個都是「某一小時的流率」，PCU 欄位的單位是 PCU/hr。
@@ -574,6 +574,15 @@ export type TrafficRecord = {
   rawName: string;
   quarter: string;
   date: string;
+  /**
+   * 同一份檔案讀到**兩個以上不同的日期**時，全部的候選（ISO，第一個＝系統
+   * 實際採用的那一個）。只有一個或一個都沒有時沒有這一欄。
+   *
+   * ⚠️ 一定要**存下來**：原始檔匯完就不在手上了，事後執行異常檢查沒有辦法
+   *   再掃一次。
+   * ⚠️ 與 date 一樣只作顯示與期別檢查用，不影響任何流量或 PCU 計算。
+   */
+  surveyDateCandidates?: string[];
   surveyType: string;
   /** Snapshot used for this import so future coefficient changes remain auditable. */
   pceUsed?: PceMatrix;
@@ -731,12 +740,36 @@ export type IssueResolution = {
 export type QualityIssue = {
   id: string;
   severity: "error" | "warning" | "info";
-  category: "缺值" | "總數不一致" | "尖峰時段異常" | "車種統計異常";
+  category:
+    | "缺值"
+    | "總數不一致"
+    | "尖峰時段異常"
+    | "車種統計異常"
+    /*
+     * 使用者 2026-09-20 新增（三支同步）：同一份檔案讀到兩個以上的日期，
+     * 系統無從判斷哪一個才是調查日期，要讓使用者自己指定。
+     */
+    | "調查日期不只一個";
   station: string;
   quarter: string;
   message: string;
   /** X-49：這一筆要怎麼處理。**每一筆都必須有**，沒有就是漏掉了。 */
   resolution: IssueResolution;
+  /**
+   * 這一筆異常要使用者**從幾個選項裡挑一個**時的候選清單
+   *（目前只有「調查日期不只一個」用得到，值是 ISO 日期）。
+   *
+   * ⚠️ 有 choices 的異常，畫面上除了「已人工確認」還會多一顆下拉：
+   *   挑完＝同時指定並記為已確認。只給「已確認」不給「指定哪一個」的話，
+   *   使用者按掉之後系統仍然在用**它自己猜的**那一個日期。
+   */
+  choices?: string[];
+  /**
+   * 挑完之後這個指定要記在誰身上——就是那一筆紀錄的 id。
+   * ⚠️ 路口轉向一筆紀錄＝一份檔案，所以用 record.id 就夠了；
+   *   另外兩支是「季別｜檔名｜工作表」，因為一份檔案會產出好幾筆。
+   */
+  choiceScope?: string;
   details?: {
     turningVehicleTotal: number;
     classifiedVehicleTotal: number;
@@ -846,7 +879,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.79";
+export const VERSION = "v2.1.80";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -972,6 +1005,11 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.80",
+    date: "2026-09-20",
+    note: "使用者 2026-09-20 回報「路口幾何示意圖我看不到，似乎和顏色檢視轉向重疊」——**版面 Bug，已修**，沒有變更任何交通量或 PCU 計算，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.64。**原因是兩個斷點各寫各的**：`.geometry-layout` 在 1420px 以下收成單欄，`.geometry-turn-preview`（用顏色檢視轉向）卻要到 1100px 以下才取消 `position: sticky`。於是 **1101～1420px** 這一段「已經是單欄、卻還釘著」：單欄時它的正下方就是「路口幾何示意圖」，往下捲它釘在畫面上緣不動，而 sticky 是定位元素、下面那塊是一般元素，依 CSS 繪製順序定位元素在上，整塊幾何示意圖被不透明的面板底色**整片蓋掉**——不是沒畫出來，是被蓋住（側欄跳轉與 .is-focused 外框都正常，所以更難發現）。**改法不是把 1100 改成 1420**：那等於把正確性押在兩個數字永遠手動同步上，而這次就是這樣壞的。改成**預設不釘、只有兩欄版面（min-width: 1421px）才釘**，漏掉的那一邊是安全的那一邊；原本那條 `max-width: 1100px` 的取消規則一併刪除，並在原處留下「不可以加回來」的警語。同一個坑 `.trend-layout` 與 `.peak-shape` 都踩過並留了警語，這裡當初漏了。**守門**：新增 `scripts/e2e-sticky-cover.mjs`——**掃寬度 1120～1600（每 60px 一次，外加斷點兩側 1420／1421）**，逐一點側欄項目、等它捲到定位之後，對被點名那一塊的 12%／35%／60%／85% 高度做 `document.elementFromPoint`，看到的必須就是那一塊。⚠️ 刻意迴避三種假通過：**一、只測 1366 與 1536 不算數**——這個坑就是兩個 media query 中間的空窗，測在空窗外什麼都驗不到（GPT 本輪「1536×864、1366×768 逐頁檢查未見重疊」正是這樣漏掉的，1366 就在出事區間內）；**二、停在頁首截圖不算數**——sticky 要捲過它上緣才會釘起來，停在頁首永遠是綠的；**三、用矩形相交判斷不算數**——兩欄版面裡同列相鄰的兩塊 y 區間本來就重疊，而且相交也不等於被蓋住，要看的是「誰畫在上面」。`position: fixed` 的浮動層（快閃提示 .toast）另外計數略過，四點全略過時報「什麼都沒驗到」。反證實跑：把 CSS 改回無條件 sticky，1120／1180／1240／1300／1360／1420 共 **7 項紅**、訊息指名 `#geometry-turn-preview（position:sticky）`，1421 以上維持綠；取樣點數維持 131 點（不是「什麼都沒量到」的綠）。　**本版另外完成使用者 2026-09-20 授權的四件事。****(1) 手動新增支線上限 7 → 8。** 常數改一行之後用新寫的 `scripts/e2e-eight-arm.mjs` 實測，抓到兩個**真缺陷**：外圍只有 14 個格位（上 4＋右 3＋下 4＋左 3），八叉在「駛入＋駛出並列」時是 16 張卡，多出來的兩張走舊的「往下再長一圈」補位規則，左上角那一張往下長一個卡高**正好落在左側那一排的第一個格位上**（實測座標 16,254–232,370 與 10,282–226,398 兩張卡疊在一起）；另外卡片上方那一行標題畫在**矩形外面**（y = -9），只比矩形的話兩張卡差 20px 不算重疊，但下面那張的標題正好壓在上面那張的底部。修法：**只在格位真的不夠時**把外圍加寬成 5＋4＋5＋4（四叉～七叉一個像素都不動），並在最後真的疊在一起時把基準位置推開（推的是系統排的位置，使用者手動拖的位移照加）。⚠️ 中間試過用 `textLength` 把標題壓進卡寬，**反而更糟**（它會把短標題也撐成滿寬），已還原。⚠️ 這一支測試第一版是**假的綠**：一條支線畫兩張卡，四叉剛好也是 8 張，用「圖卡數＝8」認八叉會驗到四叉；改成用路口名稱認，並另外把「圖卡數＝支線數×2」釘住。**(2) 調查日期三件事。** 候選一律**全表掃描**（`workbookCells(workbook, true)`），而且只看交通量工作表（監測照片、時相圖上的日期不算）；系統**實際採用**的那一個仍以標題區優先，正常檔案的行為完全不變。同一份檔案讀到兩個以上不同日期時，異常檢查新增類型「調查日期不只一個」，那一列多一顆「指定調查日期」下拉——挑完＝同時寫覆寫並記為已確認。存的是**覆寫**（`surveyDateOverrides`）不是改紀錄：使用者明講「另一個不同的日期在該資料中有其意義存在，所以使用者不會修正資料」。覆寫值**必須是候選之一**才採用。明細表的「調查日」欄新增「顯示調查日期」開關（預設開，關掉時欄位仍在、只寫「－」，整欄拿掉會讓表格欄位位移）。⚠️ 轉向圖上那一行「調查日期 …」也跟著走同一個結果——不換的話畫面寫你指定的日期、匯出的圖卻寫系統判讀的那一個。**(3) 圖說升到第 3 級「代表什麼狀況」、第 4 級「要怎麼處理」。** 判定集中在 `lib/chart-levels.ts`，與全日交通量 `app/chart-levels.ts` **逐位元相同**（SHA-256 釘住），契約 `tests/chart-levels-contract.mjs` 三支逐位元相同。第 4 級**寫不出具體的就整段不寫**；第 3 級每張圖都有而且一定帶得出數字；句子裡不出現「依規定」「標準為」「手冊規定」（使用者已取消引用手冊那一項）。**(4) 「已人工確認」不再只進不出。** 新增 `pruneOrphanAcks()`，只在按下「執行資料異常檢查」之後清，而且只清孤兒；沒有孤兒時不寫存檔。**方向成對檢查依使用者 2026-09-20 裁示不做**：「路口轉向程式本就不適用……那個角度也是使用者自己亂打，不可能實際測出角度，所以不是方位詞」——`checkArmBearingNames()` 已移除，原處留了「不要再加回來」的註解與理由。",
+  },
   {
     version: "v2.1.79",
     date: "2026-09-18",
@@ -2093,6 +2131,24 @@ export function recordTotal(record: TrafficRecord, peak: ScopeKey) {
   );
 }
 
+/*
+ * ⚠️ 這裡曾經有一支 `checkArmBearingNames()`：檢查互為對向的兩支線，
+ *   名稱若都是方位詞就該是相反方位（北向／東向 ＝ 打錯字）。
+ *
+ *   **2026-09-20 使用者裁示移除**，理由是決定性的：
+ *     「那個角度也是使用者自己亂打，不可能實際測出角度，所以不是方位詞」
+ *
+ *   也就是說 `approach.angle` 是**畫圖用的排列角度**，不是實地量出來的方位。
+ *   拿它當「這一支朝北」的依據，等於用一個使用者隨手填的值去判他另一個
+ *   隨手填的值對不對——兩邊都不可靠，報出來的東西沒有意義。
+ *
+ *   ⚠️ **不要再加回來。** 姊妹專案（全日交通量、交通服務水準）的
+ *   「方向名稱不成對」檢查有意義，是因為那兩支的「方向1／方向2」
+ *   **真的是一條路的兩個相反方向**；本程式的支線不是。
+ *   三支共用的判定 `lib/direction-pair.ts` 仍然保留（契約測試需要它，
+ *   而且三份必須逐位元相同），只是本程式沒有地方呼叫它。
+ */
+
 export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
   const issues: QualityIssue[] = [];
   for (const record of records) {
@@ -2273,6 +2329,45 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
           text: "本系統沒有手動填調查日期的欄位。請在原始檔的交通量工作表標題區把調查日期寫成可辨識的格式（例：115年3月12日），再重新匯入該筆。附註：「資料別（平日／假日）」可以在「流量核對工作台」直接指定，但那是另一件事，指定資料別不會讓這一項消失。",
           view: "import",
           viewLabel: "季度批次匯入",
+        },
+      });
+    /*
+     * ══════════════════════════════════════════════════════════════
+     *  同一份檔案讀到兩個以上的調查日期（使用者 2026-09-20，三支同步）
+     * ══════════════════════════════════════════════════════════════
+     *
+     * 使用者原話：「同一張表若你判讀到 2 個日期，在資料匯入時就應該做為
+     * 異常顯示提醒使用者，在異常資料檢查結果也要檢查出來，我在想的是你要
+     * 如何讓使用者告訴你哪個才是正確的日期（因為有可能另一個不同的日期在
+     * 該資料中有其意義存在，所以使用者不會修正資料）」
+     *
+     * ⚠️ 候選是匯入當下存進紀錄的（surveyDateCandidates），這裡只是撿出來，
+     *   **不會再去碰原始檔**——原始檔匯完就不在手上了。
+     * ⚠️ message 裡**不可以**寫「目前採用的是 X」：使用者一指定，X 就變了，
+     *   而「已人工確認」的指紋是 [id, message]——那會讓他剛按下去的確認
+     *   當場失效。要變的字全部留在畫面層。
+     */
+    if (
+      Array.isArray(record.surveyDateCandidates) &&
+      record.surveyDateCandidates.length > 1
+    )
+      issues.push({
+        id: `${record.id}-date-multi`,
+        severity: "warning",
+        category: "調查日期不只一個",
+        station: record.station,
+        quarter: record.quarter,
+        choices: record.surveyDateCandidates,
+        choiceScope: record.id,
+        message:
+          `這份檔案讀到 ${record.surveyDateCandidates.length} 個不同的日期（` +
+          record.surveyDateCandidates.join("、") +
+          "）。請用這一列的「指定調查日期」選單挑出哪一個才是調查日期。",
+        resolution: {
+          kind: "人工確認",
+          text: "同一份檔案上找到兩個以上不同的日期，系統無從判斷哪一個才是調查日期（另一個可能是製表、複核或現場補測的日期，本來就該留在表上）。請用這一列的「指定調查日期」選單挑出正確的調查日期，挑完就會記為已確認，紀錄卡、明細與「期別顯示調查月份」都會改用你指定的那一個。系統不會自己挑、也不會取平均——這一項不影響任何流量或 PCU 計算。",
+          view: "audit",
+          viewLabel: "流量核對工作台",
         },
       });
     /*
@@ -2979,6 +3074,14 @@ export type ImportPreview = {
    * date／dateSource 的意義與取法完全不變，這一欄是額外附上的候選清單。
    */
   dateCandidates?: Array<{ text: string; sheet: string; cell: string }>;
+  /**
+   * 同一份檔案讀到**兩個以上不同的日期**時，全部的候選（ISO，第一個＝系統
+   * 實際採用的那一個）。只有一個或一個都沒有時是空陣列。
+   *
+   * ⚠️ 與 date／dateSource 是**不同的東西**：那兩個是系統採用的那一個，
+   *   這一個是「有哪些可以選」。兩邊不可以互相取代。
+   */
+  surveyDateCandidates?: string[];
   surveyType: string;
   layout: "turning" | "od" | "unknown";
   approaches: string[];
@@ -3285,13 +3388,24 @@ function detectedVehicleHeaders(workbook: XLSX.WorkBook) {
   return [...result.values()];
 }
 
-function workbookCells(workbook: XLSX.WorkBook) {
+/*
+ * 活頁簿裡所有「可能是日期或標題」的儲存格。
+ *
+ * ⚠️ deep=false（預設）只掃前 13 列（標題區），deep=true 掃整張表。
+ *   使用者 2026-09-20：「日期的欄位檔案可能不一致，所以應該使用全文搜索
+ *   找出日期來判讀，不要依靠讀取固定欄位，導致經常找不到」。
+ *   **系統實際採用**哪一個日期仍以標題區優先（正常檔案的行為完全不變），
+ *   但**列給使用者挑**的候選一律走全表，否則正確的日期寫在下面時
+ *   使用者連看都看不到它。
+ */
+function workbookCells(workbook: XLSX.WorkBook, deep = false) {
   const values: Array<{ text: string; sheet: string; cell: string }> = [];
   workbook.SheetNames.forEach(function (sheetName) {
     const sheet = workbook.Sheets[sheetName];
     if (!sheet?.["!ref"]) return;
     const range = XLSX.utils.decode_range(sheet["!ref"]!);
-    for (let row = range.s.r; row <= Math.min(range.e.r, 12); row++) {
+    const lastRow = deep ? range.e.r : Math.min(range.e.r, 12);
+    for (let row = range.s.r; row <= lastRow; row++) {
       for (let col = range.s.c; col <= range.e.c; col++) {
         const value = sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
         if (value != null && String(value).trim())
@@ -3463,6 +3577,39 @@ export async function inspectWorkbook(
   const dateCandidates = foundDate
     ? [{ text: foundDate.raw, sheet: foundDate.sheet, cell: foundDate.cell }]
     : [];
+  /*
+   * ── 同一份檔案讀到兩個以上不同的日期 ───────────────────────
+   *
+   * 使用者 2026-09-20：「同一張表若你判讀到 2 個日期，在資料匯入時就應該
+   * 做為異常顯示提醒使用者，在異常資料檢查結果也要檢查出來……因為有可能
+   * 另一個不同的日期在該資料中有其意義存在，所以使用者不會修正資料」
+   *
+   * ⚠️ 掃的是**整張表**（deep），而且優先只看交通量工作表——
+   *   監測照片、時相圖那幾張表上的日期不是調查日期。
+   *   交通量工作表一個日期都沒有時才退回整份活頁簿，理由與 foundDate 相同。
+   * ⚠️ 候選清單的**第一個一定是系統實際採用的那一個**。直接用
+   *   findAllSurveyDates 的順序會出問題：那是對全表排的，而實際採用的是
+   *   標題區優先挑出來的，兩者可能不同——畫面上請使用者確認的第一個候選，
+   *   與計算實際用的那一個不一樣，比不問還糟。
+   */
+  const deepCells = workbookCells(workbook, true);
+  const scopedDeepCells = deepCells.filter(function (item) {
+    return !options?.trafficSheets || options.trafficSheets.includes(item.sheet);
+  });
+  const allDateHits = findAllSurveyDates(
+    scopedDeepCells.length ? scopedDeepCells : deepCells,
+  );
+  const otherDateIsos = foundDate
+    ? allDateHits
+        .map(function (hit) {
+          return hit.iso;
+        })
+        .filter(function (iso) {
+          return iso !== foundDate.iso;
+        })
+    : [];
+  const surveyDateCandidates =
+    foundDate && otherDateIsos.length ? [foundDate.iso, ...otherDateIsos] : [];
   const intervalMap = new Map<number, IntervalRow>();
   const detectedColumns: ImportPreview["columns"] = [];
   const originOrder: string[] = [];
@@ -4253,6 +4400,7 @@ export async function inspectWorkbook(
       ? { sheet: foundDate.sheet, cell: foundDate.cell, raw: foundDate.raw }
       : null,
     dateCandidates: dateCandidates,
+    surveyDateCandidates: surveyDateCandidates,
     surveyType: resolveSurveyType({
       explicit: options?.surveyType,
       dateText,

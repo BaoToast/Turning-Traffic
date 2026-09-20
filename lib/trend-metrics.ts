@@ -1,3 +1,14 @@
+/*
+ * 圖說第 3、4 級的判定（三支共用、逐位元相同）。
+ * ⚠️ 不可以在這裡自己寫一套區間——自己寫的結果是同一個數字在三支
+ *   被說成不同的狀況，而使用者會把三種說法都抄進同一份報告。
+ */
+import {
+  LEVEL3_TITLE,
+  LEVEL4_TITLE,
+  trendChangeLevels,
+} from "./chart-levels.ts";
+
 /**
  * ══════════════════════════════════════════════════════════════════
  *  歷季趨勢：可選指標、圖表講稿、跨計畫比較
@@ -632,6 +643,31 @@ export function trendScript(
     lines.push("所選範圍內沒有任何一季算得出這個指標，圖上不會有折線。");
   }
   sections.push({ title: "重點變化", lines });
+
+  /*
+   * ══════════════════════════════════════════════════════════════
+   *  ②-b 第 3 級「代表什麼狀況」與第 4 級「要怎麼處理」
+   * ══════════════════════════════════════════════════════════════
+   *
+   * 使用者 2026-09-20：「三支共通：圖旁說明文字升到第 3 級（代表什麼狀況）、
+   * 第 4 級（要怎麼處理）」「第 4 級只在寫得出具體的時候才寫……不要盲猜」。
+   *
+   * ⚠️ 判定一律走 lib/chart-levels.ts（三支逐位元相同），
+   *   **不可以在這裡自己寫一套區間**——自己寫的結果是同一個數字在三支
+   *   被說成不同的狀況，而使用者會把三種說法都抄進同一份報告。
+   * ⚠️ 算不出變化（只有一季、或起點是 0）時**整段不出現**，
+   *   不可以留一個空標題，也不可以塞一句「請持續觀察」湊數。
+   */
+  if (valued.length >= 2 && (valued[0].value as number) > 0) {
+    const from = valued[0].value as number;
+    const to = valued[valued.length - 1].value as number;
+    const judged = trendChangeLevels(((to - from) / from) * 100, valued.length);
+    if (judged) {
+      sections.push({ title: LEVEL3_TITLE, lines: [judged.state] });
+      if (judged.action)
+        sections.push({ title: LEVEL4_TITLE, lines: [judged.action] });
+    }
+  }
 
   /* ③ 怎麼看這張圖 */
   /*

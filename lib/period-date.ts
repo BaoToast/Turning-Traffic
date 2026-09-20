@@ -209,8 +209,16 @@ export function samePeriod(a: ParsedPeriod | null, b: ParsedPeriod | null): bool
  */
 const SURVEY_DATE_LABEL = /(?:調查|監測|施測|檢測|觀測|測量|作業)?日期[:：]/;
 /** 這些不是調查日期，不可以拿來比對期別。 */
+/*
+ * ⚠️ 2026-09-20 補上「複核／覆核／複查／複驗／送審／簽收」。
+ *   使用者提到「另一個不同的日期在該資料中有其意義存在（例如報告製作日、
+ *   複核日）」——清單裡原本有「校核」卻沒有「複核」，於是複核日期會被
+ *   當成第二個調查日期問使用者，那是白問一次。
+ *   ⚠️ 新增詞要同步三支（本檔與路口轉向的 lib/period-date.ts 逐位元相同，
+ *   交通服務水準的 period-date.js 是同一份邏輯的純 JS 版）。
+ */
 const NON_SURVEY_DATE_LABEL =
-  /(?:製表|列印|印製|報告|出圖|填表|核定|審查|校核|繪製|修正|更新|彙整|輸出|建檔|產製)日期/;
+  /(?:製表|列印|印製|報告|出圖|填表|核定|審查|校核|複核|覆核|複查|複驗|送審|簽收|繪製|修正|更新|彙整|輸出|建檔|產製)日期/;
 
 const flatten = (text: string) =>
   String(text ?? "")
@@ -277,6 +285,56 @@ export function findSurveyDate(
     loose = loose || hit;
   }
   return loose;
+}
+
+/**
+ * 找出**全部**不同的調查日期，不是只找第一個。
+ *
+ * ══════════════════════════════════════════════════════════════════════
+ *  為什麼需要這一支（使用者 2026-09-20 指定，三支同步）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 使用者原話：
+ *   「同一張表若你判讀到 2 個日期，在資料匯入時就應該做為異常顯示提醒使用者，
+ *     在異常資料檢查結果也要檢查出來，我在想的是你要如何讓使用者告訴你
+ *     哪個才是正確的日期（因為有可能另一個不同的日期在該資料中有其意義存在，
+ *     所以使用者不會修正資料）」
+ *
+ * `findSurveyDate()` 的語意是「挑一個出來用」：有標籤的優先，否則取第一個。
+ * 那是**下游計算要用的那一個**，不能改——改了會動到既有的期別檢查。
+ * 所以另外加這一支，只負責**把看到的全部列出來**，交給畫面去問使用者。
+ *
+ * ⚠️ 依 `iso` 去重，不是依原文。同一個日期寫成「115年5月4日」與
+ *   「115/05/04」是同一天，列兩次只會讓使用者以為有衝突。
+ * ⚠️ 有標籤的排前面，順序與 `findSurveyDate()` 的挑選規則一致——
+ *   兩邊排序不同的話，畫面上第一個候選會不是系統實際採用的那一個。
+ * ⚠️ 非調查日期的標籤（製表日、複核日…）在這裡一樣要排除，
+ *   規則與 findSurveyDate 共用 NON_SURVEY_DATE_LABEL，不可以另寫一份。
+ */
+export function findAllSurveyDates(
+  cells: Array<{ text: string; sheet?: string; cell?: string }>,
+): FoundSurveyDate[] {
+  const list = Array.isArray(cells) ? cells : [];
+  const seen = new Map<string, FoundSurveyDate>();
+  for (const item of list) {
+    const text = String(item?.text ?? "");
+    if (NON_SURVEY_DATE_LABEL.test(flatten(text))) continue;
+    const iso = parseSurveyDateText(text);
+    if (!iso) continue;
+    const hit: FoundSurveyDate = {
+      iso,
+      raw: text.trim(),
+      sheet: String(item?.sheet ?? ""),
+      cell: String(item?.cell ?? ""),
+      labelled: isLabelledSurveyDateText(text),
+    };
+    const previous = seen.get(iso);
+    /* 同一個日期出現多次時，留下**有標籤**的那一個當代表（出處比較有用）。 */
+    if (!previous || (!previous.labelled && hit.labelled)) seen.set(iso, hit);
+  }
+  return [...seen.values()].sort(
+    (a, b) => Number(b.labelled) - Number(a.labelled) || a.iso.localeCompare(b.iso),
+  );
 }
 
 export function surveyDateSourceLabel(found: FoundSurveyDate | null): string {

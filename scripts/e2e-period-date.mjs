@@ -27,8 +27,14 @@ const ok = (label, condition, detail = "") => {
 };
 
 /* 一份可匯入的路口轉向調查表。dateText 是這支測試唯一要變的變因。 */
-function makeWorkbook({ dateText, station, name }) {
-  const rows = Array.from({ length: 10 }, () => Array(56).fill(null));
+function makeWorkbook({
+  dateText,
+  extraDateText = "",
+  station,
+  name,
+  approachPrefix = "路口",
+}) {
+  const rows = Array.from({ length: 12 }, () => Array(56).fill(null));
   const vehicles = ["機車", "小型車", "大型車", "特種車"];
   const movements = ["左轉", "直進", "右轉"];
   const times = ["07:00~07:15", "07:15~07:30", "07:30~07:45", "07:45~08:00"];
@@ -37,7 +43,7 @@ function makeWorkbook({ dateText, station, name }) {
     rows[1][base] = "站號：" + station;
     if (dateText) rows[1][base + 4] = dateText;
     rows[2][base] = "站名：" + name;
-    rows[3][base] = `路口編號：路口${String.fromCharCode(65 + approach)}`;
+    rows[3][base] = `路口編號：${approachPrefix}${String.fromCharCode(65 + approach)}`;
     rows[4][base] = "時間";
     vehicles.forEach((vehicle, vehicleIndex) => {
       rows[4][base + 1 + vehicleIndex * 3] = vehicle;
@@ -51,6 +57,8 @@ function makeWorkbook({ dateText, station, name }) {
         rows[6 + rowIndex][base + column] = 1 + ((approach + column + rowIndex) % 7);
     });
   }
+  /* 第二個日期刻意放在交通量工作表的標題區之外，驗證「全表找候選」。 */
+  if (extraDateText) rows[10][0] = extraDateText;
   const sheet = XLSX.utils.aoa_to_sheet(rows);
   sheet["!merges"] = Array.from({ length: 4 }).flatMap((_, approach) =>
     vehicles.map((__, vehicleIndex) => ({
@@ -91,11 +99,22 @@ const noDate = write("C_沒有日期.xlsx", {
   station: "T99-03",
   name: "測試路口三",
 });
+const multipleDates = write("D_同檔兩個日期.xlsx", {
+  dateText: "調查日期：115年04月26日 (平日)",
+  extraDateText: "補充紀錄日期：115年05月15日",
+  station: "T99-04",
+  name: "測試路口四",
+  approachPrefix: "日期四路口",
+});
 
 const server = await serve(8162);
 const browser = await chromium.launch(launchOptions());
 const page = await (
-  await browser.newContext({ viewport: { width: 1680, height: 1050 }, locale: "zh-TW" })
+  await browser.newContext({
+    viewport: { width: 1680, height: 1050 },
+    locale: "zh-TW",
+    acceptDownloads: true,
+  })
 ).newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
@@ -271,6 +290,87 @@ ok(
   dialogs.join(" | ").slice(0, 120),
 );
 ok("C 讀不到日期照樣匯得進去（不阻擋）", (await writtenCount()) > beforeC, `${beforeC} → ?`);
+
+/* ── D：同一份交通量工作表有兩個日期，指定後全資料流都要跟著走 ── */
+await preview([multipleDates], { year: "115", quarter: "2" });
+await page.locator('button:has-text("確認寫入")').first().click();
+await page.waitForTimeout(3500);
+await go("資料維護");
+await page.locator('[data-testid="quality-run"]').click();
+await page.waitForTimeout(1000);
+const allDatePicks = page.locator('[data-testid="survey-date-pick"]');
+const datePick = allDatePicks.filter({
+  has: page.locator('option[value="2026-05-15"]'),
+});
+ok(
+  "D 同一份交通量工作表的兩個日期會進入異常檢查",
+  (await datePick.count()) === 1,
+  `全頁 ${await allDatePicks.count()} 個，其中 ${await datePick.count()} 個含 2026-05-15`,
+);
+if (await datePick.count()) {
+  const choices = await datePick.locator("option").evaluateAll((options) =>
+    options.map((option) => ({ value: option.value, text: option.textContent || "" })),
+  );
+  ok(
+    "D 候選同時包含標題區日期與標題區外日期",
+    choices.some((item) => item.value === "2026-04-26") &&
+      choices.some((item) => item.value === "2026-05-15"),
+    JSON.stringify(choices),
+  );
+  await datePick.selectOption("2026-05-15");
+  await page.waitForTimeout(1200);
+}
+
+await go("各路口尖峰彙總");
+const pickedRow = page.locator("tr", { hasText: "T99-04" }).first();
+ok(
+  "D 尖峰彙總的調查日改成使用者指定日期",
+  (await pickedRow.count()) > 0 && /115年5月15日/.test(await pickedRow.innerText()),
+  (await pickedRow.count()) ? (await pickedRow.innerText()).replace(/\s+/g, " ") : "找不到 T99-04",
+);
+
+await page.reload();
+await page.waitForTimeout(1200);
+await go("各路口尖峰彙總");
+const reloadedRow = page.locator("tr", { hasText: "T99-04" }).first();
+ok(
+  "D 重新整理後指定日期仍然保留",
+  (await reloadedRow.count()) > 0 && /115年5月15日/.test(await reloadedRow.innerText()),
+  (await reloadedRow.count())
+    ? (await reloadedRow.innerText()).replace(/\s+/g, " ")
+    : "找不到 T99-04",
+);
+
+await go("路口轉向圖");
+const diagramSelect = page.locator('[data-testid="diagram-intersection"]');
+const diagramOptions = await diagramSelect.locator("option").allTextContents();
+ok(
+  "D Q2 的多日期資料能進入轉向圖",
+  diagramOptions.length >= 1,
+  `選項：${diagramOptions}`,
+);
+if (diagramOptions.length) await diagramSelect.selectOption({ index: 0 });
+await page.waitForTimeout(900);
+const diagramText = await page.locator(".diagram-canvas svg").textContent();
+ok(
+  "D 路口轉向圖寫的是使用者指定日期",
+  /調查日期\s+2026-05-15/.test(diagramText || ""),
+  (diagramText || "").slice(0, 180).replace(/\s+/g, " "),
+);
+
+await go("批次輸出");
+const svgButton = page.locator('#report-svg button:has-text("下載 SVG")');
+if (await svgButton.count()) {
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 20000 }),
+    svgButton.first().click(),
+  ]);
+  const svgText = readFileSync(await download.path(), "utf8");
+  ok(
+    "D 匯出的 SVG 也寫使用者指定日期",
+    /調查日期\s+2026-05-15/.test(svgText),
+  );
+} else ok("D 匯出的 SVG 也寫使用者指定日期", false, "找不到下載 SVG 按鈕");
 
 ok("沒有 JS 例外", errors.length === 0, errors.slice(0, 2).join(" | "));
 

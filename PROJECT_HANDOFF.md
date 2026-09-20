@@ -19,9 +19,9 @@
 - GitHub URL：<https://github.com/BaoToast/Turning-Traffic>
 - Git origin：`https://github.com/BaoToast/Turning-Traffic.git`
 - 正式 GitHub Pages：<https://baotoast.github.io/Turning-Traffic/>
-- 帶版號的正式驗證網址：<https://baotoast.github.io/Turning-Traffic/?v=2.1.79>
+- 帶版號的正式驗證網址：<https://baotoast.github.io/Turning-Traffic/?v=2.1.80>
 - 正式 branch：`main`
-- 目前正式程式版本：`v2.1.79`
+- 目前正式程式版本：`v2.1.80`（2026-09-20 完成 GPT 高風險獨立複查；發布 commit 與線上證據以本文件第 12.5 節及當下 Git／GitHub 為準）
 - 交接文件建立前的 `HEAD`／已發布文件基準：`a4f93f29c25242a0faddcdf562a38b16f1012ceb`（`Document v2.1.63 release verification`）
 - v2.1.63 功能發布 commit：`ef5e56e028dbbba87b4529b87b0ae40341dd66fe`
 - v2.1.79 功能／發布 commit：`3a401d03d5e6bc8832733bbb5a3d744087269fad`（`Release Turning Traffic v2.1.79`）。本文件可能另有後續驗證提交；新 GPT 必須以 `git log -1`、`git rev-parse HEAD` 與遠端 `main` 實際核對當下最新基準。
@@ -36,7 +36,24 @@
 
 本系統是瀏覽器式、單機優先的路口轉向交通量分析工具，用於每季、多計畫、多路口交通調查。它讀取調查廠商提供的 Excel，辨識路口支線、OD 或左直右、車種、時間與調查日別，計算 AM／PM／全日尖峰與全日時段成果，提供核對、圖表、趨勢、比較、報告、Excel/PDF/PNG/SVG/ZIP 匯出及 JSON/ZIP 備份。
 
-截至 v2.1.79，主體與已要求功能均已完成並正式發布；目前維護重點是使用者回饋、錯誤修正、新格式相容與計算結果驗證。沒有已知會阻擋使用的未解程式錯誤，但「沒有已知問題」不等於未來輸入格式皆已驗證。
+截至 v2.1.80，主體與已要求功能均已完成；目前維護重點是使用者回饋、錯誤修正、新格式相容與計算結果驗證。沒有已知會阻擋使用的未解程式錯誤，但「沒有已知問題」不等於未來輸入格式皆已驗證。
+
+**2026-09-20 使用者回報 ＋ Claude 大檢查 → v2.1.80**（沒有變更任何計算，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.64）：
+
+1. **路口幾何示意圖被「用顏色檢視轉向」整片蓋住。** `.geometry-layout` 在 1420px 以下收成單欄，
+   `.geometry-turn-preview` 卻要到 1100px 以下才取消 `position: sticky`——兩個斷點各寫各的，
+   於是 **1101～1420px** 這一段「已經單欄、卻還釘著」。sticky 是定位元素、下面那塊是一般元素，
+   依繪製順序定位元素在上，整塊幾何示意圖被不透明面板底色蓋掉。
+   改法**不是**把 1100 改成 1420（那等於把正確性押在兩個數字永遠手動同步上），
+   而是「預設不釘、只有兩欄版面（`min-width: 1421px`）才釘」。
+   守門 `scripts/e2e-sticky-cover.mjs`：掃寬度 1120～1600 做 `elementFromPoint` hit-test，
+   反證在無條件 sticky 上 7 項紅。
+   ⚠️ GPT 本輪「1536×864、1366×768 各 18 頁逐頁檢查未見重疊」**不成立**——1366 就在出事區間內，
+   漏掉的原因是只在捲到頁首時截圖，而 sticky 要捲過它上緣才會釘起來。
+   今後的視覺檢查必須含「捲動後」的狀態。
+2. **交付包「更新說明」寫了一個不存在的資產檔名與雜湊**（升版重建後忘了回頭改）。
+   收件方就是照它核對「線上那一份是不是這一包」，寫錯等於核對一定對不上。
+   守門加進 `tests/release-structure.test.mjs`：照檔名真的算一次 SHA-256 再比，三個反證都紅。
 
 資料預設只保存在使用者瀏覽器的 IndexedDB；原始調查檔不會自動上傳。清除網站資料、換瀏覽器或換電腦前，必須先匯出備份。
 
@@ -66,7 +83,7 @@
 - `github/`、`vite.github.config.ts`：GitHub Pages 的 Vite 入口與建置設定。
 - `github-pages-dist/`：`npm run build:github` 的輸出；正式發布前須把其 `index.html` 與 `assets/` 同步到 repository root。
 - 根目錄 `index.html`、`assets/`、`.nojekyll`：GitHub Pages 實際發布內容。
-- `scripts/`：手冊產製、2 支種子資料產生器（`seed-state.mjs`、`make-wide-seed.mjs`）及 81 支 `e2e-*.mjs` 腳本；其中 `npm run e2e` 明列 80 支瀏覽器測試，另加 2 支種子資料產生器，合計 82 個流程步驟。`e2e-tryout-smoke.mjs` 是單檔試用版的獨立 smoke，不在 `npm run e2e` 內。報告時不得把 82 個流程步驟全部稱為瀏覽器 E2E。
+- `scripts/`：手冊產製、2 支種子資料產生器（`seed-state.mjs`、`make-wide-seed.mjs`）及 83 支 `e2e-*.mjs` 腳本；其中 `npm run e2e` 明列 82 支瀏覽器測試，另加 2 支種子資料產生器，合計 84 個執行步驟（不含前置 GitHub build）。`e2e-tryout-smoke.mjs` 是單檔試用版的獨立 smoke，不在 `npm run e2e` 內。報告時不得把 84 個步驟全部稱為瀏覽器 E2E。
 - `tests/`：計算、parser、資料契約、備份、發布結構、文件與 regression tests。
 - `CHANGELOG.md`：重點版次；完整版本歷史的唯一來源是 `lib/traffic.ts` 的 `VERSION_HISTORY`。
 - `DEPLOYMENT.md`：正式部署與版本同步清單。
@@ -278,7 +295,7 @@ npm run build:github
 - 備份完整性、儲存 race、匯入 revision／鎖定／審核。
 - trend metrics、缺季、資料別拆線、長期間圖寬與單位。
 - release metadata、release structure、manual version/copies、rendered HTML、dependency manifest。
-- `npm run e2e` 流程：80 支 `e2e-*.mjs` 瀏覽器測試，涵蓋轉向圖、名稱、報表、結論、拖放／顯示、重匯、日別、版面、備份、鎖定、趨勢、日期、XLSX 修復、儲存阻擋／IndexedDB、三岔、存在性裁決、revision batch、圖表版面、跨計畫趨勢、主工具列、篩選覆蓋、頁面隔離、尖峰判定、重複資料阻擋等；另有 2 支種子資料產生器，合計 82 個流程步驟。報告時必須分開描述，不能稱為「82 支瀏覽器 E2E」。另有不在此命令內的 `e2e-tryout-smoke.mjs`。
+- `npm run e2e` 流程：82 支 `e2e-*.mjs` 瀏覽器測試，涵蓋轉向圖、名稱、報表、結論、拖放／顯示、重匯、日別、版面、備份、鎖定、趨勢、日期、XLSX 修復、儲存阻擋／IndexedDB、三岔、存在性裁決、revision batch、圖表版面、跨計畫趨勢、主工具列、篩選覆蓋、頁面隔離、尖峰判定、重複資料阻擋、sticky 遮蓋與八叉版面等；另有 2 支種子資料產生器，合計 84 個執行步驟（不含前置 GitHub build）。報告時必須分開描述，不能稱為「84 支瀏覽器 E2E」。另有不在此命令內的 `e2e-tryout-smoke.mjs`。
 
 涉及交通工程或 Parser 時，必須額外逐層核對：**輸入 → 解析 → 驗證 → 資料結構 → 計算 → UI → 匯出**，並比較同一值在核對頁、轉向圖、摘要、趨勢與 Excel/PDF 中是否一致。
 
@@ -339,7 +356,23 @@ GitHub 證據：
 - `LAST_CALC_CHANGE_VERSION` 維持 v2.1.64。v2.1.79 相對 v2.1.78 沒有新增計算變更；但從舊正式版 v2.1.63 升到 v2.1.79 的整體差異包含 v2.1.64 的「全調查時段尖峰不再要求 24 小時」計算口徑變更，禁止把整段升級誤述為完全不動計算。
 - GitHub「建置與測試」run `35477494692` 與 `pages build and deployment` run `35477493555` 均成功。帶版號首頁回應 200；線上／本機主 JS SHA-256 均為 `6084FFC16B7F55AF7326A6B8D7041C9B60DBCD235C5708CA22F2A172B4EBE422`，v2.1.79 PDF 均為 `5D614A00F00A39E57C36D903093524B86AD0593F58697FFCCC1999B6B6C02343`。舊 v2.1.63 主資產、PDF 與 DOCX 均為 HTTP 404。
 
-### 12.5 正式發布
+### 12.5 v2.1.80 高風險複查與發布驗證
+
+2026-09-20 以 Claude 的 v2.1.80 完整專案與「給 GPT 的說明」為輸入，先核對完整專案 ZIP SHA-256 `36446FFBDE4DAEAE3A7C3F76E0B3F5337DE5F0F64F5253D75221CA2D3DB1F467`，再因涉及 parser 日期候選、持久化、跨電腦備份、共用圖說與八叉轉向圖版面，依高風險全專案範圍複查。
+
+- GPT 補正跨電腦備份／還原：`surveyDateOverrides` 與 `showSurveyDate` 原本只進 IndexedDB，未進 JSON／ZIP 備份；現已涵蓋單一計畫備份、全部計畫備份、併入及完整取代還原，並新增靜態與瀏覽器行為守門。
+- GPT 修正 `scripts/e2e-eight-arm.mjs` 的測試缺陷：卡片標題刻意畫在卡片矩形外，舊測試用幾何包含關係判斷文字歸屬，在乾淨 Windows 字型環境會把自己的標題誤認為別張卡。現改用 DOM 的 `data-card-id`／`data-card-section` 判斷擁有者；這是測試修正，不是正式版面缺陷。
+- GPT 擴充既有 `e2e-period-date.mjs`，驗證多日期真實資料流：匯入 → 異常檢查 → 指定日期 → 尖峰彙總 → 重新整理持久化 → 轉向圖 → SVG 匯出均使用同一有效日期。測試資料使用既有「同幾何路口合併」規則，因此不可用顯示名稱精確等於原始檔站名作為前提。
+- GPT 修正全新工作區的試用版建置：`scripts/build-tryout.mjs` 原本假設上層 `out/` 已存在；現會自行遞迴建立交付資料夾，並新增發布結構守門。正式 Repository 在沒有既有 `out/` 的狀態下完成 `build:tryout` 與 `e2e-tryout-smoke.mjs`，單檔 `file://` 核心流程全綠。
+- 乾淨 `npm ci` 成功：509 packages added、510 audited；最新完整 audit 為 10 項開發／建置工具鏈警示（4 moderate、6 high），未使用破壞性的 `npm audit fix --force`。
+- 最終 `npm test` 全部通過：lint、glyph guard、TypeScript、production build；`.mjs` 200 項中 199 通過／1 條件式略過，TypeScript 295 項中 292 通過／3 條件式略過，0 失敗。
+- 完整 `npm run e2e` 全綠：82 支瀏覽器測試＋2 支種子資料產生器，共 84 個執行步驟；其後有變更的 `e2e-backup.mjs` 與 `e2e-period-date.mjs` 均再個別重跑全綠。不可把 84 個步驟稱為 84 支瀏覽器 E2E。
+- sticky 遮蓋守門涵蓋 1120–1600px 與 1420／1421 邊界，共 131 個命中取樣點；八叉守門涵蓋 16 張卡、文字、裁切、碰撞與 20° 壓力案例。手冊 PDF 19 頁已完整點陣化檢視，未見截字、重疊、黑塊或表格溢出。
+- 本次沒有另以 Microsoft Excel／桌面 PDF 閱讀器重做 v2.1.79 的匯出開啟驗證；不得把歷史 Office／Foxit 證據描述成 v2.1.80 本次重新驗證。3 個需特定真實附件的自動測試仍依既定條件略過。
+- `LAST_CALC_CHANGE_VERSION` 維持 v2.1.64；v2.1.80 不變更交通量、PCU、尖峰挑選或流向判定。
+- 本次最終 Pages 主資產為 `assets/index-Dimc0N1p.js`，本機 SHA-256 `1BD37BED7B3E4A8A46F8FDFD2F43E4FE599ED61849E7207FE8CF567FD2A04D24`；手冊 SHA-256 `AAB15A9AD22114F104A29347088C33BE2B866E824015EE0C6C120BAA888B6E44`。GitHub Actions、Pages run、線上雜湊與舊版 404 證據須在 push 後補入。
+
+### 12.6 正式發布
 
 1. 先完成本節全部必要驗證。
 2. 若升版，依 `DEPLOYMENT.md` 同步：`VERSION`／`VERSION_HISTORY`、package/lock、手冊 HTML/產製檔名/頁尾、UI 連結、CHANGELOG、PDF；刪除所有舊版手冊。
@@ -465,7 +498,9 @@ GPT 不得因 Claude 表示「已完成」「已測試」或只列某些檔案�
 - DOCX 在 v2.1.63 未用獨立 LibreOffice 點陣化渲染；v2.1.64 起正式手冊已改為 PDF-only，因此 v2.1.79 不再有 DOCX／LibreOffice 驗證項目。v2.1.79 PDF 手冊 19 頁已逐頁檢查。
 - 2026-09-13 本次交接驗收同樣未執行上述三個真實附件測試，也未補做 DOCX 的獨立 LibreOffice 點陣化視覺驗證。
 - 2026-09-13 本次環境沒有 `npm`，未重跑乾淨 `npm ci`、字面 `npm test` 或最新 `npm audit`；本次可重現子項與第 12.2 節歷史發布證據必須明確分開。
-- v2.1.79 最新完整依賴 audit 有 10 項開發／建置工具鏈警示（4 moderate、6 high）；production dependencies 為 0。
+- v2.1.80 最新完整依賴 audit 有 10 項開發／建置工具鏈警示（4 moderate、6 high）；未使用破壞性的強制升級。v2.1.79 的 production dependencies audit 為 0，本輪未另跑 production-only audit，不得把前版結果冒充本輪結果。
+- v2.1.80 的 3 個需特定真實附件自動測試仍為條件式略過；本輪以合成多日期活頁簿完成日期全資料流驗證，但未把它描述成特定真實附件驗證。
+- v2.1.80 手冊 PDF 19 頁已完整點陣化檢視；本輪未另以 Microsoft Excel／桌面 PDF 閱讀器重做 Excel／匯出 PDF 的人工開啟驗證，v2.1.79 的 Office／Foxit 證據只能保留為歷史證據。
 - 本文件只保存可由 Repository、Git、驗證報告及高價值對話決策交叉支持的內容。無法從現行證據可靠重建的早期聊天細節未寫成事實。
 
 ### 已知文件差異與待確認事項
@@ -477,7 +512,7 @@ GPT 不得因 Claude 表示「已完成」「已測試」或只列某些檔案�
 
 ### 後續維護待辦
 
-- 截至 v2.1.79 正式驗證後，沒有已知尚未修正的功能 Bug。
+- 截至 v2.1.80 高風險複查後，沒有已知尚未修正且會阻擋使用的功能 Bug。
 - 經使用者另行授權後，可用低風險文件維護處理 README 的 Excel 工作表／時間格描述，以及 `traffic-app.tsx` 的存檔註解；仍須核對實作、相關測試與完整資料流，不可藉文件維護變更計算或儲存機制。
 - `VALIDATION_REPORT.md` 日期差異需先取得可驗證證據或使用者決策；目前不是可自行修正的待辦。
 - 未來待辦由新的使用者回饋、實際新格式或 Claude 新版修改觸發；不得自行把暫緩的三系統整併、雲端多人或依賴大升級當成下一個工作。

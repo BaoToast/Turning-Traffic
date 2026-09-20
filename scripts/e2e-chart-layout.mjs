@@ -723,6 +723,106 @@ ok("前置：要讀得到格線與資料點（讀不到的話下一項會變成�
   );
 }
 
+/* ════════════════════════════════════════════════════════════════
+ * 圖說的第 3 級「代表什麼狀況」與第 4 級「要怎麼處理」
+ * ════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-20（三支同步）：
+ *   「三支共通：圖旁說明文字升到第 3 級（代表什麼狀況）、第 4 級（要怎麼處理）」
+ *   「第 4 級只在寫得出具體的時候才寫……不要盲猜」
+ *   「文字不要超出標框或重疊等，以前踩過的雷不要再次發生」
+ *
+ * ⚠️ 單元測試（tests/chart-levels.test.ts）只驗得到「函式回得出句子」。
+ *   句子有沒有真的畫到畫面上、有沒有撐破框，只有真的開瀏覽器量得出來。
+ * ⚠️ 「沒有第 4 級」**不是缺陷**：使用者明講寫不出具體的就整段不寫。
+ */
+console.log("\n══ 圖說第 3、4 級 ══");
+const levelReport = await page.evaluate(() => {
+  const items = [...document.querySelectorAll(".trend-script-item")];
+  return items.map((item) => {
+    const box = item.getBoundingClientRect();
+    return {
+      title: (item.querySelector("h4")?.textContent || "").trim(),
+      text: [...item.querySelectorAll("p")]
+        .map((p) => (p.textContent || "").trim())
+        .join(""),
+      width: Math.round(box.width),
+      spilled: [...item.querySelectorAll("p, h4")]
+        .map((el) => {
+          const rect = el.getBoundingClientRect();
+          return {
+            text: (el.textContent || "").slice(0, 24),
+            over: Math.max(
+              0,
+              Math.round(rect.right - box.right),
+              Math.round(box.left - rect.left),
+            ),
+          };
+        })
+        .filter((entry) => entry.over > 1),
+      scrollOverflow: item.scrollWidth - item.clientWidth,
+    };
+  });
+});
+ok(
+  "前置：量得到講稿段落（沒有的話下面每一條都變成恆真）",
+  levelReport.length > 0,
+  `${levelReport.length} 段`,
+);
+const state = levelReport.filter((item) => item.title === "代表什麼狀況");
+ok(
+  "⚠️ 講稿有第 3 級「代表什麼狀況」",
+  state.length > 0,
+  `${state.length} 段`,
+);
+ok(
+  "⚠️ 第 3 級帶得出數字，不是「本圖顯示各項數值之分布」這種空話",
+  state.every((item) => item.text.length >= 20 && /\d/.test(item.text)),
+  state.map((item) => item.text.slice(0, 40)).join("／"),
+);
+const action = levelReport.filter((item) => item.title === "要怎麼處理");
+ok(
+  "有第 4 級時它不是空標題（沒有第 4 級本來就允許）",
+  action.every((item) => item.text.length >= 20),
+  `${action.length} 段`,
+);
+const spilled = levelReport.filter((item) => item.spilled.length);
+ok(
+  "⚠️ 沒有任何一段文字撐出說明框外",
+  spilled.length === 0,
+  spilled.length
+    ? spilled
+        .slice(0, 3)
+        .map(
+          (item) =>
+            `框寬 ${item.width}px，「${item.spilled[0].text}」超出 ${item.spilled[0].over}px`,
+        )
+        .join("；")
+    : `${levelReport.length} 段都在框內`,
+);
+const scrolled = levelReport.filter((item) => item.scrollOverflow > 1);
+ok(
+  "說明框沒有水平捲軸（有的話字會被切掉）",
+  scrolled.length === 0,
+  scrolled.length
+    ? `最多超出 ${Math.max(...scrolled.map((item) => item.scrollOverflow))}px`
+    : "",
+);
+/*
+ * ⚠️ 讀說明的時候圖要一直看得見。
+ *   這條規則寫在 ≥1400px 的 @media 裡，新加的 CSS 一旦蓋掉它，
+ *   版面守門不會紅（它量的是版面不是字數）。
+ */
+const stickyChart = await page.evaluate(() => {
+  const chart = document.querySelector(".trend-layout > .trend-chart");
+  return chart ? getComputedStyle(chart).position : null;
+});
+ok(
+  "⚠️ 寬視窗下，圖仍然釘在畫面上（讀說明時看得見圖）",
+  stickyChart === "sticky",
+  `實際 position=${stickyChart}`,
+);
+
 ok("整段流程不可以留下未捕捉的例外", errors.length === 0, errors.slice(0, 2).join(" / "));
 
 await browser.close();

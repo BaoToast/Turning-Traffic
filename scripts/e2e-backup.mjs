@@ -86,6 +86,11 @@ const state = {
     [projectB.id]: seed.vehicleCatalog,
   },
   mappingsByProject: { [projectA.id]: {}, [projectB.id]: {} },
+  surveyDateOverrides: {
+    [projectA.id]: { [recordsA[0].id]: "2026-03-15" },
+    [projectB.id]: { [recordsB[0].id]: "2026-04-20" },
+  },
+  showSurveyDate: false,
 };
 
 await new Promise((r) => server.listen(8113, r));
@@ -197,6 +202,18 @@ if (await single.count()) {
     (singleJson.records || []).every((r) => r.review?.status === "已確認"),
   );
   ok(
+    "單一計畫備份只帶走該計畫的調查日期指定",
+    Object.keys(singleJson.surveyDateOverrides || {}).length === 1 &&
+      singleJson.surveyDateOverrides?.[projectA.id]?.[recordsA[0].id] ===
+        "2026-03-15",
+    JSON.stringify(singleJson.surveyDateOverrides || {}),
+  );
+  ok(
+    "單一計畫備份帶走調查日期顯示偏好",
+    singleJson.showSurveyDate === false,
+    `showSurveyDate=${String(singleJson.showSurveyDate)}`,
+  );
+  ok(
     "單一計畫備份的檔名帶得出計畫名稱",
     file.name.includes(projectA.code) || file.name.includes(projectA.name),
     file.name,
@@ -243,6 +260,12 @@ if (singleJson) {
       (after.records || []).every((r) => r.review?.status === "已確認"),
     (after.records || []).map((r) => r.review?.status || "無").join("／"),
   );
+  ok(
+    "空白電腦還原後，調查日期指定與顯示偏好都回來了",
+    after.surveyDateOverrides?.[projectA.id]?.[recordsA[0].id] ===
+      "2026-03-15" && after.showSurveyDate === false,
+    `${JSON.stringify(after.surveyDateOverrides || {})}／showSurveyDate=${String(after.showSurveyDate)}`,
+  );
 
   /* ── 4. 再匯入第二份單一計畫備份，應該是併入而不是覆蓋 ── */
   const secondBackup = {
@@ -253,6 +276,10 @@ if (singleJson) {
     pceByProject: { [projectB.id]: seed.pce },
     catalogByProject: { [projectB.id]: seed.vehicleCatalog },
     mappingsByProject: { [projectB.id]: {} },
+    surveyDateOverrides: {
+      [projectB.id]: { [recordsB[0].id]: "2026-04-20" },
+    },
+    showSurveyDate: true,
   };
   await page
     .locator(".backup-grid input[type=file]")
@@ -275,6 +302,19 @@ if (singleJson) {
   ok(
     "併入後兩個計畫的審核狀態都保留",
     (merged.records || []).every((r) => r.review?.status === "已確認"),
+  );
+  ok(
+    "併入第二個計畫後，兩個計畫的調查日期指定都保留",
+    merged.surveyDateOverrides?.[projectA.id]?.[recordsA[0].id] ===
+      "2026-03-15" &&
+      merged.surveyDateOverrides?.[projectB.id]?.[recordsB[0].id] ===
+        "2026-04-20",
+    JSON.stringify(merged.surveyDateOverrides || {}),
+  );
+  ok(
+    "併入備份會恢復其中的調查日期顯示偏好",
+    merged.showSurveyDate === true,
+    `showSurveyDate=${String(merged.showSurveyDate)}`,
   );
 
   /*

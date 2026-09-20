@@ -2471,11 +2471,37 @@ export function diagramLayout(
         return card.height;
       }),
     );
-    const horizontalCenters = Array.from({ length: 4 }, function (_, index) {
-      const left = 16;
-      const usable = width - left * 2 - cardWidth;
-      return left + cardWidth / 2 + (usable * index) / 3;
-    });
+    /*
+     * ══════════════════════════════════════════════════════════════
+     *  卡片比外圍格位多時要**把外圍加寬一圈**，不是往下多長一排
+     * ══════════════════════════════════════════════════════════════
+     *
+     * 外圍原本是 14 個格位（上 4 ＋ 右 3 ＋ 下 4 ＋ 左 3）。使用者
+     * 2026-09-20 把手動新增支線的上限從 7 調到 8，八叉在「駛入＋駛出並列」
+     * 時是 **16 張卡**——多出來的兩張走舊的「往下再長一圈」補位規則，
+     * 於是左上角那一張往下長一個卡高，**正好落在左側那一排的第一個格位上**。
+     * scripts/e2e-eight-arm.mjs 實測到兩張卡完全疊在一起。
+     *
+     * ⚠️ 只在**格位真的不夠**時才加寬（卡片 > 14 張，也就是八叉並列）。
+     *   無條件改成 5＋4＋5＋4 的話，四叉～七叉現有的版面會整批位移，
+     *   連帶把使用者已經拖好的位置也一起搬走——他沒有要求改那些，
+     *   而且釘住版面的守門測試會全紅。
+     * ⚠️ 判斷條件寫成「卡片數 > 基本格位數」而不是「支線數 >= 8」：
+     *   同一件事有兩種數法時，遲早會有一處改了另一處沒改。
+     */
+    const BASE_TOP_SLOTS = 4;
+    const BASE_SIDE_SLOTS = 3;
+    const needsWiderRing =
+      pendingCards.length > BASE_TOP_SLOTS * 2 + BASE_SIDE_SLOTS * 2;
+    const topSlotCount = needsWiderRing ? BASE_TOP_SLOTS + 1 : BASE_TOP_SLOTS;
+    const horizontalCenters = Array.from(
+      { length: topSlotCount },
+      function (_, index) {
+        const left = 16;
+        const usable = width - left * 2 - cardWidth;
+        return left + cardWidth / 2 + (usable * index) / (topSlotCount - 1);
+      },
+    );
     const topCenterY = 184;
     /*
      * 底排要**讓開右下角的流向圖例**。
@@ -2492,7 +2518,20 @@ export function diagramLayout(
     const LEGEND_BAND = 56;
     const bottomCenterY = height - cardHeight / 2 - 10 - LEGEND_BAND;
     const sideCenterX = cardWidth / 2 + 10;
-    const sideCentersY = [340, 490, 640];
+    /*
+     * ⚠️ 不加寬時**沿用原本寫死的三個值**，一個像素都不動：
+     *   改成「依畫布高度平均分布」會讓四叉～七叉的側排整排位移，
+     *   釘住版面的守門測試會全紅，而那個位移沒有任何好處。
+     * 加寬時才改成四個、平均分布在上排與底排之間，
+     * 間距一定大於一張卡的高度加上它上方那一行標題。
+     */
+    const sideCentersY = needsWiderRing
+      ? Array.from({ length: BASE_SIDE_SLOTS + 1 }, function (_, index) {
+          const first = topCenterY + cardHeight + 60;
+          const last = bottomCenterY - cardHeight - 60;
+          return first + ((last - first) * index) / BASE_SIDE_SLOTS;
+        })
+      : [340, 490, 640];
     const perimeterSlots = horizontalCenters
       .map(function (x) {
         return { x, y: topCenterY };
@@ -2591,17 +2630,109 @@ export function diagramLayout(
         }
       if (!improved) break;
     }
-    pendingCards.forEach(function (card, cardIndex) {
+    /*
+     * ══════════════════════════════════════════════════════════════
+     *  外圍格位不夠時補出來的位置會疊在既有格位上（八叉路口實測）
+     * ══════════════════════════════════════════════════════════════
+     *
+     * 使用者 2026-09-20 把手動新增支線的上限從 7 調到 8。八叉在
+     * 「駛入＋駛出並列」時是 **16 張卡**，而外圍只有 14 個格位
+     *（上 4 ＋ 右 3 ＋ 下 4 ＋ 左 3）。多出來的兩張走「往下再長一圈」的
+     * 補位規則，於是左上角那一張往下長 128px，**正好落在左側那一排的
+     * 第一個格位上**——scripts/e2e-eight-arm.mjs 實測到
+     * (16,254–232,370) 與 (10,282–226,398) 兩張卡疊在一起。
+     *
+     * ⚠️ 不改外圍格位的產生方式（例如把上下排從 4 個改成 5 個）：
+     *   那會動到四叉～七叉現有的版面，連帶把使用者已經拖好的位置
+     *   整批位移——他沒有要求改那些，而且釘住版面的守門測試會全紅。
+     *   所以只在**最後真的疊在一起時**把它們推開：
+     *   四～七叉沒有重疊，這一段完全不會動到它們（等於行為不變）。
+     *
+     * ⚠️ 推開的是**系統排的基準位置**，使用者手動拖的位移仍然照加。
+     *   反過來把手動位移也一起推的話，等於系統偷偷搬動使用者擺好的卡。
+     */
+    const basePositions = pendingCards.map(function (card, cardIndex) {
       const slot = perimeterSlots[assignedSlots[cardIndex]];
+      return {
+        x: Math.max(
+          card.bounds.minX,
+          Math.min(card.bounds.maxX, slot.x - card.width / 2),
+        ),
+        y: Math.max(
+          card.bounds.minY,
+          Math.min(card.bounds.maxY, slot.y - card.height / 2),
+        ),
+      };
+    });
+    /*
+     * 留的縫要**包含卡片上方那一行標題**（「來源 E · 示範環河快速道路」
+     * 畫在卡片外面、y = -9，連字高約 20px）。
+     * ⚠️ 只留 8px 的話矩形的確分開了，但上面那一行標題仍然壓在隔壁卡上——
+     *   e2e-eight-arm 實測到「目的 G · …」壓到卡片 #10。
+     *   量矩形卻忘了量寫在矩形外面的字，是這一類排版守門最常見的漏。
+     */
+    const CARD_GAP = 12;
+    /*
+     * 卡片上方那一行標題實際佔掉的高度：y = -9 起、字高約 11，
+     * 再留 4px 呼吸空間。
+     */
+    const LABEL_BAND = 24;
+    for (let pass = 0; pass < 8; pass += 1) {
+      let moved = false;
+      for (let a = 0; a < basePositions.length; a += 1)
+        for (let b = a + 1; b < basePositions.length; b += 1) {
+          const ca = pendingCards[a];
+          const cb = pendingCards[b];
+          const pa = basePositions[a];
+          const pb = basePositions[b];
+          /*
+           * ⚠️ 卡片上方那一行標題（「來源 C · 示範東路三段」）畫在**矩形
+           *   外面**，y = -9、字高約 11，所以實際佔用的範圍要往上多算一段。
+           *   只比矩形的話：兩張卡差 20px 不算重疊，但下面那張的標題
+           *   正好壓在上面那張的底部——e2e-eight-arm 實測到三處。
+           *   「量了矩形卻忘了量寫在矩形外面的字」是這一類守門最常見的漏。
+           */
+          const aTop = pa.y - LABEL_BAND;
+          const bTop = pb.y - LABEL_BAND;
+          const overlapX =
+            Math.min(pa.x + ca.width, pb.x + cb.width) - Math.max(pa.x, pb.x);
+          const overlapY =
+            Math.min(pa.y + ca.height, pb.y + cb.height) - Math.max(aTop, bTop);
+          if (overlapX <= 0 || overlapY <= 0) continue;
+          /*
+           * 往**穿透比較淺**的那一軸推：另一軸推的話要移動的距離大得多，
+           * 卡片會被甩到畫布另一頭，看起來像亂跳。
+           */
+          const shift = (Math.min(overlapX, overlapY) + CARD_GAP) / 2;
+          if (overlapY <= overlapX) {
+            const up = pa.y <= pb.y ? -1 : 1;
+            pa.y = Math.max(
+              ca.bounds.minY,
+              Math.min(ca.bounds.maxY, pa.y + up * shift),
+            );
+            pb.y = Math.max(
+              cb.bounds.minY,
+              Math.min(cb.bounds.maxY, pb.y - up * shift),
+            );
+          } else {
+            const left = pa.x <= pb.x ? -1 : 1;
+            pa.x = Math.max(
+              ca.bounds.minX,
+              Math.min(ca.bounds.maxX, pa.x + left * shift),
+            );
+            pb.x = Math.max(
+              cb.bounds.minX,
+              Math.min(cb.bounds.maxX, pb.x - left * shift),
+            );
+          }
+          moved = true;
+        }
+      if (!moved) break;
+    }
+    pendingCards.forEach(function (card, cardIndex) {
       const bounds = card.bounds;
-      const baseX = Math.max(
-        bounds.minX,
-        Math.min(bounds.maxX, slot.x - card.width / 2),
-      );
-      const baseY = Math.max(
-        bounds.minY,
-        Math.min(bounds.maxY, slot.y - card.height / 2),
-      );
+      const baseX = basePositions[cardIndex].x;
+      const baseY = basePositions[cardIndex].y;
       const x = Math.max(
         bounds.minX,
         Math.min(bounds.maxX, baseX + card.manualOffset.x),
@@ -3704,6 +3835,14 @@ function recordFromPreview(
     rawName: item.file,
     quarter: quarter,
     date: item.date,
+    /*
+     * 同一份檔案讀到兩個以上不同日期時的候選清單，要跟著紀錄一起存下來——
+     * 原始檔匯完就不在手上了，事後執行異常檢查沒有辦法再掃一次。
+     */
+    surveyDateCandidates:
+      item.surveyDateCandidates && item.surveyDateCandidates.length > 1
+        ? item.surveyDateCandidates
+        : undefined,
     surveyType: item.surveyType,
     pceUsed: structuredClone(appliedPce),
     pceVersion: "匯入快照 " + new Date().toISOString(),
@@ -6223,6 +6362,57 @@ export default function TrafficApp() {
   >({});
   /** 檢查結果要不要把已確認的那幾筆一起列出來。 */
   const [showAckedIssues, setShowAckedIssues] = useState(false);
+  /*
+   * ══════════════════════════════════════════════════════════════════
+   *  同一份檔案有兩個日期時，使用者指定的那一個（使用者 2026-09-20）
+   * ══════════════════════════════════════════════════════════════════
+   *
+   * 形狀：{ 計畫 id: { 紀錄 id: "YYYY-MM-DD" } }
+   *
+   * ⚠️ 為什麼是**覆寫**而不是直接改紀錄：使用者原話是「有可能另一個不同
+   *   的日期在該資料中有其意義存在，**所以使用者不會修正資料**」。
+   *   同理，系統這一端也不該把原始判讀結果洗掉——留著才有辦法換回來，
+   *   也才看得出當初到底有幾個候選。
+   * ⚠️ 只影響**顯示**。不影響任何流量或 PCU 計算。
+   */
+  const [surveyDateOverrides, setSurveyDateOverrides] = useState<
+    Record<string, Record<string, string>>
+  >({});
+  /*
+   * 逐筆表格要不要把調查日期寫出來（使用者 2026-09-20：「只需要增加一個
+   * 開關讓我可以看到調查日期就好」）。
+   *
+   * ⚠️ 預設是**開**。做成預設關的話，使用者得先知道有這顆開關才找得到
+   *   這個資訊——那等於把功能藏起來。
+   * ⚠️ 這顆只管顯示，與「期別顯示：季別／調查月份」是兩件事。
+   */
+  const [showSurveyDate, setShowSurveyDate] = useState(true);
+  const surveyDateMap = useMemo(
+    () => surveyDateOverrides[activeProjectId] || {},
+    [surveyDateOverrides, activeProjectId],
+  );
+  /**
+   * 這一筆實際要顯示的調查日期：使用者指定過就用他指定的，否則用判讀到的。
+   *
+   * ⚠️ 覆寫值**必須是候選之一**才採用。備份被手改、或候選在重新匯入後
+   *   變了之後，一個不在候選裡的覆寫會讓畫面顯示一個原始檔上根本沒有的
+   *   日期——那比顯示錯的還糟，因為使用者無從發現。
+   */
+  const effectiveRecordDate = useCallback(
+    (record: { id: string; date?: string; surveyDateCandidates?: string[] }) => {
+      const picked = surveyDateMap[record.id];
+      if (!picked) return record.date || "";
+      const candidates = record.surveyDateCandidates;
+      if (
+        Array.isArray(candidates) &&
+        candidates.length &&
+        !candidates.includes(picked)
+      )
+        return record.date || "";
+      return picked;
+    },
+    [surveyDateMap],
+  );
   const [movementPresence, setMovementPresence] = useState<
     Record<string, MovementPresence>
   >({});
@@ -6455,6 +6645,12 @@ export default function TrafficApp() {
         setAckedIssues(
           data.ackedIssues as Record<string, Record<string, { at: string }>>,
         );
+      if (data.surveyDateOverrides && typeof data.surveyDateOverrides === "object")
+        setSurveyDateOverrides(
+          data.surveyDateOverrides as Record<string, Record<string, string>>,
+        );
+      if (typeof data.showSurveyDate === "boolean")
+        setShowSurveyDate(data.showSurveyDate);
       /* 路口名稱別名（改名後讓下一季自動併入）。舊資料沒有這個欄位是正常的。 */
       if (data.intersectionAliases && typeof data.intersectionAliases === "object")
         setIntersectionAliases(data.intersectionAliases);
@@ -6543,6 +6739,14 @@ export default function TrafficApp() {
         movementPresence: movementPresence,
         /* 已人工確認、不再提醒的異常；不收的話重新整理就全部復活。 */
         ackedIssues: ackedIssues,
+        /*
+         * 「同一份檔案有兩個日期，哪一個才對」的指定。
+         * ⚠️ 不收的話，重新整理之後系統會退回自己判讀的那一個日期，
+         *   明細上的調查日與期別顯示的調查月份**當場變成另一天**。
+         */
+        surveyDateOverrides: surveyDateOverrides,
+        /* 「顯示調查日期」開關；不收的話每次重新整理都跳回預設。 */
+        showSurveyDate: showSurveyDate,
         /* 改名後的「舊名＝新名」；不收的話下一季匯入又會問要不要併入。 */
         intersectionAliases: intersectionAliases,
         reportTemplatesByProject: reportTemplatesByProject,
@@ -6644,6 +6848,8 @@ export default function TrafficApp() {
       formatMemories,
       /* 已確認的異常也要跟著存檔，少了它重新整理就全部復活。 */
       ackedIssues,
+      surveyDateOverrides,
+      showSurveyDate,
       reportTemplatesByProject,
       conclusionTemplatesByProject,
       reportTemplates,
@@ -7493,10 +7699,11 @@ export default function TrafficApp() {
     function () {
       const dates: Record<string, string[]> = {};
       for (const record of projectRecords)
-        if (record.date)
+        /* ⚠️ 走 effectiveRecordDate：使用者指定過哪一個才對，這裡要跟著走。 */
+        if (effectiveRecordDate(record))
           dates[record.quarter] = [
             ...(dates[record.quarter] || []),
-            record.date,
+            effectiveRecordDate(record),
           ];
       const labels: Record<string, string> = {};
       for (const key of quarters)
@@ -7508,7 +7715,8 @@ export default function TrafficApp() {
         );
       return { labels, anyDate: Object.keys(dates).length > 0 };
     },
-    [projectRecords, quarters, periodDisplay, yearStyle],
+    /* ⚠️ 使用者指定了哪一個才是調查日期之後，這一格要跟著重算。 */
+    [projectRecords, quarters, periodDisplay, yearStyle, effectiveRecordDate],
   );
   /*
    * ⚠️ 包成 useCallback 不是為了效能：下面的 applyMainToConclusion 依賴它，
@@ -8258,8 +8466,18 @@ export default function TrafficApp() {
    *   這張圖兩者都算得出來，所以接上。
    */
   const diagramRecord = useMemo(
-    () => viewRecordFor(selected, diagramFilters),
-    [selected, viewRecordFor, diagramFilters],
+    /*
+     * ⚠️ 圖上那一行「調查日期 …」要寫**使用者指定的**那一個。
+     *   不換的話，畫面上的明細表寫他指定的日期、匯出的圖卻寫系統判讀的
+     *   那一個——同一份資料兩個日期，而且是交出去的那一份錯。
+     */
+    () => {
+      const base = viewRecordFor(selected, diagramFilters);
+      if (!base) return base;
+      const iso = effectiveRecordDate(base);
+      return iso === base.date ? base : { ...base, date: iso };
+    },
+    [selected, viewRecordFor, diagramFilters, effectiveRecordDate],
   );
   /** 交通量圖卡預覽要畫的那一筆（套用它自己那一組條件）。 */
   const geometryRecord = useMemo(
@@ -9278,6 +9496,28 @@ export default function TrafficApp() {
     () => ackedIssues[activeProjectId] || {},
     [ackedIssues, activeProjectId],
   );
+  /*
+   * 使用者指定了「哪一個才是調查日期」。
+   *
+   * ⚠️ 要**同時**寫覆寫與記為已確認：只寫覆寫的話這一列會一直掛著，
+   *   只記確認的話系統仍然在用它自己猜的那一個日期。
+   * ⚠️ 選回「請指定…」＝收回指定，覆寫與確認兩邊都要拿掉，
+   *   否則會留下一個「已確認但沒有指定」的狀態，使用者看不懂。
+   */
+  const chooseSurveyDate = (
+    issue: { id: string; message: string; choiceScope?: string },
+    iso: string,
+  ) => {
+    const scope = issue.choiceScope;
+    if (!scope) return;
+    setSurveyDateOverrides(function (previous) {
+      const own = { ...(previous[activeProjectId] || {}) };
+      if (iso) own[scope] = iso;
+      else delete own[scope];
+      return { ...previous, [activeProjectId]: own };
+    });
+    toggleIssueAck(issueFingerprint(issue), Boolean(iso));
+  };
   /** 只有「人工確認」類可以按確認——理由見 ackedIssues 的說明。 */
   const issueCanAck = useCallback(
     (issue: { resolution?: { kind?: string } }) =>
@@ -9308,6 +9548,38 @@ export default function TrafficApp() {
     );
   };
   const ackedCount = currentIssues.filter(issueAcked).length;
+  /*
+   * ══════════════════════════════════════════════════════════════════
+   *  清掉「再也對不上任何一筆現存異常」的確認紀錄（使用者 2026-09-20）
+   * ══════════════════════════════════════════════════════════════════
+   *
+   * 使用者原話（在交通服務水準上提出，三支同步）：
+   *   「那我看完後我要怎麼點選確認，讓之後不會一直出現? 不然資料會累積
+   *     越來越多」
+   *
+   * 他擔心的是畫面上的清單，但**真正會無限長大的是使用者看不到的
+   * ackedIssues**：指紋是 [id, message]，訊息裡的數字一變舊紀錄就永遠是
+   * 孤兒，只進不出。
+   *
+   * ⚠️ 只在「使用者真的按了執行檢查」之後清，而且只清孤兒。
+   *   資料還沒載入就清，會把使用者上一季的確認全部誤殺。
+   * ⚠️ 沒有孤兒時**不可以 setAckedIssues**：每按一次檢查就寫一次存檔，
+   *   等於每次都製造一個沒有內容的變更。
+   * ⚠️ 用 currentIssues（這一次檢查真的跑出來的全部項目），
+   *   **不可以用畫面上篩過的那一份**——那會把「只是被篩掉」的確認當成孤兒清掉。
+   */
+  const pruneOrphanAcks = () => {
+    setAckedIssues(function (previous) {
+      const own = previous[activeProjectId] || {};
+      const keys = Object.keys(own);
+      if (!keys.length) return previous;
+      const live = new Set(currentIssues.map(issueFingerprint));
+      const kept: Record<string, { at: string }> = {};
+      for (const key of keys) if (live.has(key)) kept[key] = own[key];
+      if (Object.keys(kept).length === keys.length) return previous;
+      return { ...previous, [activeProjectId]: kept };
+    });
+  };
   /*
    * 檢查結果的類型標籤篩選（使用者 2026-09-13 指定，三支同步）。
    * ⚠️ 依筆數由多到少排：最常發生的那一類排最前面，使用者才好「先挑最重大的看」。
@@ -12385,7 +12657,7 @@ export default function TrafficApp() {
         PM_OD總量: item.pm.routes,
         PM差值: item.pm.difference,
         未對應流向數: item.unmapped,
-        調查日期: item.record.date || "－",
+        調查日期: effectiveRecordDate(item.record) || "－",
         檢核結果: item.valid ? "通過" : "需核對",
         流量單位: "PCU/hr",
       };
@@ -12759,6 +13031,13 @@ export default function TrafficApp() {
       /* 「這個轉向存不存在」的使用者答案；換一台電腦要一起帶走。 */
       movementPresence: movementPresence,
       /*
+       * 同一份調查檔有多個日期時，使用者指定的日期要跟著備份走。
+       * 這是依計畫保存的資料；單一計畫備份不可夾帶其他計畫的覆寫。
+       */
+      surveyDateOverrides: pick(surveyDateOverrides),
+      /* 調查日期欄的顯示偏好也要能在換電腦後還原。 */
+      showSurveyDate: showSurveyDate,
+      /*
        * 路口名稱別名。換一台電腦沒帶走的話，那台電腦每一季匯入都會
        * 重新問「要不要併入」——正是這一版要修掉的毛病，換個地方重演。
        */
@@ -13079,6 +13358,16 @@ export default function TrafficApp() {
             /* 併入：本機已有的答案不被外來備份覆蓋掉 */
             return { ...data.movementPresence, ...existing };
           });
+        if (
+          data.surveyDateOverrides &&
+          typeof data.surveyDateOverrides === "object"
+        )
+          setSurveyDateOverrides(function (existing) {
+            /* 只覆蓋這次併入的計畫，其他計畫的日期指定保留。 */
+            return { ...existing, ...data.surveyDateOverrides };
+          });
+        if (typeof data.showSurveyDate === "boolean")
+          setShowSurveyDate(data.showSurveyDate);
         setRecordRevisions(
           trimRevisionBatches(
             mergeById(
@@ -13200,6 +13489,15 @@ export default function TrafficApp() {
         data.movementPresence && typeof data.movementPresence === "object"
           ? data.movementPresence
           : {},
+      );
+      setSurveyDateOverrides(
+        data.surveyDateOverrides &&
+          typeof data.surveyDateOverrides === "object"
+          ? data.surveyDateOverrides
+          : {},
+      );
+      setShowSurveyDate(
+        typeof data.showSurveyDate === "boolean" ? data.showSurveyDate : true,
       );
       setRecordRevisions(
         trimRevisionBatches(
@@ -18830,6 +19128,27 @@ export default function TrafficApp() {
                         各路口尖峰彙總
                       </h2>
                     </div>
+                    {/*
+                      * 「顯示調查日期」開關（使用者 2026-09-20：「只需要增加
+                      * 一個開關讓我可以看到調查日期就好」）。
+                      *
+                      * ⚠️ 預設**開**：做成預設關的話，使用者得先知道有這顆
+                      *   開關才找得到這個資訊——那等於把功能藏起來。
+                      * ⚠️ 關掉時那一欄仍然在、只是寫「－」，不是把整欄拿掉：
+                      *   拿掉的話整張表的欄位會位移，而且與流量核對工作台
+                      *   那一份對不起來。
+                      */}
+                    <label className="survey-date-toggle">
+                      <input
+                        type="checkbox"
+                        data-testid="show-survey-date"
+                        checked={showSurveyDate}
+                        onChange={function (event) {
+                          setShowSurveyDate(event.target.checked);
+                        }}
+                      />
+                      顯示調查日期
+                    </label>
                   </div>
                   <div className="table-scroll">
                     <table>
@@ -18906,13 +19225,17 @@ export default function TrafficApp() {
                                     * 讀不到日期就寫清楚「原始檔沒有日期」，
                                     * 不可以留空白——空白會被當成「這裡壞了」。
                                     */}
-                                  {surveyDateInYearStyle(
-                                    record.date || "",
-                                    yearStyle,
-                                  ) || (
-                                    <small className="muted-cell">
-                                      原始檔讀不到日期
-                                    </small>
+                                  {showSurveyDate ? (
+                                    surveyDateInYearStyle(
+                                      effectiveRecordDate(record),
+                                      yearStyle,
+                                    ) || (
+                                      <small className="muted-cell">
+                                        原始檔讀不到日期
+                                      </small>
+                                    )
+                                  ) : (
+                                    <small className="muted-cell">－</small>
                                   )}
                                 </td>
                                 {PEAK_KEYS.map(function (key) {
@@ -20155,6 +20478,7 @@ export default function TrafficApp() {
                         onClick={function () {
                           setQualityRunAt(new Date().toLocaleString("zh-TW"));
                           setQualityRunStamp(qualityDataStamp);
+                          pruneOrphanAcks();
                         }}
                       >
                         執行資料異常檢查
@@ -20472,11 +20796,42 @@ export default function TrafficApp() {
                                       </button>
                                     )}
                                     {/*
-                                     * 「已確認」鈕（使用者 2026-09-17）。
-                                     * ⚠️ 只有「人工確認」類有這顆——「重新匯入」
-                                     *   是原始檔真的有錯，給它一顆按掉的鈕，
-                                     *   等於提供一個把資料錯誤藏起來的開關。
+                                     * 「指定調查日期」下拉（使用者 2026-09-20）。
+                                     * 只有帶 choices 的異常有。
+                                     *
+                                     * ⚠️ 預設值刻意是空的「請指定…」，**不預選
+                                     *   系統判讀的那一個**：預選的話使用者按下去
+                                     *   也看不出自己到底有沒有做過選擇。
                                      */}
+                                    {issue.choices?.length && issue.choiceScope ? (
+                                      <label className="resolution-pick">
+                                        指定調查日期
+                                        <select
+                                          data-testid="survey-date-pick"
+                                          value={
+                                            surveyDateMap[issue.choiceScope] || ""
+                                          }
+                                          onChange={function (event) {
+                                            chooseSurveyDate(
+                                              issue,
+                                              event.target.value,
+                                            );
+                                          }}
+                                        >
+                                          <option value="">請指定…</option>
+                                          {issue.choices.map(function (iso) {
+                                            return (
+                                              <option key={iso} value={iso}>
+                                                {surveyDateInYearStyle(
+                                                  iso,
+                                                  yearStyle,
+                                                ) || iso}
+                                              </option>
+                                            );
+                                          })}
+                                        </select>
+                                      </label>
+                                    ) : null}
                                     {issueCanAck(issue) && (
                                       <button
                                         type="button"
@@ -21856,7 +22211,7 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./路口轉向程式手冊_v2.1.79.pdf"
+                    href="./路口轉向程式手冊_v2.1.80.pdf"
                     /*
                      * ⚠️ download 一定要**帶檔名**，不可以只寫 `download`。
                      *
@@ -21873,7 +22228,7 @@ export default function TrafficApp() {
                      *     真正的使用者拿到的就是那個名字。
                      *     把檔名明確寫進 download，兩種情況都正確。
                      */
-                    download="路口轉向程式手冊_v2.1.79.pdf"
+                    download="路口轉向程式手冊_v2.1.80.pdf"
                   >
                     下載新手手冊
                   </a>

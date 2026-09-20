@@ -43,6 +43,9 @@ const MUST_TRAVEL = [
    * 還原之後每一季匯入都會再問一次同樣的問題（那正是使用者抱怨過的事）。
    */
   "movementPresence",
+  /* 使用者對多日期檔案指定的正式調查日期，以及明細欄顯示偏好。 */
+  "surveyDateOverrides",
+  "showSurveyDate",
   /*
    * 路口名稱別名（改名後的「舊名＝新名」）。
    * 沒帶走的話，換一台電腦之後每一季匯入都會重新問「這個路口要不要併入」——
@@ -58,6 +61,7 @@ const MUST_BE_PER_PROJECT = [
   "mappingsByProject",
   "reportTemplatesByProject",
   "conclusionTemplatesByProject",
+  "surveyDateOverrides",
 ];
 
 function block(startMarker, endMarker, label) {
@@ -176,4 +180,22 @@ test("存檔仍然寫出舊欄位，讓退版之後還讀得到東西", () => {
       new RegExp(`\\n\\s*${key}: ${key},`),
       `存檔沒有保留舊欄位 ${key}`,
     );
+});
+
+test("調查日期指定與顯示偏好在併入及完整取代兩條還原路徑都會恢復", () => {
+  const restore = block(
+    "async function restoreBackup(file: File)",
+    "const allRecordsEmpty",
+    "備份還原",
+  );
+  assert.equal(
+    (restore.match(/setSurveyDateOverrides\(/g) || []).length,
+    2,
+    "surveyDateOverrides 沒有同時涵蓋併入與完整取代還原",
+  );
+  assert.equal(
+    (restore.match(/setShowSurveyDate\(/g) || []).length,
+    2,
+    "showSurveyDate 沒有同時涵蓋併入與完整取代還原",
+  );
 });

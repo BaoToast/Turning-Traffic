@@ -12,7 +12,13 @@
  *   畫面照樣長出來，只是某個功能默默沒反應——最難查的那種。
  *   所以下面有一段硬性檢查，發現殘留就直接失敗，不產檔。
  */
-import { readFileSync, writeFileSync, existsSync, copyFileSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  copyFileSync,
+  mkdirSync,
+} from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VERSION as SYSTEM_VERSION } from "../lib/traffic.ts";
@@ -249,13 +255,14 @@ const out = join(
   "out",
   `路口轉向_試用版_${SYSTEM_VERSION}.html`,
 );
+const outDir = dirname(out);
+mkdirSync(outDir, { recursive: true });
 writeFileSync(out, html, "utf8");
 /*
  * 手冊 PDF 要跟 HTML **放在一起**交出去，否則按鈕一樣是壞的。
  * ⚠️ 搬完要再確認一次真的在那裡：少了這一步，出檔會成功、按鈕會壞，
  *   而且要等使用者按下去才知道。
  */
-const outDir = dirname(out);
 for (const name of manualFiles) {
   const target = join(outDir, name);
   copyFileSync(join(dist, name), target);

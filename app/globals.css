@@ -6198,11 +6198,37 @@ tr.needs-check > td:first-child {
  * 使用者 2026-09-14：「選一個路口，直接從圖片看轉向顏色」。
  * 依他同意的排版：右欄看圖、**黏住**，左欄改設定時圖不會跑掉。
  */
+/*
+ * ⚠️ 釘住**只能**寫在「兩欄版面」的條件裡，而且那個條件必須和
+ *   `.geometry-layout` 收成單欄的斷點是**同一個數字**。
+ *
+ *   使用者 2026-09-20 回報「路口幾何示意圖我看不到，似乎和顏色檢視轉向重疊」。
+ *   原因是這兩條規則的斷點各寫各的：
+ *     .geometry-layout      單欄 → @media (max-width: 1420px)
+ *     .geometry-turn-preview 取消釘住 → @media (max-width: 1100px)   ← 錯
+ *   於是 1101～1420px 這一段「已經是單欄、卻還釘著」。單欄時這一塊
+ *   的**正下方**就是「路口幾何示意圖」，一往下捲它就釘在畫面上緣，
+ *   而 sticky 是定位元素、下面那塊是一般元素，依繪製順序定位元素在上，
+ *   於是整塊幾何示意圖被不透明的面板底色整片蓋掉——不是沒畫出來，是被蓋住。
+ *
+ *   同一個坑 `.trend-layout`（見 ≥1400px 區塊）與 `.peak-shape`
+ *   （見 @container (min-width: 1076px)）都踩過並留了警語，這裡當初漏了。
+ *
+ *   ⚠️ 不要改回「基底就 sticky、再用 max-width 取消」的寫法：那等於把
+ *     正確性押在兩個數字永遠手動同步上，而這次就是這樣壞的。
+ *     改成「預設不釘，只有兩欄時才釘」，漏掉的那一邊是安全的那一邊。
+ *
+ *   守門：scripts/e2e-sticky-cover.mjs（掃寬度做 hit-test）。
+ */
 .geometry-turn-preview {
-  position: sticky;
-  /* ⚠️ 原本寫死 12px，那是主工具列還不存在時算的，見 :root 的 --sticky-top。 */
-  top: var(--sticky-top);
   align-self: start;
+}
+@media (min-width: 1421px) {
+  .geometry-turn-preview {
+    position: sticky;
+    /* ⚠️ 原本寫死 12px，那是主工具列還不存在時算的，見 :root 的 --sticky-top。 */
+    top: var(--sticky-top);
+  }
 }
 .turn-preview {
   display: grid;
@@ -6284,11 +6310,11 @@ tr.needs-check > td:first-child {
   color: #8a5300;
   font-size: 12px;
 }
-@media (max-width: 1100px) {
-  .geometry-turn-preview {
-    position: static;
-  }
-}
+/*
+ * ⚠️ 這裡原本有一條 `@media (max-width: 1100px) { .geometry-turn-preview
+ *   { position: static } }`。它已經被上面「只有兩欄才釘」的寫法取代，
+ *   不可以再加回來——留著等於又多一個要手動同步的斷點。
+ */
 
 /*
  * ══════════════════════════════════════════════════════════════════════
@@ -6881,4 +6907,66 @@ tr.needs-check > td:first-child {
   background:#fdf3e8;
   color:#6d3d12;
   font-size:12px;line-height:1.75;
+}
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  逐筆調查日期：顯示開關，以及異常清單上的「指定調查日期」下拉
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-20：
+ *   「只需要增加一個開關讓我可以看到調查日期就好」
+ *   「同一張表若你判讀到 2 個日期……你要如何讓使用者告訴你哪個才是正確的日期」
+ *
+ * ⚠️ 顏色沿用既有的 #3d5563（白底 7.4:1，過 AA）。不要另外調一個更淡的灰：
+ *   這一支 2026-09-10 抓過 43 處量不過的淺灰字，不要再來一次。
+ */
+.survey-date-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #3d5563;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.survey-date-toggle input {
+  margin: 0;
+}
+/*
+ * 「指定調查日期」下拉。
+ * ⚠️ 與「已人工確認」鈕一樣要**整列自己一行**（grid-column: 1 / -1）：
+ *   擠在同一格裡的話，異常清單那一欄本來就窄，下拉會把整塊撐出水平捲軸。
+ */
+.issue-list .resolution-pick {
+  grid-column: 1 / -1;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #3d5563;
+}
+.issue-list .resolution-pick select {
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 6px;
+  border: 1px solid #cbd7dd;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+}
+
+/*
+ * 圖說字數變多之後（第 3、4 級，使用者 2026-09-20）不可以撐破或重疊。
+ * ⚠️ 圖保持可見那一件**已經有了**（上面 .trend-layout > .trend-chart 的 sticky），
+ *   所以這裡只補「長路名與長數字串一律在框內換行」。
+ */
+.trend-script-item p,
+.trend-script-item h4 {
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
