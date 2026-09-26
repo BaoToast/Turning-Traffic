@@ -174,3 +174,60 @@ test("前置：正常檔案不可以被擋下（blockReason 必須是空的）",
  *   ✖ 正常的四支支線檔案…（誤報 07:00~07:15 等 5 個時距）
  * 證明那一份正常檔案真的擋得住這個寫法。
  */
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  同一個轉向在畫面上只能有一個中文名字（2026-09-25 第六輪）
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 第六輪抓到：轉向標籤在專案裡有**三份**——
+ *   ・`lib/traffic.ts` 的 `MOVEMENT_LABELS`（through 寫「直進」）
+ *   ・`app/traffic-app.tsx` 的 `MOVE_LABELS`（through 寫「直行」）
+ *   ・`app/main-filters.ts` 的 `MOVEMENT_CHOICE_LABELS`（through 寫「直行」）
+ * 三份都印在畫面上：OD 矩陣與匯出欄名寫「直行」，歷季趨勢的指標名稱
+ * 與匯入盤點訊息寫「直進」。手冊六處全寫「直行」。
+ * 使用者看到兩個詞，無法確定那是不是兩件不同的事。
+ *
+ * ⚠️ 守法用「比對每一份與 lib 那一份是否一致」，不是「禁止出現直進」：
+ *   解析原始檔的樣式**必須**繼續接受「直進」（別人填的調查表兩種都有），
+ *   所以不能整檔禁字。
+ */
+test("每一份轉向標籤表都必須與 lib 的 MOVEMENT_LABELS 一致", async () => {
+  const { MOVEMENT_LABELS, MOVEMENT_KEYS } = await import("../lib/traffic.ts");
+  const { MOVEMENT_CHOICE_LABELS } = await import("../app/main-filters.ts");
+  for (const key of MOVEMENT_KEYS)
+    assert.equal(
+      MOVEMENT_CHOICE_LABELS[key],
+      MOVEMENT_LABELS[key],
+      `主工具列的「${key}」寫「${MOVEMENT_CHOICE_LABELS[key]}」，` +
+        `而 lib 寫「${MOVEMENT_LABELS[key]}」——同一個轉向兩個名字`,
+    );
+  /* 前置檢查：真的比了三個鍵。 */
+  assert.equal(MOVEMENT_KEYS.length, 3, "轉向鍵不是三個了？");
+});
+
+test("traffic-app 不可以再自己寫一份轉向標籤表", async () => {
+  /*
+   * 上一支比的是「值一致」，這一支擋的是「又多一份」。
+   * 兩份即使今天一致，下一次改名還是會分岔——這就是第六輪那一件事的成因。
+   */
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(
+    new URL("../app/traffic-app.tsx", import.meta.url),
+    "utf8",
+  );
+  const body = source
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/^[ \t]*\/\/[^\n]*$/gm, " ");
+  assert.doesNotMatch(
+    body,
+    /const MOVE_LABELS\s*=\s*\{/,
+    "traffic-app 又自己寫了一份轉向標籤表。請寫成 " +
+      "`const MOVE_LABELS = MOVEMENT_LABELS;`（lib 那一份是唯一來源）",
+  );
+  assert.match(
+    body,
+    /const MOVE_LABELS\s*=\s*MOVEMENT_LABELS;/,
+    "找不到 `const MOVE_LABELS = MOVEMENT_LABELS;`——這一支的前提不成立了",
+  );
+});

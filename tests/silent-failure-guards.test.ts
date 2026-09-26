@@ -8,6 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolveSurveyType, inspectWorkbook } from "../lib/traffic.ts";
 import XLSX from "xlsx";
+import { readFileSync } from "node:fs";
 
 /* ── 一、資料別只認平日與假日 ── */
 test("日期欄括號裡不是平日／假日時，資料別回「待設定」", () => {
@@ -327,4 +328,100 @@ test("非調查日期、普通日期與無效日期排在前面時，仍要取�
   );
   assert.equal(preview.date, "2026-01-26", "應取真正的調查日期，不是製表日");
   assert.equal(preview.surveyType, "平日", "資料別不可以被製表日期的括號帶偏");
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  剪貼簿：可選鏈會短路**整條成員鏈**（2026-09-25 新增）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * `navigator.clipboard?.writeText(t).then(a).catch(b)` 在 clipboard 為
+ * undefined 時回傳 undefined，而且 **then 與 catch 都不會執行**——
+ * 已實測：`({}).clipboard?.writeText("x").then(a).catch(b)` 回 undefined，
+ * 兩個 callback 一個都沒跑。
+ *
+ * 後果：在非安全內容（http 的區網網址）或舊瀏覽器上按「複製」，
+ * 沒有複製、沒有 toast、也不會走 .catch 的提示——使用者以為複製成功了，
+ * 去貼上得到舊的剪貼簿內容。
+ *
+ * 原本四個複製按鈕裡只有一個（報表草稿的「複製全文」）有明確判斷，
+ * 另外三個沒有，而那一個的註解就寫著「不能靜靜失敗讓使用者以為複製成功了」。
+ */
+test("⚠️ 每一個用到 navigator.clipboard 的地方都要先明確判斷，不可以只靠可選鏈", () => {
+  /* 先把「可選鏈短路連 catch 都不跑」這件事釘成可執行的事實。 */
+  let ran = false;
+  const fake = {} as { clipboard?: { writeText(t: string): Promise<void> } };
+  const returned = fake.clipboard
+    ?.writeText("x")
+    .then(function () {
+      ran = true;
+    })
+    .catch(function () {
+      ran = true;
+    });
+  assert.equal(returned, undefined, "可選鏈應該短路成 undefined");
+  assert.equal(
+    ran,
+    false,
+    "then 與 catch 都不應該執行——這就是「按了完全沒反應」的機制",
+  );
+
+  const FILES = ["../app/traffic-app.tsx", "../app/peak-shape-charts.tsx"];
+  const offenders: string[] = [];
+  for (const rel of FILES) {
+    const text = readFileSync(new URL(rel, import.meta.url), "utf8");
+    const lines = text.split("\n");
+    lines.forEach(function (line, index) {
+      /* 只看「拿 clipboard 去寫」的那些行，不看純粹的存在性判斷。 */
+      if (!/navigator\.clipboard/.test(line)) return;
+      if (/if \(!navigator\.clipboard\?\.writeText\)/.test(line)) return;
+      /*
+       * ⚠️ 跳過註解行。修這個缺陷時我在註解裡舉了舊寫法當例子，
+       *   結果被自己這一條抓成違規——那會逼人把說明刪掉，很不合理。
+       */
+      const trimmed = line.trim();
+      if (
+        trimmed.startsWith("*") ||
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("/*")
+      )
+        return;
+      /*
+       * 合法的兩種寫法：
+       *   ① 先 `if (!navigator.clipboard?.writeText) return notify(...)`，
+       *      再 `navigator.clipboard.writeText(...)`（不帶 ?.）
+       *   ② try { await navigator.clipboard.writeText(...) } catch {}
+       * 不合法的：`navigator.clipboard?.writeText(...)` 直接接 .then/.catch
+       */
+      if (/navigator\.clipboard\s*$/.test(line)) {
+        /* 鏈的開頭，看下一行是不是 `?.writeText` */
+        const next = lines[index + 1] || "";
+        if (/^\s*\?\.writeText/.test(next))
+          offenders.push(`${rel}:${index + 1} 用了可選鏈直接接 .then/.catch`);
+        return;
+      }
+      if (/navigator\.clipboard\?\.writeText\(/.test(line))
+        offenders.push(`${rel}:${index + 1} 用了可選鏈直接呼叫`);
+    });
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    "下面這些複製按鈕在沒有剪貼簿權限時會完全靜默（連 .catch 都不會跑）：\n  " +
+      offenders.join("\n  "),
+  );
+});
+
+test("⚠️ 前置：確實有四個以上的複製按鈕被這一條守著（0 個的話上一條恆真）", () => {
+  let count = 0;
+  for (const rel of ["../app/traffic-app.tsx", "../app/peak-shape-charts.tsx"]) {
+    const text = readFileSync(new URL(rel, import.meta.url), "utf8");
+    count += (text.match(/if \(!navigator\.clipboard\?\.writeText\)/g) || [])
+      .length;
+  }
+  assert.ok(
+    count >= 4,
+    `只找到 ${count} 個明確判斷——應該至少 4 個` +
+      `（結論草稿、報表草稿、趨勢說明、尖峰形狀說明）`,
+  );
 });

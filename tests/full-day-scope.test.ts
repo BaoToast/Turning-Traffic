@@ -22,6 +22,11 @@ import {
   type TrafficRecord,
 } from "../lib/traffic.ts";
 import type { PeakKey as ConclusionPeakKey } from "../lib/conclusion.ts";
+import {
+  CONCLUSION_METRICS,
+  scopeRateUnit,
+  scopeVehicleUnit,
+} from "../lib/conclusion.ts";
 
 /*
  * ── 全日時段與全日尖峰小時（v2.1.30）的守門測試 ──
@@ -430,13 +435,48 @@ test("「－」要說得出是哪一種原因：資料不足，還是舊資料�
 });
 
 test("單位跟著統計範圍走，全調查時段不可以標成每小時", () => {
-  assert.equal(scopeUnit("AM"), "PCU/hr");
-  assert.equal(scopeUnit("PM", "vehicle"), "輛/hr");
-  assert.equal(scopeUnit("DAY"), "PCU/hr");
-  assert.equal(scopeUnit("DAY", "vehicle"), "輛/hr");
+  /*
+   * ⚠️ 2026-09-25 第六輪：這一支原本寫 `scopeUnit("AM")`、`scopeUnit("FULL")`
+   *   ——**故意只傳一個參數**，而且用正面斷言把「不傳涵蓋時是什麼」釘死。
+   *   那等於用測試宣告「不傳涵蓋是合法用法」，而全專案二十幾個沒傳涵蓋的
+   *   呼叫點就是這樣長出來的（其中好幾處在畫面上印出與同頁不一致的單位）。
+   *   現在 `scopeUnit()` 三個參數全部必填，這裡一律明寫。
+   */
+  assert.equal(scopeUnit("AM", "pcu", "unknown"), "PCU/hr");
+  assert.equal(scopeUnit("PM", "vehicle", "unknown"), "輛/hr");
+  assert.equal(scopeUnit("DAY", "pcu", "unknown"), "PCU/hr");
+  assert.equal(scopeUnit("DAY", "vehicle", "unknown"), "輛/hr");
   /* 全調查時段是整段調查的累計，不是流率。 */
-  assert.equal(scopeUnit("FULL"), "PCU/調查時段");
-  assert.equal(scopeUnit("FULL", "vehicle"), "輛/調查時段");
+  assert.equal(scopeUnit("FULL", "pcu", "unknown"), "PCU/調查時段");
+  assert.equal(scopeUnit("FULL", "vehicle", "unknown"), "輛/調查時段");
+});
+
+test("scopeUnit() 的三個參數不可以再有預設值", () => {
+  /*
+   * ⚠️ 這一條守的是「洞不可以被悄悄補回去」。
+   *   只要 `kind` 或 `coverage` 任何一個重新有預設值，呼叫端就又能不講涵蓋，
+   *   而 TypeScript 不會有任何抱怨——第六輪之前就是這個狀態。
+   *   刻意用原始碼比對，不是行為比對：行為上「有預設值」與「每個呼叫端都
+   *   明寫 unknown」完全一樣，看不出差別。
+   */
+  const source = readFileSync(
+    new URL("../lib/traffic.ts", import.meta.url),
+    "utf8",
+  );
+  const signature = source.match(
+    /export function scopeUnit\(([\s\S]*?)\) \{/,
+  );
+  assert.ok(signature, "找不到 scopeUnit 的簽章——寫法改了就要跟著改這一支");
+  assert.doesNotMatch(
+    signature[1],
+    /=/,
+    "scopeUnit() 的參數又出現預設值了。三個參數必填是刻意的：" +
+      "拿掉預設值才能讓每一個呼叫點被迫講出它的涵蓋是從哪裡來的。\n" +
+      `目前的簽章：${signature[1].trim()}`,
+  );
+  /* 前置檢查：真的抓到三個參數，不是抓到一個空字串就過。 */
+  for (const name of ["scope", "kind", "coverage"])
+    assert.match(signature[1], new RegExp(name), `簽章裡沒有 ${name}`);
 });
 
 test("分母：24 小時寫「調查日」，非 24 小時寫「調查時段」，混合一律「調查時段」", () => {
@@ -450,12 +490,13 @@ test("分母：24 小時寫「調查日」，非 24 小時寫「調查時段」�
   assert.equal(scopeUnit("FULL", "pcu", "partial"), "PCU/調查時段");
   assert.equal(scopeUnit("FULL", "pcu", "mixed"), "PCU/調查時段");
   /*
-   * ⚠️ 預設值必須是「調查時段」而不是「調查日」。
+   * ⚠️ 涵蓋不明（`"unknown"`）時要落在「調查時段」而不是「調查日」。
    *   24 小時是「調查時段剛好等於一日」的特例，用調查時段當共同分母不會說錯話；
-   *   反過來用「日」當預設，任何忘了傳涵蓋的呼叫端都會把 4 小時的量宣告成全日量。
+   *   反過來落在「日」，任何拿不到涵蓋的地方都會把 4 小時的量宣告成全日量。
    *   **錯的方向要選會少講，不要選會多講。**
+   *   ⚠️ 這**不是**在說「可以不傳涵蓋」——三個參數已經全部必填（見上一支）。
+   *     這裡講的是「真的查不到涵蓋時，那個值該落在哪一邊」。
    */
-  assert.equal(scopeUnit("FULL"), "PCU/調查時段");
   assert.equal(scopeUnit("FULL", "pcu", "unknown"), "PCU/調查時段");
   /* 尖峰的分母永遠是 hr，不受涵蓋影響。 */
   for (const coverage of ["full", "partial", "mixed", "unknown"] as const)
@@ -568,7 +609,21 @@ test("進階分析與批次成果包的全日時段單位都走 scopeUnit", () =
    *   一律改讀 advancedPeak。守的仍然是同一件事——單位要走 scopeUnit、
    *   而且要走**這一頁實際在算的那個時段**，不是寫死 PCU/hr。
    */
-  assert.match(advancedBlock, /單位:\s*scopeUnit\(advancedPeak\)/);
+  /*
+   * ⚠️ 2026-09-25 第六輪：樣式一併要求**帶涵蓋**。原本只要求
+   *   `scopeUnit(advancedPeak)`，那個寫法靠的是函式的預設涵蓋，
+   *   選「全調查時段」時活頁簿寫「PCU/調查時段」而畫面寫「PCU/調查日」。
+   *   現在 `scopeUnit()` 三個參數必填，樣式也要跟著釘住第三個參數。
+   */
+  assert.match(
+    advancedBlock,
+    /單位:\s*scopeUnit\(advancedPeak,\s*"pcu",\s*advancedExportCoverage\)/,
+  );
+  assert.match(
+    advancedBlock,
+    /const advancedExportCoverage = coverageOf\(view\)/,
+    "匯出用的涵蓋不是從實際要匯出的那一筆算出來的",
+  );
   assert.doesNotMatch(
     advancedBlock,
     /scopeUnit\(peak\)/,
@@ -584,7 +639,15 @@ test("進階分析與批次成果包的全日時段單位都走 scopeUnit", () =
     appSource.indexOf('{view === "advanced"'),
     appSource.indexOf('{view === "conclusion"'),
   );
-  assert.match(advancedView, /scopeUnit\(advancedPeak\)/);
+  assert.match(
+    advancedView,
+    /scopeUnit\(advancedPeak,\s*"pcu",\s*advancedCoverage\)/,
+  );
+  assert.doesNotMatch(
+    advancedView,
+    /scopeUnit\(advancedPeak\)/,
+    "這一頁還有沒帶涵蓋的單位標籤——同一份資料會出現兩種單位",
+  );
   assert.doesNotMatch(
     advancedView,
     /守恆差值[\s\S]{0,160}PCU\/hr/,
@@ -595,7 +658,15 @@ test("進階分析與批次成果包的全日時段單位都走 scopeUnit", () =
     appSource.indexOf("async function exportBatch"),
     appSource.indexOf("function importBackup"),
   );
-  assert.match(batchBlock, /scopeUnit\(peak,/);
+  /*
+   * ⚠️ 2026-09-25 第六輪：改成多行呼叫（第三個參數是整包的涵蓋），
+   *   原本的單行樣式 `scopeUnit(peak,` 抓不到。順便把第三個參數一起釘住——
+   *   README 描述的是整個 ZIP，逐筆算會寫出一個只對其中一個路口成立的單位。
+   */
+  assert.match(
+    batchBlock,
+    /scopeUnit\(\s*peak,\s*vehicle === "all" \? "pcu" : "vehicle",\s*coverageOf\(rows\.map\(viewRecord\)\),\s*\)/,
+  );
   assert.match(batchBlock, /SCOPE_LABELS\[peak\]/);
 });
 
@@ -624,7 +695,8 @@ test("轉向圖上的數字只有一支取值函式（含新增的車輛數模�
   /*
    * ⚠️ v2.1.64 起還要把**這一筆的調查涵蓋**傳進去：
    *   滿 24 小時寫「/調查日」，否則寫「/調查時段」。
-   *   不傳的話會走安全預設（調查時段），24 小時的圖上就少講了一件事。
+   *   ⚠️ 2026-09-25 第六輪：`scopeUnit()` 三個參數已全部必填，
+   *     「不傳」在型別上就過不了（原本這裡寫的是「不傳會走安全預設」）。
    */
   assert.match(
     appSource,
@@ -770,4 +842,110 @@ test("空的 Movement 只有一份定義", () => {
     null,
     "沒有資料時是 null，不是 0——0 會被當成「真的沒有車」",
   );
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  呼叫端也要傳 coverage：同一頁不可以印出兩種單位（2026-09-25 第五輪）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 這個檔案原本只驗 `scopeUnit()` **本身**的行為，沒有驗**呼叫端有沒有把
+ * coverage 傳進去**。第五輪獨立複查抓到：路口轉向圖「顯示」下拉的五個選項
+ * 都沒傳，於是 `scope === "FULL"` 時選單恆寫「PCU/調查時段」，
+ * 而同一頁的圖面走 `coverageOf(diagramRecord)`，滿 24 小時的檔寫「PCU/調查日」
+ * ——同一頁對同一批資料兩種單位。
+ *
+ * PROJECT_HANDOFF 的規則是「單位的唯一來源是 scopeUnit()；不得另寫一套判斷」。
+ * 三處都呼叫了同一支，但傳的參數不同，**規則字面過關、畫面仍然不一致**。
+ * 所以守門要守的是「呼叫端傳了什麼」，不是「有沒有呼叫」。
+ */
+test("路口轉向圖的顯示下拉：每一個選項的單位都要傳 coverage", () => {
+  const source = readFileSync(
+    new URL("../app/traffic-app.tsx", import.meta.url),
+    "utf8",
+  );
+  /*
+   * 只看轉向圖「顯示」那個 <select> 的區塊，避免掃到別頁的同名選項
+   * （`<option value="volume">交通流量</option>` 在別的下拉也有）。
+   * 錨點用這一組只有轉向圖才有的選項值組合。
+   */
+  const start = source.indexOf('<option value="volume">\n');
+  assert.notEqual(start, -1, "抓不到轉向圖「顯示」下拉的選項——結構改了嗎？");
+  const end = source.indexOf('<option value="countPercent">', start);
+  assert.notEqual(end, -1, "抓不到 countPercent 那個選項");
+  const block = source.slice(start, end + 400);
+
+  const calls = [...block.matchAll(/scopeUnit\(([^)]*)\)/g)].map((m) => m[1]);
+  assert.ok(
+    calls.length >= 4,
+    `這個區塊只抓到 ${calls.length} 個 scopeUnit(…)——結構改了嗎？`,
+  );
+  const missing = calls.filter((args) => !args.includes("coverageOf("));
+  assert.deepEqual(
+    missing,
+    [],
+    "轉向圖「顯示」下拉裡有 scopeUnit(…) 沒有傳 coverage："
+      + "FULL 時它會恆寫「調查時段」，而同一頁的圖面寫「調查日」：\n  "
+      + missing.map((a) => `scopeUnit(${a})`).join("\n  "),
+  );
+});
+
+test("結論草稿自己那一份單位規則，必須與 scopeUnit() 逐格相同", () => {
+  /*
+   * ⚠️ `lib/conclusion.ts` 刻意**沒有任何 import**（它要能單獨搬走），
+   *   所以單位規則在那裡有第二份實作：`scopeRateUnit()`／`scopeVehicleUnit()`。
+   *   兩份實作就是兩個真相來源，而 2026-09-23 已經發生過一次：
+   *   同一筆 24 小時調查，Excel 與報告草稿寫「PCU/調查日」、結論草稿寫
+   *   「PCU/調查時段」。
+   *
+   * 既然不能合併，就**逐格比對**：四個統計範圍 × 四種涵蓋 × 兩種量，
+   * 一格不同就紅。這比「兩邊各自有測試」強：各自的測試會各自通過。
+   */
+  const coverages = ["full", "partial", "mixed", "unknown"] as const;
+  const scopes = ["AM", "PM", "DAY", "FULL"] as const;
+  let checked = 0;
+  for (const scope of scopes)
+    for (const coverage of coverages) {
+      assert.equal(
+        scopeRateUnit(scope, coverage),
+        scopeUnit(scope, "pcu", coverage),
+        `PCU：${scope}／${coverage} 兩份實作不一致`,
+      );
+      assert.equal(
+        scopeVehicleUnit(scope, coverage),
+        scopeUnit(scope, "vehicle", coverage),
+        `車輛數：${scope}／${coverage} 兩份實作不一致`,
+      );
+      checked += 2;
+    }
+  /* 前置檢查：真的比了 32 格，不是迴圈沒跑就過。 */
+  assert.equal(checked, 32, `只比了 ${checked} 格`);
+});
+
+test("結論草稿的勾選標籤裡不可以寫死單位", () => {
+  /*
+   * ⚠️ 2026-09-25 第六輪抓到：勾選框的字寫死「（PCU/hr）」「（輛/調查時段）」，
+   *   而使用者可以勾「全調查時段」、也可以一次勾多個時段——
+   *   那個寫死的單位一定有機會與草稿本文不一致（實際就不一致）。
+   *   單位只能由草稿本文逐句寫出來，標籤只講「是什麼量」。
+   */
+  /* ⚠️ 斜線有半形與全形兩種寫法，兩種都要抓（舊標籤裡兩種都出現過）。 */
+  const HARDCODED_UNIT = /[/／]\s*(hr|調查日|調查時段)/;
+  const bad = CONCLUSION_METRICS.filter((metric) =>
+    HARDCODED_UNIT.test(metric.label),
+  ).map((metric) => `${metric.key}：${metric.label}`);
+  assert.deepEqual(
+    bad,
+    [],
+    "這些勾選標籤把單位寫死了（單位要跟著使用者選的時段與該筆涵蓋走）：\n  " +
+      bad.join("\n  "),
+  );
+  /* 前置檢查：真的讀到一批標籤。 */
+  assert.ok(
+    CONCLUSION_METRICS.length >= 10,
+    `只讀到 ${CONCLUSION_METRICS.length} 項指標`,
+  );
+  /* 反面：樣式真的抓得到已知的舊寫法，否則這一支等於沒在守。 */
+  for (const sample of ["各支線駛入流量（PCU/hr）", "全調查時段流量（輛／調查時段）"])
+    assert.match(sample, HARDCODED_UNIT, "樣式抓不到舊寫法");
 });

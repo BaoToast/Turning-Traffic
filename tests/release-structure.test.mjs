@@ -31,7 +31,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -581,40 +581,60 @@ test("根目錄的網站建置產物是本版（可發布環境才檢查）", ()
  *   三、前置檢查：真的從文字裡抓到兩筆（JS 與 CSS），抓不到就紅，
  *       不可以因為段落被改寫而安靜地變成恆真。
  */
-test("更新說明寫的資產檔名與 SHA-256 就是這一包裡的那一份", () => {
+/*
+ * ⚠️ 2026-09-24 改過兩件事（F6 獨立複查）：
+ *   一、原本這一段只列了**主程式與樣式表兩個**資產，另外三個
+ *       （html2canvas、index.es、purify.es）沒有寫雜湊。列一半的清單，
+ *       使用者沒有列到的那幾個就無從核對。現在要求**全部列出**。
+ *   二、手冊也納入。它是使用者最常單獨下載的一個檔案，原本完全沒有雜湊。
+ * 格式與姊妹系統全日交通量統一成「檔名一行、`SHA-256 = ` 一行」。
+ */
+test("更新說明寫的資產檔名與 SHA-256 就是這一包裡的那一份（而且要列齊）", () => {
   const NOTE = "【更新說明】請先讀我.txt";
   if (!has(NOTE) || !has("assets")) return; // 只有原始碼的包沒有這一層
 
   const text = read(NOTE);
   const pairs = [
-    ...text.matchAll(/(assets\/[^\s，,]+\.(?:js|css))[^\n]*\n\s*([0-9a-f]{64})/g),
-  ].map((m) => ({ file: m[1], sha: m[2] }));
+    ...text.matchAll(
+      /^[ \t]*([A-Za-z0-9_.\u4e00-\u9fff-]+\.(?:js|css|pdf))[ \t]*\n[ \t]*SHA-256[ \t]*=[ \t]*([0-9a-f]{64})[ \t]*$/gm,
+    ),
+  ].map((m) => ({ name: m[1], sha: m[2] }));
 
+  /* 前置檢查：格式一改就要有人知道，不可以安靜地變成恆真。 */
   assert.ok(
-    pairs.length >= 2,
-    `${NOTE} 的發布建置段落裡抓不到「檔名＋SHA-256」兩筆（實際 ${pairs.length} 筆）——` +
-      `段落被改寫過的話請一併更新這個檢查，不可以讓它安靜地變成恆真`,
-  );
-  assert.ok(
-    pairs.some((p) => p.file.endsWith(".js")) &&
-      pairs.some((p) => p.file.endsWith(".css")),
-    `${NOTE} 要同時寫出主資產（.js）與樣式表（.css）`,
+    pairs.length >= 3,
+    `${NOTE} 抓不到「檔名一行、SHA-256 = 一行」的組（實際 ${pairs.length} 組）——` +
+      "段落被改寫過的話請一併更新這個檢查",
   );
 
-  for (const { file, sha } of pairs) {
+  /* 一、assets/ 裡的每一個檔案都必須被列出來（列一半等於沒列）。 */
+  const actual = readdirSync(join(root, "assets")).sort();
+  const listed = pairs.map((pair) => pair.name);
+  const missing = actual.filter((name) => !listed.includes(name));
+  assert.deepEqual(
+    missing,
+    [],
+    `${NOTE} 漏了這幾個資產的 SHA-256：${missing.join("、")}——` +
+      "沒有列到的那幾個，使用者無從核對",
+  );
+
+  /* 二、手冊也要有一組。 */
+  assert.ok(
+    pairs.some((pair) => pair.name.endsWith(".pdf")),
+    `${NOTE} 沒有寫手冊的 SHA-256——它是使用者最常單獨下載的一個檔案`,
+  );
+
+  /* 三、每一個寫出來的雜湊都要實際重算比對。 */
+  for (const { name, sha } of pairs) {
+    const candidates = [join(root, "assets", name), join(root, name)];
+    const found = candidates.find((path) => existsSync(path));
     assert.ok(
-      has(file),
-      `${NOTE} 寫著 ${file}，但這一包的 assets/ 裡沒有這個檔案——` +
-        `重建之後忘了更新這一段（實際有：${readdirSync(join(root, "assets")).join("、")}）`,
+      found,
+      `${NOTE} 寫著 ${name}，但這一包裡找不到這個檔案——` +
+        `重建之後忘了更新這一段（assets/ 實際有：${actual.join("、")}）`,
     );
-    const real = createHash("sha256")
-      .update(readFileSync(join(root, file)))
-      .digest("hex");
-    assert.equal(
-      real,
-      sha,
-      `${NOTE} 寫的 ${file} SHA-256 與實際檔案不符`,
-    );
+    const real = createHash("sha256").update(readFileSync(found)).digest("hex");
+    assert.equal(real, sha, `${NOTE} 寫的 ${name} SHA-256 與實際檔案不符`);
   }
 });
 
@@ -624,5 +644,172 @@ test("試用版產生器會自行建立交付資料夾", () => {
     source,
     /mkdirSync\(outDir,\s*\{\s*recursive:\s*true\s*\}\)/,
     "全新工作區沒有上層 out/ 時，build:tryout 仍必須能直接產生交付檔",
+  );
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  驗證報告必須寫到本版，而且同一個版號不可以出現兩段（2026-09-24）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 2026-09-24 的 F6 獨立複查抓到兩件，都在 `VALIDATION_REPORT.md`：
+ *   一、交付版本是 v2.1.83，而整份報告 `grep -c "2\.1\.83"` ＝ **0**；
+ *   二、最新兩段**都叫「v2.1.82 候選」**（一則 09-23、一則 09-24，內容不同）。
+ *
+ * 第二件特別諷刺：同一次交付的 CHANGELOG、更新說明與 VERSION_HISTORY 三處
+ * 都寫著「更新說明裡原本有兩則都叫 v2.1.82，09-24 那一批已正名為 v2.1.83」,
+ * 唯獨這份報告一字沒改。
+ *
+ * ⚠️ 後果不是「文件難看」：複查者照這份報告核對版本與
+ *   `LAST_CALC_CHANGE_VERSION`，會得到假警報，或反過來把對的值改回錯的
+ *  （PROJECT_HANDOFF 那一段本來就為了這件事寫過警告）。
+ */
+test("驗證報告寫得到本版，而且同一個版號不出現兩段", () => {
+  const report = readFileSync(
+    new URL("../VALIDATION_REPORT.md", import.meta.url),
+    "utf8",
+  );
+  /* 版號的唯一來源是 lib/traffic.ts 的 VERSION，這裡現讀，不寫死。 */
+  const version = readFileSync(
+    new URL("../lib/traffic.ts", import.meta.url),
+    "utf8",
+  ).match(/export const VERSION = "(v[\d.]+)"/)?.[1];
+  assert.ok(version, "讀不到 lib/traffic.ts 的 VERSION");
+  assert.ok(
+    report.includes(version),
+    `VALIDATION_REPORT.md 全檔沒有提到 ${version}——升版時漏了驗證報告`,
+  );
+
+  /* 標題長這樣：`## v2.1.83 候選（2026-09-24…` */
+  const headings = [...report.matchAll(/^## (v\d+\.\d+\.\d+)\b/gm)].map(
+    (m) => m[1],
+  );
+  assert.ok(headings.length >= 2, `抓不到版本段落標題（只有 ${headings.length} 個）`);
+  const seen = new Set();
+  const duplicated = headings.filter((v) => (seen.has(v) ? true : (seen.add(v), false)));
+  assert.deepEqual(
+    [...new Set(duplicated)],
+    [],
+    `同一個版號出現不只一段：${[...new Set(duplicated)].join("、")}——同一個版號兩份不同內容，複查時分不出是哪一份`,
+  );
+  assert.equal(
+    headings[0],
+    version,
+    `最新一段是 ${headings[0]}，但程式版號是 ${version}`,
+  );
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  根目錄的建置產物不可以比原始碼舊（2026-09-24）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 2026-09-24 的 F6 獨立複查抓到：根目錄 `assets/*.css` 是 13:40 建的，
+ * 而 `app/globals.css` 的 `.summary-rounding` 是 14:43 才加的——
+ * 發布出去的網站上，本版新增的四捨五入註記會**沒有樣式**。
+ *
+ * ⚠️ 既有測試抓不到的原因：`npm run e2e` 每次都自己 `build:github` 才跑，
+ *   所以 e2e 驗的一直是最新原始碼，根目錄那一份從頭到尾沒有人看。
+ *
+ * 守法：根目錄主資產的修改時間，必須不早於任何一個會進 bundle 的原始檔。
+ */
+/*
+ * ⚠️ 2026-09-25 補正（我自己把這一支寫出了一個假的紅）：
+ *
+ *   把交付 zip 解開之後，**整棵樹的 mtime 全部是解壓那一刻**，而解壓是照
+ *   zip 裡的順序一個一個寫的，所以 `assets/` 先寫、`lib/` 後寫，
+ *   差個幾十毫秒——這一支立刻紅，列出 20 幾個「比建置產物新」的原始碼。
+ *   使用者或複查者在自己電腦上解開這一包、跑 `npm test`，**看到的就是那個紅**。
+ *   一個在正確的包上會紅的守門，比沒有守門更糟：它會讓人開始忽略紅字。
+ *
+ *   所以先判斷「mtime 在這個環境裡到底有沒有攜帶資訊」：
+ *   把資產與全部原始碼的 mtime 放在一起，如果**整體跨距**小於 120 秒，
+ *   那就是剛解壓（或剛 checkout）出來的樹，mtime 一律相同、判不出先後，
+ *   這時候**跳過比較並明講跳過的理由**（不是安靜地過去）。
+ *   真正要抓的那一種差距是數十分鐘到數小時（實際抓到那次是 1 小時 30 分），
+ *   120 秒的門檻一個都不會放過。
+ *
+ *   ⚠️ 另外補一條**完全不依賴 mtime** 的檢查：根目錄的 index.html 必須與
+ *   `github-pages-dist/index.html` 指向**同一個**資產檔名，而且那些檔案要
+ *   逐位元相同。vite 的檔名帶內容雜湊，所以「根目錄是從較舊的一次建置同步過來的」
+ *   這件事，這一條在任何環境下都抓得到。
+ */
+test("根目錄的建置產物不可以比原始碼舊", () => {
+  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const indexPath = join(root, "index.html");
+  if (!existsSync(indexPath)) return; /* 沒有發布環境就不檢查 */
+  const index = readFileSync(indexPath, "utf8");
+  const match = index.match(/\.\/assets\/(index-[A-Za-z0-9_-]+\.js)/);
+  assert.ok(match, "根目錄 index.html 找不到主程式資產");
+  const assetTime = statSync(join(root, "assets", match[1])).mtimeMs;
+
+  const sources = [];
+  for (const rel of ["app", "lib"]) {
+    const dir = join(root, rel);
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      if (!/\.(ts|tsx|css)$/.test(name)) continue;
+      const info = statSync(join(dir, name));
+      if (info.isFile()) sources.push({ rel: `${rel}/${name}`, mtimeMs: info.mtimeMs });
+    }
+  }
+  /* 前置檢查：真的掃到原始碼了，否則這一支等於沒在守。 */
+  assert.ok(sources.length >= 10, `只掃到 ${sources.length} 個原始碼檔——目錄結構改了嗎？`);
+
+  const times = [assetTime, ...sources.map((item) => item.mtimeMs)];
+  const spreadMs = Math.max(...times) - Math.min(...times);
+  const FRESH_TREE_MS = 120_000;
+
+  if (spreadMs < FRESH_TREE_MS) {
+    /* ⚠️ 一定要印出來。安靜跳過就等於把這一條悄悄關掉。 */
+    console.log(
+      `  ℹ️ 整棵樹的 mtime 跨距只有 ${Math.round(spreadMs)} 毫秒，` +
+        "判定為剛解壓／剛 checkout 的樹——mtime 在這裡不帶先後資訊，跳過新舊比較。" +
+        "（下面那一條不依賴 mtime 的同步檢查照樣會跑。）",
+    );
+  } else {
+    const stale = sources
+      .filter((item) => item.mtimeMs > assetTime)
+      .map((item) => `${item.rel}（${new Date(item.mtimeMs).toISOString()}）`);
+    assert.deepEqual(
+      stale,
+      [],
+      `這些原始碼比根目錄的 assets/${match[1]}（${new Date(assetTime).toISOString()}）新，` +
+        `代表發布出去的網站不是目前這份程式。請執行 npm run build:github，` +
+        `把 github-pages-dist 的 index.html 與 assets 同步到根目錄（刪掉舊雜湊的檔案），` +
+        `並更新「更新說明」裡的資產檔名與 SHA-256：\n  ${stale.join("\n  ")}`,
+    );
+  }
+
+  /* ── 不依賴 mtime：根目錄必須與最後一次建置的產出同步 ── */
+  const distIndexPath = join(root, "github-pages-dist", "index.html");
+  if (!existsSync(distIndexPath)) return; /* 只有原始碼的包沒有這一層 */
+  const distIndex = readFileSync(distIndexPath, "utf8");
+  const wanted = [
+    ...distIndex.matchAll(/\.\/assets\/([A-Za-z0-9_.-]+\.(?:js|css))/g),
+  ].map((m) => m[1]);
+  assert.ok(
+    wanted.length >= 2,
+    `github-pages-dist/index.html 抓不到資產檔名（抓到 ${wanted.length} 個）`,
+  );
+  const mismatched = [];
+  for (const name of wanted) {
+    const rootFile = join(root, "assets", name);
+    if (!existsSync(rootFile)) {
+      mismatched.push(`${name}：根目錄的 assets/ 裡沒有這個檔案`);
+      continue;
+    }
+    const a = createHash("sha256").update(readFileSync(rootFile)).digest("hex");
+    const b = createHash("sha256")
+      .update(readFileSync(join(root, "github-pages-dist", "assets", name)))
+      .digest("hex");
+    if (a !== b) mismatched.push(`${name}：根目錄與 github-pages-dist 的內容不同`);
+  }
+  assert.deepEqual(
+    mismatched,
+    [],
+    "根目錄的發布產物與最後一次建置（github-pages-dist）不同步——" +
+      "vite 的檔名帶內容雜湊，所以這代表根目錄是從**較舊的一次建置**同步過來的：\n  " +
+      mismatched.join("\n  "),
   );
 });

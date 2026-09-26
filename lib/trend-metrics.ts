@@ -181,10 +181,16 @@ export function metricUnit(
   scope: ScopeKey,
   /*
    * 歷季趨勢天生就是**混合**的：同一張圖上可能有 24 小時的季度，
-   * 也有只做 4 小時的季度。所以這裡的預設留給呼叫端決定，
-   * 沒傳就走 scopeUnit 的安全預設（調查時段），不會把 4 小時說成一日。
+   * 也有只做 4 小時的季度，所以涵蓋一定要由呼叫端算好傳進來。
+   *
+   * ⚠️ 2026-09-25 第六輪：這個參數原本有預設值 `"unknown"`，
+   *   和 `scopeUnit()` 一樣。預設值看起來只是「方便」，實際效果是
+   *   **讓忘記傳涵蓋的呼叫端靜靜通過**，而畫面上就會出現同一批資料
+   *   兩種單位。正式呼叫端本來就都有傳（兩處在 traffic-app、一處在本檔），
+   *   只有測試在用預設值——而測試用了預設值，就等於用正面斷言宣告
+   *   「不傳是合法的」。現在必填。
    */
-  coverage: SurveyCoverage = "unknown",
+  coverage: SurveyCoverage,
 ): string {
   if (metric.unit === "%") return "%";
   return scopeUnit(
@@ -450,15 +456,25 @@ export function buildMetricSeries(
   scope: ScopeKey,
   option: TrendMetricOption,
   flow: TrendFlow,
-  vehicleName?: (id: string) => string,
   /*
-   * ⚠️ 這一批資料的調查涵蓋。不給的話 metricUnit 走安全預設「調查時段」，
-   *   而圖與 Excel 是拿 coverageOf(rows) 算的——兩邊就會對同一批數字
-   *   講兩種單位（整批都是 24 小時時，圖寫「PCU/調查日」、講稿寫
-   *   「PCU/調查時段」）。講稿是會被整段複製進報告的那一份。
-   *   （2026-09-16 實測抓到。）
+   * ⚠️ 也改成必填（沒有要換車種名稱時明寫 `undefined`）：
+   *   TypeScript 不允許必填參數排在選填參數後面，而 `coverage` 必須必填。
+   *   明寫 `undefined` 也比「少寫一個參數」看得出來是個決定。
    */
-  coverage: SurveyCoverage = "unknown",
+  vehicleName: ((id: string) => string) | undefined,
+  /*
+   * ⚠️ 這一批資料的調查涵蓋，**必填**。
+   *   圖與 Excel 的單位是拿 `coverageOf(rows)` 算的；這裡少了它，
+   *   講稿就會對同一批數字講另一種單位（整批都是 24 小時時，
+   *   圖寫「PCU/調查日」、講稿寫「PCU/調查時段」），而講稿是會被整段
+   *   複製進報告的那一份。（2026-09-16 實測抓到。）
+   *
+   * ⚠️ 2026-09-25 第六輪：預設值 `= "unknown"` 已經拿掉。
+   *   留著預設值的效果不是「方便」，是**讓忘記傳的呼叫端靜靜通過**——
+   *   同一支程式裡就有一個（`pointOf`）沒傳。三支函式
+   *  （`scopeUnit`／`metricUnit`／這一支）現在一律必填。
+   */
+  coverage: SurveyCoverage,
 ): MetricSeries {
   const points: MetricPoint[] = rows.map(function (record) {
     const got = metricValue(record, metric, scope, option, flow);

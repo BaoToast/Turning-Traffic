@@ -10,8 +10,29 @@ import { VERSION } from "../lib/traffic.ts";
 
 const MANUAL_BASE = `路口轉向程式手冊_${VERSION}`;
 
+/*
+ * ⚠️ 這一支驗的是**建置出來的 HTML**，所以它需要 `dist/server/index.js`。
+ *   那是建置產物，**刻意不放進交付包**（`pack.sh` 排除 `dist/`）。
+ *   `npm test` 本來就會先 `npm run build`，所以正常流程沒問題；
+ *   但有人單獨跑 `node --test tests/*.test.mjs` 時，原本會拋出
+ *   `ERR_MODULE_NOT_FOUND`——看到那個訊息的人不會知道「先建置就好」，
+ *   只會以為交付包壞了。（2026-09-25 第六輪在解開的交付包上實測到，三支同一條。）
+ *
+ * ⚠️ 刻意**不改成 skip**：這一支要驗的東西很重要，靜靜跳過就等於沒人守。
+ *   改成「紅，但訊息直接告訴你該做什麼」。
+ */
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  const { access } = await import("node:fs/promises");
+  try {
+    await access(new URL("../dist/server/index.js", import.meta.url));
+  } catch {
+    throw new Error(
+      "找不到 dist/server/index.js。這一支驗的是**建置出來的 HTML**，" +
+        "所以必須先建置：請跑 `npm run build`（或直接 `npm test`，它本來就會先建置）。" +
+        "⚠️ dist/ 是建置產物，刻意不放進交付包，所以剛解開的包裡一定沒有它。",
+    );
+  }
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
   return worker.fetch(

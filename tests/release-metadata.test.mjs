@@ -90,3 +90,123 @@ test("更新說明的部署確認清單沒有殘留舊版號", async () => {
     "部署確認清單殘留了舊版號",
   );
 });
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  驗證報告寫的手冊頁數／字元數，在有 pdftotext 的環境裡當場重算
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * ⚠️ 2026-09-25 第六輪新增（三支同一條）。姊妹系統交通服務水準的報告曾經寫過一個
+ *   **用任何一種算法都重現不出來**的字數，而讀的人會拿它當
+ *   「我手上這一本是不是你說的那一本」的依據。沒有人能重算的數字等於沒寫。
+ *
+ * ⚠️ 這一條**不可以在沒有 pdftotext 的環境裡變紅**：複查者的機器不一定有
+ *   poppler-utils，而「在正確的包上變紅」比沒有守門更糟。
+ *   缺工具時跳過並**印出為什麼跳過**——不是安靜過去。
+ */
+test("驗證報告寫的手冊頁數與字元數要與 PDF 相符（缺工具時跳過並說明）", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { readdirSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const report = await readFile(
+    new URL("../VALIDATION_REPORT.md", import.meta.url),
+    "utf8",
+  );
+  const claim = report.match(/\*\*(\d+) 頁 \/ ([\d,]+) 字元\*\*/);
+  assert.ok(
+    claim,
+    "驗證報告裡找不到「**N 頁 / M 字元**」——寫法改了就要同步改這一支，" +
+      "不可以讓它安靜地變成恆真",
+  );
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const pdf = readdirSync(root).find(
+    (name) => name.startsWith("路口轉向程式手冊") && name.endsWith(".pdf"),
+  );
+  assert.ok(pdf, "根目錄找不到手冊 PDF");
+  const path = root + pdf;
+
+  let pages = null;
+  let chars = null;
+  try {
+    pages = Number(
+      execFileSync("pdfinfo", [path], { encoding: "utf8" }).match(
+        /^Pages:\s+(\d+)/m,
+      )?.[1],
+    );
+    const text = execFileSync("pdftotext", ["-enc", "UTF-8", path, "-"], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    chars = [...text.normalize("NFKC")].length;
+  } catch {
+    console.log(
+      "  ℹ️ 這台機器沒有 pdfinfo／pdftotext（poppler-utils），" +
+        "跳過手冊頁數與字元數的重算比對——這不是失敗，是這個環境算不了。",
+    );
+    return;
+  }
+  assert.equal(pages, Number(claim[1]), `報告寫 ${claim[1]} 頁，實際 ${pages} 頁`);
+  assert.equal(
+    chars,
+    Number(claim[2].replace(/,/g, "")),
+    `報告寫 ${claim[2]} 字元，實際 ${chars}（NFKC 後、含空白，算法見報告裡的指令）`,
+  );
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  文件寫「某支測試 N 條／項」時，N 必須等於那支檔案裡 test() 的數量
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * ⚠️ 2026-09-25 第六輪新增（三支同一條）。姊妹系統交通服務水準的兩份文件都寫
+ *   「issue-ack-stability.test.mjs（8 條）」而實際 10 條；這一支自己也有好幾處。
+ *   這種數字沒有人會回去數，但它是讀者判斷「守門夠不夠」的依據。
+ *   既然數得出來，就不可以用手打。
+ *
+ * ⚠️ 兩種寫法都認：
+ *   ・`xxx.test.mjs`（N 條）                → N 必須是**現在**的數量
+ *   ・`xxx.test.mjs`（當時 N 條，現為 M 條） → **M** 必須是現在的數量
+ *   第二種是刻意保留的：歷史段落寫的是「那一版新增時有幾條」，
+ *   把它改成今天的數字等於**偽造當時的紀錄**。
+ *   （第六輪的第一版只認第一種，於是我把兩處歷史數字改成了今天的值——
+ *   那是竄改紀錄，已還原成第二種寫法。）
+ */
+test("文件寫的測試條數必須等於那支檔案裡 test() 的數量", async () => {
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const { readFile: rf } = await import("node:fs/promises");
+  const ROOT = fileURLToPath(new URL("../", import.meta.url));
+  const CJK = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+  const bad = [];
+  let seen = 0;
+  for (const doc of ["README.md","VALIDATION_REPORT.md","PROJECT_HANDOFF.md","【更新說明】請先讀我.txt","CHANGELOG.md"]) {
+    const path = join(ROOT, doc);
+    if (!existsSync(path)) continue;
+    const text = await rf(path, "utf8");
+    for (const m of text.matchAll(
+      /([A-Za-z0-9-]+\.test\.(?:mjs|ts))`?）?（(?:當時\s*[0-9一二三四五六七八九十]+\s*[條項支][，,]\s*現為\s*)?([0-9一二三四五六七八九十]+)\s*[條項支]/g,
+    )) {
+      const [, file, raw] = m;
+      const full = join(ROOT, "tests", file);
+      if (!existsSync(full)) continue; /* 檔案不在包裡由另一支守門管 */
+      seen += 1;
+      const body = (await rf(full, "utf8"))
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/^[ \t]*\/\/[^\n]*$/gm, " ");
+      const real = (body.match(/^\s*test\(/gm) || []).length;
+      const claimed = CJK[raw] ?? Number(raw);
+      if (claimed !== real)
+        bad.push(`${doc}：${file} 寫 ${raw}，實際 ${real}`);
+    }
+  }
+  /* 前置檢查：真的掃到句子，格式改掉之後不可以安靜地變成恆真。 */
+  assert.ok(seen >= 3, `只抓到 ${seen} 句「某支 .test.* （N 條）」——寫法改了嗎？`);
+  assert.deepEqual(
+    bad,
+    [],
+    "這些數字與實際條數不符。若那是歷史紀錄，請寫成「（當時 N 條，現為 M 條）」" +
+      "而不是改掉原本的數字：\n  " +
+      bad.join("\n  "),
+  );
+});

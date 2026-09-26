@@ -97,13 +97,35 @@ for (const label of await page.locator(".conclusion-metrics label").all()) {
   const box = label.locator("input");
   if (await box.isChecked()) await box.uncheck();
 }
+/*
+ * ⚠️ 2026-09-25 第六輪：這四個字串**不可以寫死在這裡**。
+ *   勾選框的字原本把單位寫死在字面上（「各支線駛入流量（PCU/hr）」），
+ *   而使用者可以勾「全調查時段」、也可以一次勾多個時段——那個 /hr 一定有機會是錯的。
+ *   本輪把標籤改成只寫「是什麼量」，單位交給草稿本文逐句寫出；
+ *   而這一支 e2e 因為把舊字面寫死，`locator.check()` 直接等到超時、整包 e2e 紅。
+ *   改成用**不含單位**的子字串去找，日後標籤再調整單位寫法，這裡不必跟著改。
+ *
+ * ⚠️ 刻意**不** import `lib/conclusion.ts`：這一支是用 `node scripts/…` 直接跑的，
+ *   而「.ts 不必加旗標就能 import」是新版 Node 才有的行為。複查者的 Node 版本
+ *   不受我們控制，交付包裡的腳本不應該押在那上面。
+ */
 for (const want of [
-  "各支線駛入流量（PCU/hr）",
-  "各支線駛入車輛數（輛/hr）",
+  /* 只寫「是什麼量」，不寫單位——單位會隨時段與調查涵蓋變。 */
+  "各支線駛入流量",
+  "各支線駛入車輛數",
   "各支線佔駛入路口總量百分比",
   "路口總流量與總車輛數",
 ]) {
-  await page.locator(`.conclusion-metrics label:has-text("${want}") input`).check();
+  const box = page.locator(`.conclusion-metrics label:has-text("${want}") input`);
+  /*
+   * ⚠️ 一定要斷言「剛好一個」：用子字串找標籤時，日後新增一個名字相近的指標
+   *   就會變成找到兩個，而 `check()` 在多個時丟出的錯誤很難看懂。
+   *   剛好一個不成立時，這裡先講清楚是哪一個字串出了問題。
+   */
+  const count = await box.count();
+  if (count !== 1)
+    throw new Error(`「${want}」在勾選區裡找到 ${count} 個，應該剛好 1 個`);
+  await box.check();
 }
 await page.waitForTimeout(200);
 
@@ -783,9 +805,22 @@ const branchOut = page.locator(
 );
 await branchIn.check();
 await page.waitForTimeout(300);
+/*
+ * ⚠️ 2026-09-23：這一頁現在有兩個 .conclusion-submode 區塊
+ *   （「各支線各車種要怎麼呈現」與「尖峰時段判定方式」），
+ *   所以不可以再數 class 的總數——要指名是哪一個。
+ * ⚠️ 同時驗「另一個一直都在」：只驗「這一個不見了」的話，
+ *   哪天整個條件區被改壞而兩個都消失，這一條照樣是綠的。
+ */
 ok(
   "只勾一個方向時，呈現方式選項不出現（雙向合計對單一方向沒有意義）",
-  (await page.locator(".conclusion-submode").count()) === 0,
+  (await page
+    .locator('[data-testid="conclusion-branch-composition-mode"]')
+    .count()) === 0,
+);
+ok(
+  "尖峰時段判定方式一直都在（不隨車種勾選變動）",
+  (await page.locator('[data-testid="conclusion-peak-rule"]').count()) === 1,
 );
 await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
 await page.waitForTimeout(900);
@@ -813,10 +848,14 @@ await page.waitForTimeout(400);
 /* 呈現方式的子選項只在兩個方向都勾了之後才會出現 */
 ok(
   "兩個方向都勾之後才出現呈現方式選項",
-  (await page.locator(".conclusion-submode").count()) === 1,
+  (await page
+    .locator('[data-testid="conclusion-branch-composition-mode"]')
+    .count()) === 1,
 );
 await page
-  .locator('.conclusion-submode label:has-text("一律分行車方向") input')
+  .locator(
+    '[data-testid="conclusion-branch-composition-mode"] label:has-text("一律分行車方向") input',
+  )
   .check();
 await page.waitForTimeout(300);
 await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
@@ -845,7 +884,7 @@ ok(
 
 /* ── 呈現方式：改成雙向合計，草稿要跟著換寫法 ── */
 await page
-  .locator('.conclusion-submode label:has-text("一律雙向合計") input')
+  .locator('[data-testid="conclusion-branch-composition-mode"] label:has-text("一律雙向合計") input')
   .check();
 await page.waitForTimeout(300);
 await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
@@ -882,7 +921,7 @@ await page.waitForTimeout(600);
 await go("結論草稿產生器");
 await page.waitForTimeout(600);
 await page
-  .locator('.conclusion-submode label:has-text("跟著車種組成分析頁") input')
+  .locator('[data-testid="conclusion-branch-composition-mode"] label:has-text("跟著車種組成分析頁") input')
   .check();
 await page.waitForTimeout(300);
 await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
@@ -903,6 +942,55 @@ await go("車種組成分析");
 await page.waitForTimeout(600);
 await page.locator(".direction-mode-grid select").first().selectOption("split");
 await page.waitForTimeout(500);
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  尖峰時段判定方式（2026-09-23 新增）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * ⚠️ 這裡驗的是**那句判定方式說明真的跟著切換**。
+ *   種子資料不一定有 15 分鐘細格，所以各支線的視窗可能算不出來——
+ *   那種情形草稿會寫「算不出這條支線自己的尖峰」，也是正確的行為。
+ *   但「不適用『相加』」那句警告是無條件的，切過去一定要出現、
+ *   切回來一定要消失。守得到的就守這一件。
+ */
+console.log("\n══ 尖峰時段判定方式 ══");
+await go("結論草稿");
+await page.waitForTimeout(600);
+const peakRuleBox = page.locator('[data-testid="conclusion-peak-rule"]');
+ok("結論草稿有「尖峰時段判定方式」這一項", (await peakRuleBox.count()) === 1);
+await peakRuleBox
+  .locator('label:has-text("各方向各自認定") input')
+  .first()
+  .check();
+await page.waitForTimeout(400);
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
+await page.waitForTimeout(1200);
+const directionDraft = await draft.inputValue();
+ok(
+  "選「各方向各自認定」時，草稿寫明判定方式並警告不可相加",
+  /各方向各自認定自己的尖峰/.test(directionDraft) &&
+    /本數值不適用「相加」/.test(directionDraft),
+  (directionDraft.split("\n").find((l) => /尖峰時段判定方式/.test(l)) || "").slice(
+    0,
+    120,
+  ),
+);
+await peakRuleBox
+  .locator('label:has-text("整個調查點同一時段") input')
+  .first()
+  .check();
+await page.waitForTimeout(400);
+await page.locator('.conclusion-output button:has-text("產生草稿")').first().click();
+await page.waitForTimeout(1200);
+const pointDraft = await draft.inputValue();
+ok(
+  "切回「整個調查點同一時段」時，不可相加的警告要消失",
+  /整個調查點同一時段（各支線的尖峰在同一小時/.test(pointDraft) &&
+    !/本數值不適用「相加」/.test(pointDraft) &&
+    !/自己最忙/.test(pointDraft),
+  (pointDraft.split("\n").find((l) => /尖峰時段判定方式/.test(l)) || "").slice(0, 120),
+);
 
 console.log("\n══ 主控台錯誤 ══");
 ok("沒有 JS 例外", errors.length === 0, errors.slice(0, 4).join(" / "));

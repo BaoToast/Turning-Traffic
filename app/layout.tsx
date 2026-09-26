@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Turning Traffic｜路口尖峰轉向交通量分析系統",
-  description: "季度批次匯入、尖峰小時轉向分析、SVG 路口圖、多路口與歷季比較、資料品質檢查及報表輸出。",
+  description: "季度批次匯入、尖峰小時轉向分析、SVG 路口圖、多路口與歷季比較、資料維護（資料異常檢查）及報表輸出。",
   icons: { icon: "/favicon.svg" },
   metadataBase: new URL("https://baotoast.github.io/Turning-Traffic/"),
   openGraph: {

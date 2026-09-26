@@ -208,9 +208,22 @@ if (await single.count()) {
         "2026-03-15",
     JSON.stringify(singleJson.surveyDateOverrides || {}),
   );
+  /*
+   * ⚠️ **單一計畫備份不可以夾帶「顯示調查日期」**（A2／A3，2026-09-21 定案）。
+   *
+   *   它是「這台電腦這個人想不想看到那一欄」的顯示偏好，不是計畫資料。
+   *   單一計畫備份是拿去給別人、或拿別人的進來用的東西；夾帶顯示偏好的
+   *   結果就是併入之後開關被別人的習慣翻掉，而且畫面上沒有任何提示。
+   *   三支統一，以交通服務水準為準（它存在整份 state 裡進 IndexedDB，
+   *   不在任何專案包中）。
+   *
+   *   ⚠️ 這一條**以前是反過來測的**（斷言備份裡有這個欄位）。
+   *     改規則時如果只改程式不改測試，這裡會紅——那是對的，
+   *     但**不要把程式改回去**，要改的是這個斷言。
+   */
   ok(
-    "單一計畫備份帶走調查日期顯示偏好",
-    singleJson.showSurveyDate === false,
+    "單一計畫備份不可以夾帶調查日期顯示偏好",
+    !("showSurveyDate" in singleJson),
     `showSurveyDate=${String(singleJson.showSurveyDate)}`,
   );
   ok(
@@ -260,11 +273,20 @@ if (singleJson) {
       (after.records || []).every((r) => r.review?.status === "已確認"),
     (after.records || []).map((r) => r.review?.status || "無").join("／"),
   );
+  /*
+   * 調查日期的**指定**是計畫資料，一定要跟著備份回來。
+   * 顯示偏好則不是：單一計畫備份根本沒帶它，所以還原後維持這台電腦原本的值
+   *（新開的瀏覽器＝預設的開）。
+   */
   ok(
-    "空白電腦還原後，調查日期指定與顯示偏好都回來了",
-    after.surveyDateOverrides?.[projectA.id]?.[recordsA[0].id] ===
-      "2026-03-15" && after.showSurveyDate === false,
-    `${JSON.stringify(after.surveyDateOverrides || {})}／showSurveyDate=${String(after.showSurveyDate)}`,
+    "空白電腦還原後，調查日期指定回來了",
+    after.surveyDateOverrides?.[projectA.id]?.[recordsA[0].id] === "2026-03-15",
+    JSON.stringify(after.surveyDateOverrides || {}),
+  );
+  ok(
+    "還原單一計畫備份不會改到這台電腦的顯示偏好",
+    after.showSurveyDate !== false,
+    `showSurveyDate=${String(after.showSurveyDate)}`,
   );
 
   /* ── 4. 再匯入第二份單一計畫備份，應該是併入而不是覆蓋 ── */
@@ -279,7 +301,12 @@ if (singleJson) {
     surveyDateOverrides: {
       [projectB.id]: { [recordsB[0].id]: "2026-04-20" },
     },
-    showSurveyDate: true,
+    /*
+     * ⚠️ 刻意在**第二份備份裡塞一個相反的值**：
+     *   併入時如果讀了它，這台電腦的開關就會被別人的習慣翻掉。
+     *   下面那一條斷言守的就是「沒有被翻掉」。
+     */
+    showSurveyDate: false,
   };
   await page
     .locator(".backup-grid input[type=file]")
@@ -311,9 +338,14 @@ if (singleJson) {
         "2026-04-20",
     JSON.stringify(merged.surveyDateOverrides || {}),
   );
+  /*
+   * ⚠️ **併入別人的單一計畫備份，不可以翻掉這台電腦的顯示偏好**
+   *   （A2／A3）。第二份備份裡刻意帶了 showSurveyDate: false，
+   *   併完之後這台電腦的值必須**還是原本那個**。
+   */
   ok(
-    "併入備份會恢復其中的調查日期顯示偏好",
-    merged.showSurveyDate === true,
+    "併入別人的備份不會翻掉這台電腦的顯示偏好",
+    merged.showSurveyDate !== false,
     `showSurveyDate=${String(merged.showSurveyDate)}`,
   );
 

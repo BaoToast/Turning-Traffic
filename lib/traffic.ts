@@ -5,18 +5,38 @@ import { findSurveyDate, findAllSurveyDates } from "./period-date.ts";
 /**
  * 尖峰時段。三個都是「某一小時的流率」，PCU 欄位的單位是 PCU/hr。
  *
- * DAY（全日尖峰小時）＝掃過完整 24 小時找出來的最大一小時，**只有 24 小時的
- * 調查檔算得出來**。資料不足 24 小時時整組留空、畫面顯示「－」，絕不拿
- * 上午／下午尖峰去頂替——那等於用 4 小時的樣本冒充一整天的最大值。
+ * DAY 的顯示名稱是**「全調查時段尖峰」**＝在這份調查**實際涵蓋的時段之內**，
+ * 流率最高的連續一小時。
+ *
+ * ⚠️⚠️ **它不要求涵蓋 24 小時**，v2.1.64 起就不要求了（見 `peakWindowsFor`）。
+ *   鍵名裡的 `DAY` 是**歷史包袱**：它在存檔結構裡（`ensureRecordScopes`、
+ *   `record.peaks.DAY`），改名會讓舊備份讀不回來，所以**只能留著**。
+ *   不要因為它叫 DAY，就替它加上一條「不足 24 小時就整組留空」的限制——
+ *   這一段註解的舊版本正是那樣寫的，2026-09-21 直接害 Claude 做出錯誤判斷、
+ *   差點把一個正確的設計改壞，是使用者當場擋下來的。
+ *   **「調查日」三個字只保留給確認滿 24 小時的資料，`DAY` 這個鍵不是。**
  */
 export type PeakKey = "AM" | "PM" | "DAY";
 
 /**
  * 畫面與匯出用的「統計範圍」＝三個尖峰再加上 FULL。
  *
- * FULL（全日時段）**不是尖峰**，是一整天的累計量，單位是「輛／調查日」與
- * 「PCU／調查日」，不能和尖峰的 PCU/hr 相提並論。它也**不是獨立存起來的
- * 數字**：每次載入都由 record.survey／route.survey 現算（見 syncRouteTotals）。
+ * FULL 的顯示名稱是**「全調查時段」**＝這份調查**實際涵蓋的整段時間**的累計量，
+ * 單位是「輛／調查時段」與「PCU／調查時段」。它**不是尖峰**，不能和尖峰的
+ * PCU/hr 相提並論；它也**不是獨立存起來的數字**：每次載入都由
+ * record.survey／route.survey 現算（見 syncRouteTotals）。
+ *
+ * ⚠️ **四個核心名詞**（三支程式共用，使用者 2026-09-21 定案：
+ *   「這 4 個名詞是我們交通調查的 4 個核心」）：
+ *
+ *     鍵     顯示名稱          意義
+ *     AM     上午尖峰          上午那一段裡流率最高的 1 小時
+ *     PM     下午尖峰          下午那一段裡流率最高的 1 小時
+ *     FULL   全調查時段        調查涵蓋範圍內的**累計量**（輛／調查時段）
+ *     DAY    全調查時段尖峰    調查涵蓋範圍內流率最高的 **1 小時**（PCU/hr）
+ *
+ *   四個各有各的意義，**不可改名、不可互相頂替、不可合併**。
+ *   FULL 與 DAY 的差別是「整段的總量」對「其中最大的一小時」，不是時間長短。
  *
  * 為什麼要現算而不是存一份：同一個概念在系統裡有兩份來源，遲早會分岔——
  * 這個專案已經因為同類問題（同一件事在 N 個地方各算各的）修過三輪。
@@ -28,10 +48,26 @@ export type MovementKey = "left" | "through" | "right";
 /** 三個轉向的固定順序。要逐轉向套當量時一律走這一個，不要各處自己寫陣列。 */
 export const MOVEMENT_KEYS: MovementKey[] = ["left", "through", "right"];
 
-/** 轉向的中文名稱，只用於畫面與提醒訊息。 */
+/**
+ * 轉向的中文名稱，只用於畫面與提醒訊息。
+ *
+ * ⚠️ 2026-09-25 第六輪抓到：這裡原本寫「直進」，而畫面上另外兩份標籤表
+ *   （`app/traffic-app.tsx` 的 `MOVE_LABELS`、`app/main-filters.ts` 的
+ *   `MOVEMENT_CHOICE_LABELS`）與整本手冊都寫「直行」。
+ *   兩個詞都出現在**畫面上**：OD 矩陣與匯出的欄名寫「直行」，
+ *   歷季趨勢的指標名稱與匯入盤點訊息寫「直進」——同一個轉向兩個名字，
+ *   使用者無法確定那是不是兩件事。統一為「直行」（手冊與多數畫面的用字）。
+ *
+ * ⚠️ 解析原始檔的樣式**刻意仍然同時接受**「直行」與「直進」
+ *   （見 movementFromLabel／HEADER_PATTERN）：那是別人填的調查表，
+ *   兩種寫法都有人用，接受的範圍不可以跟著縮。
+ *
+ * ⚠️ 這是**全系統唯一**一份轉向中文名稱。不要再開第二份——
+ *   `tests/duplicate-labels.test.ts` 會檢查每一份轉向標籤表都與這裡一致。
+ */
 export const MOVEMENT_LABELS: Record<MovementKey, string> = {
   left: "左轉",
-  through: "直進",
+  through: "直行",
   right: "右轉",
 };
 /**
@@ -253,15 +289,24 @@ export function coverageOf(
  * 非 24 小時的才寫調查時段」「（混合的表）欄名就統一用 調查時段，
  * 然後表下方註明清楚」。
  *
- * ⚠️ 預設值刻意是「調查時段」而不是「調查日」。
- *   24 小時本來就是「調查時段剛好等於一日」的特例，用調查時段當共同分母
- *   不會說錯話；反過來用「日」當預設，任何忘了傳涵蓋的呼叫端都會把 4 小時
- *   的量宣告成全日量——**錯的方向要選會少講，不要選會多講**。
+ * ⚠️ 「調查時段」是**比較不會說錯話**的那一邊：24 小時本來就是「調查時段剛好
+ *   等於一日」的特例，用調查時段當共同分母不會說錯話；反過來用「日」，任何
+ *   沒傳涵蓋的呼叫端都會把 4 小時的量宣告成全日量——
+ *   **錯的方向要選會少講，不要選會多講**。
+ *
+ * ⚠️ 2026-09-25 第六輪：`kind` 與 `coverage` 的**預設值已經拿掉**，三個參數
+ *   全部必填。原因是第五輪抓到的那一件：轉向圖抬頭傳了涵蓋、同一頁的下拉選單
+ *   沒傳，於是**同一頁對同一批資料印出兩種單位**。當時只修了那一處，而全專案
+ *   還有二十幾個沒傳涵蓋的呼叫點——它們全都靠這個預設值安靜地過去。
+ *   「規則字面過關、畫面仍然不一致」是這個預設值造成的，不是呼叫端粗心。
+ *   拿掉預設值之後，每一個呼叫點都必須**講出它的涵蓋是從哪裡來的**；
+ *   真的拿不到（例如欄名在還沒有任何資料時就要決定）就明寫 `"unknown"`
+ *   並在旁邊寫一行為什麼——那也是一個決定，不是忘記。
  */
 export function scopeUnit(
   scope: ScopeKey,
-  kind: "pcu" | "vehicle" = "pcu",
-  coverage: SurveyCoverage = "unknown",
+  kind: "pcu" | "vehicle",
+  coverage: SurveyCoverage,
 ) {
   const per = scope === "FULL" ? (coverage === "full" ? "調查日" : "調查時段") : "hr";
   return `${kind === "pcu" ? "PCU" : "輛"}/${per}`;
@@ -338,12 +383,138 @@ export const CORE_VEHICLE_LABELS: Record<string, string> = {
   special: "特種車",
 };
 
+/**
+ * 這個車種在這個轉向的當量係數（PCU/輛）。
+ *
+ * ══════════════════════════════════════════════════════════════════════
+ *  ⚠️ 2026-09-25 修正：`Number(x ?? 1)` 擋不住空字串、陣列與布林
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 舊寫法是 `Number(pce[vehicle]?.[movement] ?? 1)`。`??` 只擋 null／undefined，
+ * 而 JavaScript 的 Number() 對下面這些都給得出「看起來正常」的數字（實測）：
+ *
+ *     ""    → 0        " "  → 0        []   → 0
+ *     false → 0        true → 1        "一點四" → NaN
+ *
+ * 後果：當量變 **0** → 該車種該轉向的 PCU 全部變 0；或整條鏈變 **NaN**
+ *（recordTotal → totalMovement → 結論草稿的「起始季為 0」）。
+ * 而畫面、Excel、結論草稿與報表草稿全部照印，**沒有任何警告**。
+ * 來源很實際：手改過的備份、或舊版數字框把欄位清空之後存下來的值。
+ *
+ * 正解與 lib/report-draft.ts 的 safeReportDigits()、
+ * lib/number-field.tsx 的輸入驗證同一個判準：**先擋型別再轉數字**。
+ *
+ * ⚠️ 壞值回 `NaN` 而不是悄悄套預設 1：當量是使用者設定的計算參數，
+ *   套一個「看起來合理的預設」會讓錯誤永遠不被發現。回 NaN 才能讓
+ *   `pceIssues()` 與既有的對帳把它攤出來給使用者看。
+ *   真正「這一格沒填」（null／undefined）仍然回 1，行為與改版前相同。
+ */
 export function pceFactor(
   pce: PceMatrix,
   vehicle: PceVehicle,
   movement: MovementKey,
 ) {
-  return Number(pce[vehicle]?.[movement] ?? 1);
+  const raw = pce[vehicle]?.[movement] as unknown;
+  if (raw === null || raw === undefined) return 1;
+  const usable =
+    typeof raw === "number" ||
+    (typeof raw === "string" && raw.trim() !== "");
+  if (!usable) return Number.NaN;
+  return Number(raw);
+}
+
+/**
+ * 整份當量矩陣裡有哪幾格是壞的（2026-09-25 新增）。
+ *
+ * ⚠️ 存在的理由：pceFactor() 對壞值回 NaN，而 NaN 會一路傳到草稿變成
+ *   「起始季為 0」這種憑空的結論。載入／還原時要**先問出哪一格壞了**
+ *   並告訴使用者，不可以靜靜退回預設值——那會讓他以為係數還是自己設的那一組。
+ */
+export function pceIssues(pce: unknown): string[] {
+  const bad: string[] = [];
+  if (!pce || typeof pce !== "object") return ["當量矩陣不是一個物件"];
+  for (const [vehicle, row] of Object.entries(pce as Record<string, unknown>)) {
+    const vehicleLabel = CORE_VEHICLE_LABELS[vehicle] ?? vehicle;
+    if (!row || typeof row !== "object") {
+      bad.push(`${vehicleLabel}：整列不是物件`);
+      continue;
+    }
+    for (const [movement, value] of Object.entries(
+      row as Record<string, unknown>,
+    )) {
+      if (value === null || value === undefined) continue; /* 沒填＝退回 1，合法 */
+      /*
+       * ⚠️ 2026-09-25 第六輪：這一行原本直接把**內部鍵**寫進訊息，
+       *   於是使用者看到的是「機車／through＝abc（不是數字）」。
+       *   `through` 不是畫面上任何一個字，他無法對到「直行」那一欄去改。
+       *   車種那半早就查表了（`vehicleLabel`），轉向這半漏了。
+       *   查不到的鍵才退回原字（可能是舊備份帶進來的未知鍵，
+       *   那時寧可印出原字，也不要印成空白）。
+       */
+      const movementLabel =
+        MOVEMENT_LABELS[movement as MovementKey] ?? movement;
+      const usable =
+        typeof value === "number" ||
+        (typeof value === "string" && value.trim() !== "");
+      if (!usable || !Number.isFinite(Number(value)))
+        bad.push(
+          `${vehicleLabel}／${movementLabel}＝${JSON.stringify(value)}（不是數字）`,
+        );
+    }
+  }
+  return bad;
+}
+
+/**
+ * 把「當量矩陣有壞格」包成資料異常清單裡的一筆（2026-09-25 新增）。
+ *
+ * ⚠️ 這一支存在的理由就是把 `pceIssues()` **真的接起來**。
+ *   v2.1.83 寫了 `pceIssues()` 並對外宣告「逐格指名哪一格壞掉」，
+ *   但它一個呼叫點都沒有——整個函式被 tree-shake 掉、沒進發布的 bundle，
+ *   所以使用者仍然只是從「靜靜變成 0」換成「靜靜變成 NaN」。
+ *   （2026-09-25 F6 第三輪抓到。）
+ *
+ * ⚠️ 依使用者定的順序：**先判定是不是異常 → 列進清單讓他確認 →
+ *   確認不是異常才套用處理方式**。所以這裡不自己把壞值改回 1，
+ *   只把它攤出來並給解決方式。
+ *
+ * @param label 這一組係數是誰的（「計畫預設」或某一條覆寫的範圍文字）
+ */
+export function pceMatrixIssue(
+  pce: unknown,
+  label: string,
+  scopeKey: string,
+): QualityIssue | null {
+  const bad = pceIssues(pce);
+  if (!bad.length) return null;
+  return {
+    id: `pce-${scopeKey}`,
+    severity: "error",
+    category: "當量係數不是數字",
+    /*
+     * ⚠️ 當量係數不屬於任何一個路口或季度，它是**計畫層級的設定**。
+     *   硬塞一個路口名進去會讓使用者以為只有那個路口受影響。
+     */
+    station: "（全計畫共用設定）",
+    quarter: label,
+    message:
+      `「${label}」這一組車種轉向當量係數裡有 ${bad.length} 格不是數字：` +
+      bad.join("；") +
+      "。這幾格會讓該車種該轉向的 PCU 變成「算不出來」，" +
+      "而算不出來的值會一路傳到畫面、Excel 與結論草稿。",
+    resolution: {
+      kind: "人工確認",
+      text:
+        "請到「車種轉向當量」把那幾格重新填成數字（留空＝沿用 1，是合法的；" +
+        "填了空白字串、文字或其他非數字才是這一筆異常）。" +
+        "常見來源是手改過的備份檔，或舊版的數字框把欄位清空之後存下來的值。" +
+        "⚠️ 系統刻意不自己把它改回預設值——當量是您設定的計算參數，" +
+        "悄悄套一個「看起來合理的預設」會讓錯誤永遠不被發現。" +
+        "確認那幾格本來就要空著的話，請把它們真的清成空白（而不是空格字元）。",
+      view: "params",
+      viewLabel: "車種轉向當量",
+    },
+  };
 }
 
 // The user-supplied training deck (slide 15) is the only supplied source with a
@@ -607,24 +778,43 @@ export type TrafficRecord = {
    *   有沒其他重算功能，至少有新增功能時，不需要使用者把所有計畫都重新
    *   匯入一次（工作量太大）。」
    *
-   * ⚠️ 目前**沒有任何功能讀它**，這是刻意的：它是為了未來留的原料。
-   *   會這樣做是因為 v2.1.29→v2.1.30 新增「全調查時段尖峰」時，舊資料
-   *   因為沒有逐時間格資料而算不出來，使用者被迫把每一個計畫重匯一次。
+   * 現在「各方向各自認定尖峰」會讀它重算各支線的尖峰時段；同時保留它
+   * 作為未來功能的原料，避免再次要求使用者把每一個計畫重匯一次。
    *
    * ⚠️ 容量實測（使用者提供的 37 份真實檔）：平均一筆 2 KB、最大 8 KB，
    *   全部加起來 268 KB。資料存在 IndexedDB（v2.1.52 起），配額是 GB 等級，
    *   這個量完全不是問題。
    *
-   * ⚠️ **選填**：v2.1.67 以前匯入的紀錄沒有這個欄位，那些資料要重新匯入
-   *   一次才會有。這一點無法回推——當初就沒有存。
+   * ⚠️ **選填**：v2.1.67 以前匯入的紀錄沒有這個欄位。
+   *
+   * ⚠️ 2026-09-25 更正：舊註解寫「這一點無法回推——當初就沒有存」，**那是錯的**。
+   *   這個欄位完全由 `item.intervalRows` / `item.intervalMinutes` / `item.columns`
+   *   組成（見 app/traffic-app.tsx 建構紀錄的那一段），而這三者都是
+   *   `ImportPreview` 的欄位，也就是 `sourcePreview`——**自 v2.1.65 起就存了**。
+   *   所以：
+   *     ・v2.1.65 與 v2.1.66 匯入的紀錄 → 原料就在同一個物件裡，
+   *       到「車種轉向當量」按「用目前的設定重算」就會補上，
+   *       **不必重新匯入原始檔**。
+   *       ⚠️ 2026-09-25 第六輪更正：這裡原本寫的按鈕名**全站不存在**
+   *         （實際兩顆是「用目前的設定重算（N 筆）」與「用這一組重算」）。
+   *         照著找會找不到，然後以為自己漏了一步。
+   *     ・v2.1.65 以前匯入的紀錄 → 才是真的回推不了。
+   *   畫面上的提示與結論草稿的說明都要照這個版本界線寫，
+   *   不可以一律叫使用者「重新匯入原始檔」（那是他上一次被迫全部重匯的痛）。
    */
   sourceIntervals?: {
     /** 每一格幾分鐘（15、20、30、60…） */
     intervalMinutes: number;
     /** 每一欄對應的（支線、車種、轉向）——與 values 的順序一一對應 */
     columns: { approach: string; vehicle: string; movement: string; destination?: string }[];
-    /** 逐時間格的原始值 */
-    rows: { start: number; label: string; values: number[] }[];
+    /**
+     * 逐時間格的原始值。
+     *
+     * ⚠️ 型別就是 IntervalRow——2026-09-24 以前這裡是另外抄一份行內型別，
+     *   於是 IntervalRow 新增 `lengthMinutes` 時這一份沒有跟上，
+     *   讀得到值卻讀不出型別。同一個形狀不要寫兩次。
+     */
+    rows: IntervalRow[];
   };
   /** Actual vehicles over every imported 15-minute survey interval; no PCU factors. */
   survey?: {
@@ -749,7 +939,42 @@ export type QualityIssue = {
      * 使用者 2026-09-20 新增（三支同步）：同一份檔案讀到兩個以上的日期，
      * 系統無從判斷哪一個才是調查日期，要讓使用者自己指定。
      */
-    | "調查日期不只一個";
+    | "調查日期不只一個"
+    /*
+     * 使用者 2026-09-24 新增（與全日交通量同步）：
+     *   「不可能出現 2 小時以上類型的調查資料，那反而要列為異常，
+     *     系統應該匯入時會提示，以及列入資料異常清單裡吧」
+     *
+     * ⚠️ 門檻是「**超過** 60 分鐘」，不是「不等於 60」。
+     *   15／20／30／60 都是正常格距，而 2022 年臺灣公路容量手冊 4.5.1.3
+     *   還特別**建議**評估現況根據尖峰 15 分鐘的需求流率。
+     *   ⚠️ 2026-09-25 第六輪更正：這裡原本寫「還特別**要求**」，而那句話
+     *     本身用的是「宜」——是建議，不是要求。同一件事在使用者看得到的
+     *     解決方式（`調查格距異常` 的 text）裡寫的就是「建議／鼓勵」，
+     *     註解卻把它講成要求，兩邊不一致，而註解是下一個人改程式時看的那一份。
+     */
+    | "調查格距異常"
+    /*
+     * 同一份檔案混用兩種以上格長（例如全日整點、只有尖峰拆 15 分鐘）。
+     * 本身不一定是錯，但要讓使用者確認那是刻意的。
+     */
+    | "調查格距混用"
+    /*
+     * 當量矩陣裡有格子不是數字（2026-09-25 新增）。
+     *
+     * ⚠️ 為什麼一定要列成異常：`pceFactor()` 對壞值回 NaN，而 NaN 會一路傳到
+     *   PCU、Excel 與結論草稿（變成「起始季為 0」這種憑空的結論）。
+     *   v2.1.83 為此寫了 `pceIssues()` 逐格指名，版本紀錄也對外宣告了——
+     *   但當時**它一個呼叫點都沒有**，整個函式被 tree-shake 掉、沒進發布的
+     *   bundle，淨效果只是「靜靜變成 0」改成「靜靜變成 NaN」。
+     *   （2026-09-25 F6 第三輪抓到。）
+     *   ✅ **現在已經接上線**：`pceMatrixIssue()` 包住它，`app/traffic-app.tsx`
+     *   的 `issues` memo 對「計畫預設」與每一條覆寫各呼叫一次，
+     *   而 `tests/type-and-nan-guards.test.ts` 會到 `assets/index-*.js` 裡
+     *   找它的訊息字串，確認它真的進了發布的 bundle。
+     * ⚠️ 真正「這一格沒填」（null／undefined）不算異常，它退回 1 是既有行為。
+     */
+    | "當量係數不是數字";
   station: string;
   quarter: string;
   message: string;
@@ -879,7 +1104,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.80";
+export const VERSION = "v2.1.83";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -929,7 +1154,26 @@ export const VERSION = "v2.1.80";
  *   一個數字。所以本常數推進到 v2.1.64，讓更早鎖定的季度亮出鎖定衝突——
  *   否則使用者會拿到一份「鎖定時是舊算法、現在是新算法」而毫不知情的成果。
  */
-export const LAST_CALC_CHANGE_VERSION = "v2.1.64";
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  ⚠️ v2.1.82：這一版**確實變更了計算口徑**，所以這個標記跟著推進
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-24 明確拍板（選項②）：尖峰小時的認定從「數格數」
+ * 改成「累計分鐘數，只接受剛好 60 分鐘」。
+ *
+ * ⚠️ **格長一致的資料一個數字都不會變**（15／20／30／60 分鐘都是；
+ *   實測使用者的 5 份真實路口檔案 15 分鐘格，結果完全相同）。
+ *   會變的只有兩種、而且兩種原本都是錯的：
+ *     ・格長混用（例如全日整點、尖峰另外拆 15 分鐘）
+ *       實測舊版在眾數 60 時少報一半、在眾數 15 時把整點格串進四格視窗
+ *     ・格長組不成整小時（45 分鐘）或超過一小時（2 小時）
+ *       舊版把 45 分鐘或 2 小時的量冒充成一小時的流率；現在回「資料不足」
+ *
+ * ⚠️ 即使如此，它**仍然是計算口徑變更**——不可以為了讓文件好看而
+ *   維持舊標記。姊妹專案全日交通量同步改了同一件事。
+ */
+export const LAST_CALC_CHANGE_VERSION = "v2.1.83";
 
 /** 把 "v2.1.21" 拆成 [2,1,21] 以便比大小；認不得的格式回傳空陣列。 */
 function versionParts(version: string): number[] {
@@ -1005,6 +1249,16 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.83",
+    date: "2026-09-24",
+    note: "使用者 2026-09-24 要求「徹底檢查、徹底修正」後的收尾版，並把原本掛在 v2.1.82 名下的 2026-09-24 那批修正一併正名到本版（v2.1.82 從未發布，卻同時被用來標 09-23 與 09-24 兩批不同內容）。**本版變更了計算口徑**：`LAST_CALC_CHANGE_VERSION` 由 v2.1.64 推進為 v2.1.83。格長一致的資料一個數字都不會變（5 份真實路口檔是 15 分鐘格，實測完全相同）；會變的只有格長混用、或格長組不成整小時的資料。**(1) 尖峰小時改為「累計到剛好 60 分鐘」認定。** 舊版只比起點間距，08:45 的 15 分鐘格接 09:00 的整點格時間距剛好 15 分鐘就過關，於是 50+50+50+100 被當成一小時的量；現在每一格都記下自己的長度並逐格累加。**(2) J2：舊紀錄的格長改為先從 `label` 回推。** 匯入時 `label` 與 `lengthMinutes` 取自**同一個字串**，所以 v2.1.67 以前的舊紀錄雖然沒有 `lengthMinutes`，長度是回推得出來的——在此之前那條路徑一路退回眾數，(1) 修好的缺陷在舊紀錄上還活著。新增 `cellMinutesOf()`（`lengthMinutes` → 回推 → 眾數），三個呼叫點全部改走它。⚠️ `label` 真的只寫起點時仍然退回眾數，**不猜**。兩顆反證都實測過：第一顆是拔掉 `lengthMinutes` 的混用資料，改回舊寫法會報 250 → 紅；第二顆是只寫起點的資料，修正前後都是 350（證明沒有過度修正）。**(3) 與全日交通量共用一張逐位元相同的尖峰認定對照表** `tests/peak-hour-contract.test.mjs`（10 個情境，兩支各自跑自己的 `rollingPeak`，並以 SHA-256 釘住表格內容），兩支 10/10 一致。**(4) K9～K13、K19～K22、K30、K35 共 11 項**：`pceFactor` 先擋型別再轉數字並新增 `pceIssues()` 逐格指名；`describeGrowth`／`describeExtremes` 分辨「是 0」與「讀不到」；位數夾限改用型別守衛；「全調查時段」的各方向量**可以相加**（它是累計量不是尖峰小時），畫面與草稿分成兩句說明；`movementPresence` 的鍵改用解析後的名字；三個複製按鈕不再靜默失敗（`navigator.clipboard?.writeText(...)` 的樂觀鏈會**then 與 catch 都不執行**，已實測）；備份只挑前綴相符的別名鍵；清掉兩處死分支與贅餘條件。**(5) K41：車種組成的占比清單補上四捨五入說明**——逐項各自四捨五入到小數第 1 位，加起來可能不等於 100%（三項各 1/3 會是 33.3＋33.3＋33.3＝99.9）。刻意不把差額塞給任何一項，否則那一項的占比就對不上它自己的數值÷總量。手冊「車種組成分析」段同步補上同一句。**(6) 手冊兩處更正**：「各方向各自認定不可以相加」補上**全調查時段是例外**；「沒有逐時間格資料可以回推，重新匯入原始檔即可」更正為 v2.1.65 起只需重新套用計算，並補上第三種成因。",
+  },
+  {
+    version: "v2.1.82",
+    date: "2026-09-23",
+    note: "使用者試用回報與三支同步大檢查的修正版。**沒有變更任何交通量或 PCU 計算**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.64，黃金值不變。**(1) 結論草稿產生器三個缺陷。**「時段」由兩顆勾選框補成**四顆**（上午尖峰／下午尖峰／全調查時段／全調查時段尖峰），「都不勾＝全調查時段」這個看不見的隱藏狀態整段拿掉；`toConclusionRecords()` 原本只建 `{AM, PM}` 而且每個欄位都寫成 `peak === \"AM\" ? … : …` 的三元判斷，傳 DAY 進來會**靜靜地拿到 PM 的數字**，現在四個都建、取值一律走 `row.inbound[scope]`；支線篩選以前對「車種組成」**完全無效**（`describeComposition()` 根本沒收到 condition），新增 `compositionByBranch`（**只取駛入**，因為各支線駛入合計＝路口總量可相加，駛出合計也等於路口總量、兩者相加是兩倍），篩不了時**明講篩不了與為什麼**。⚠️ 連帶修正一個清單上沒寫到的坑：「全調查時段」的單位**不是 PCU/hr** 而是 PCU／調查時段，只加勾選框不改單位會寫出「總流量 530,122 PCU/hr」。**(2) 草稿同時寫駛入與駛出時加不可相加提醒**（相加會得到剛好兩倍的假總量）。**(3) 報表文字草稿補上全調查時段**：`siteSummaries` 由 `PEAK_KEYS`（3）改成 `SCOPE_KEYS`（4）；車種組成的範圍鍵與流量不同，FULL 要走 `SURVEY`，直接丟 FULL 會讀到 undefined 而整排變 0。**(4) 按過「已人工確認」之後五個數字只有一個會減**：抽出唯一的 `openIssues`，側欄紅字、品質分數、待人工確認、需處理錯誤四處改讀它，已確認另列一行。**(5) 受控數字欄位按空之後黏 0**：改用共用元件 `lib/number-field.tsx`（與全日交通量 `app/number-field.tsx` **逐位元相同**，SHA-256 釘住），角度另加範圍提醒與**兩支角度相同的就地提醒**（不進資料異常檢查、只提醒不改值）。⚠️ 元件第一版還有一個由 `e2e-factor-scope` 抓到的真 bug：**外面把值換掉時，正在編輯的字串沒有丟掉**——使用者打了 9 之後直接換「係數套用範圍」，那一格仍顯示 9，看起來像新範圍的係數是 9。已改成比對「我自己送出去的值」。**(6) 併入備份時同一個計畫的調查日期指定被整批取代**（淺層合併，靜默掉資料），改成逐筆合併。**(7)「顯示調查日期」不再跟著單一計畫備份走**（跟人走，三支統一以交通服務水準為準）；`e2e-backup.mjs` 三條斷言反過來寫，並在第二份備份裡刻意塞相反值，原處留了「不要把程式改回去」的警語。**(8) 單欄版面時圖說被季度變化隔開**：`@media (max-width: 1399.98px)` 加 `order`，兩欄（1400px 以上）一個像素都不動，斷點與 `min-width: 1400px` 完全互補。新增 `scripts/e2e-trend-order.mjs` 量**實際畫面座標**（不是 DOM 順序），反證：拿掉那條 CSS → 1200／1399 兩個寬度紅（季度變化 1122、圖說 1863）。**(9)`lib/traffic.ts` 兩段過期註解與程式行為相反**，2026-09-21 直接害 AI 差點把一個正確的設計改壞（是使用者當場擋下來的）；三處改寫，並把**四個核心名詞對照表**（鍵／顯示名稱／意義／單位／不可改名）寫進型別定義旁邊。查證結果：實際邏輯是對的，24 小時的門檻 v2.1.64 就拿掉了，錯的只有註解。**(10)「調查日期不只一個」的『前往流量核對工作台』按鈕移除**（準則：說明文字有沒有真的叫使用者去那一頁做一件事；三支共 27 顆全部盤過，只有這 1 顆不通過，其餘 24 顆一顆未動），準則寫進原始碼註解，守門**兩個方向都守**（那一顆不可以回來、其餘 24 顆也不可以被清光）。**(11) 三支真實檔測試永遠不會跑**：路徑寫死成舊批次的檔名，換一批資料就永遠 skip。改成遞迴掃 `realdata/`、用檔名片段尋找，skip 訊息分清楚「沒有真實檔」與「有 16 份但不是這一份」；另補一支**對所有找得到的真實檔都跑**的性質檢查（有幾張日別工作表就要讀出幾筆，平假日絕對不可以被合併成一筆），並釘住「一份都沒驗到不可以變綠」。**(12) 不可回頭清單**：新增三支逐位元相同的`tests/never-revert-contract.mjs`（23 條、SHA-256 釘死），掃描**排除註解與版本更新紀錄**（註解裡必然寫著錯誤說法；VERSION_HISTORY 是歷史，改寫它才是竄改紀錄）。**(13) 結論草稿全條件覆蓋盤點**：15 指標 × 4 時段的矩陣、每一個篩選維度都要真的改變輸出、三種分組互不相同、四種範圍都挑得到資料、全部一起勾時沒有指標被吃掉；報表草稿 12 個段落逐一單獨勾都要寫得出內容。⚠️ 盤點時修掉一句說謊的說明：只勾「全調查時段」時草稿裡一個 PCU/hr 都沒有，說明卻寫死「（PCU/hr、輛、%）」。**(14) 文件**：README 的 Excel 說明由「三類成果」更正為實際的 10 個可選工作表、尖峰格距補上 15／20／30／60 分鐘；四處仍寫 localStorage 的註解改成 IndexedDB；PROJECT_HANDOFF 新增「待修正事項放在哪裡」「驗證報告的日期規則」「顯示調查日期開關的現行規則」三節；`pending-index.test.mjs` 由「守清冊一致」改成**守「待修正清單不可以出現在 repo 裡」**。",
+  },
   {
     version: "v2.1.80",
     date: "2026-09-20",
@@ -2017,7 +2271,6 @@ export function ensureRecordScopes(record: TrafficRecord): TrafficRecord {
   return record;
 }
 
-/** 這筆紀錄算得出全日尖峰小時嗎？（有 24 小時資料，而且真的挑到了一個視窗） */
 /**
  * 這一筆算不算得出「全調查時段尖峰」。
  *
@@ -2034,10 +2287,12 @@ export function hasDayPeak(record: TrafficRecord): boolean {
 /**
  * 這一筆紀錄、這個統計範圍，**有沒有值可以顯示**。
  *
- * 只有 DAY 會「算不出來」：調查不足 24 小時，或舊備份還沒重新匯入。
+ * 只有 DAY（全調查時段尖峰）會「算不出來」，而且**與涵蓋幾小時無關**——
+ * 只有兩種情形：舊備份沒有逐時間格的資料，或格距組不成整小時。
+ * （⚠️ 不是「不足 24 小時」。那是已經被推翻的說法，見 `hasDayPeak` 上面那一段。）
  * 那種情況底層資料是 **0**（`ensureRecordScopes` 補的是空值），不是 null——
- * 畫面若照 0 呈現，折線會掉到零、摘要會寫「全日尖峰 0 PCU/hr」，
- * 看起來像「那一季流量歸零」，事實是「這份調查根本算不出全日尖峰」。
+ * 畫面若照 0 呈現，折線會掉到零、摘要會寫「全調查時段尖峰 0 PCU/hr」，
+ * 看起來像「那一季流量歸零」，事實是「這份調查根本算不出這個值」。
  * **0 會被抄進報告，「－」不會。**
  *
  * ⚠️ 全系統要用同一支判斷。歷季趨勢圖在 v2.1.30／v2.1.31 就是因為自己
@@ -2149,9 +2404,102 @@ export function recordTotal(record: TrafficRecord, peak: ScopeKey) {
  *   而且三份必須逐位元相同），只是本程式沒有地方呼叫它。
  */
 
+/**
+ * 一份檔案的逐格長度分布。
+ *
+ * ⚠️ 逐格看**它自己的長度**（`lengthMinutes`，取自時間欄原始文字），
+ *   未知時退回眾數。不可以只看眾數：48 格裡有 1 格誤植成 2 小時的話，
+ *   眾數仍然是 60，那一格會被蓋掉——而那正是最需要抓出來的情形。
+ */
+export function intervalLengthSpread(
+  source: NonNullable<TrafficRecord["sourceIntervals"]>,
+): { lengths: Map<number, number>; samples: string[]; total: number } {
+  const lengths = new Map<number, number>();
+  const samples: string[] = [];
+  for (const row of source.rows) {
+    const length = cellMinutesOf(row, source.intervalMinutes);
+    if (!Number.isFinite(length) || length <= 0) continue;
+    lengths.set(length, (lengths.get(length) ?? 0) + 1);
+    if (length > 60 && samples.length < 3 && !samples.includes(row.label))
+      samples.push(row.label);
+  }
+  const total = [...lengths.values()].reduce((sum, n) => sum + n, 0);
+  return { lengths, samples, total };
+}
+
+/**
+ * 哪幾種格長算「規律」——與全日交通量同一組判準：
+ * 佔兩成以上，而且**至少重複兩次**（一次性的跳號不是另一種規律）。
+ */
+export function regularIntervalLengths(
+  lengths: Map<number, number>,
+  total: number,
+): [number, number][] {
+  return [...lengths.entries()]
+    .filter(([, count]) => total > 0 && count >= 2 && count / total >= 0.2)
+    .sort((a, b) => a[0] - b[0]);
+}
+
 export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
   const issues: QualityIssue[] = [];
   for (const record of records) {
+    /*
+     * ══════════════════════════════════════════════════════════════════
+     *  調查格距（使用者 2026-09-24 指定，與全日交通量同步）
+     * ══════════════════════════════════════════════════════════════════
+     *
+     * ⚠️ 只在有 `sourceIntervals` 時才檢查。v2.1.67 以前匯入的紀錄沒有它，
+     *   那時什麼都不報——不可以因為「查不到」就報成異常。
+     */
+    if (record.sourceIntervals?.rows?.length) {
+      const spread = intervalLengthSpread(record.sourceIntervals);
+      const over = [...spread.lengths.entries()]
+        .filter(([length]) => length > 60)
+        .sort((a, b) => b[0] - a[0]);
+      if (over.length) {
+        const hours = (minutes: number) =>
+          Number.isInteger(minutes / 60) ? `${minutes / 60} 小時` : `${minutes} 分鐘`;
+        const count = over.reduce((sum, item) => sum + item[1], 0);
+        issues.push({
+          id: `${record.id}-interval-too-long`,
+          severity: "warning",
+          category: "調查格距異常",
+          station: record.station,
+          quarter: record.quarter,
+          message:
+            `有 ${count} 格的時間格長度超過 1 小時（` +
+            over.map(([length, n]) => `${hours(length)} × ${n} 格`).join("、") +
+            `，共 ${spread.total} 格）。` +
+            (spread.samples.length ? `例如 ${spread.samples.join("、")}。` : "") +
+            "交通量調查以 1 小時一格為主、細一點是 15／20／30 分鐘，不會有 2 小時以上一格的調查。",
+          resolution: {
+            kind: "人工確認",
+            text: "這多半是原始檔的時間欄位誤植，例如把「07:00～08:00」打成「07:00～09:00」。請開原始檔核對那幾格的起訖時間：確實打錯的話更正後重新匯入該筆。如果這份資料真的是那樣調查的，按下「已人工確認」即可，下次檢查不再提醒——但要知道那些時段算不出尖峰小時：那一欄會顯示「－」並寫出原因，系統不會把 2 小時的量當成一小時的流率。《2022 年臺灣公路容量手冊》4.5.1.3 建議評估現況宜根據尖峰 15 分鐘的需求流率，所以 15 分鐘一格是該手冊鼓勵的做法（這裡說的「手冊」是公路容量手冊，不是本系統的操作手冊）。",
+            view: "import",
+            viewLabel: "季度批次匯入",
+          },
+        });
+      }
+      const regular = regularIntervalLengths(spread.lengths, spread.total);
+      if (regular.length > 1)
+        issues.push({
+          id: `${record.id}-interval-mixed`,
+          severity: "warning",
+          category: "調查格距混用",
+          station: record.station,
+          quarter: record.quarter,
+          message:
+            `同一份檔案混用了 ${regular.length} 種長度的時間格（` +
+            regular.map(([length, n]) => `${length} 分鐘 × ${n} 格`).join("、") +
+            "）。",
+          resolution: {
+            kind: "人工確認",
+            text: "這通常是「全日整點、但尖峰時段另外拆細」的版型，本身不一定是錯——很多調查就是這樣做的。系統的尖峰小時是以「累計到剛好 60 分鐘」認定的，所以混用格長時數字仍然正確。要確認的是：那是刻意拆細的，還是某一格的結束時間打錯了？確認過就按「已人工確認」，下次不再提醒；打錯的話更正原始檔後重新匯入該筆。",
+            view: "import",
+            viewLabel: "季度批次匯入",
+          },
+        });
+    }
     if (
       !record.routes?.length &&
       record.sourceFiles.some(function (file) {
@@ -2363,11 +2711,30 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
           `這份檔案讀到 ${record.surveyDateCandidates.length} 個不同的日期（` +
           record.surveyDateCandidates.join("、") +
           "）。請用這一列的「指定調查日期」選單挑出哪一個才是調查日期。",
+        /*
+         * ⚠️ **這一項刻意沒有「前往…」按鈕**（A11，使用者 2026-09-21 指示）。
+         *
+         * ── 什麼時候該給按鈕（這次定下來的準則，三支一致）─────────────
+         *   看 `text` 有沒有真的叫使用者去那一頁**做一件事**：
+         *     有  → 給按鈕（例如「請到『流量核對工作台』的『原始儲存格與
+         *           換算來源』找出是哪一個儲存格」）
+         *     沒有 → 不給（只是「去那邊看結果」，或那一頁根本沒提到）
+         *
+         *   這一項的動作**完全在這一列完成**（就是那顆「指定調查日期」選單）。
+         *   舊版給的按鈕指向「流量核對工作台」，而那一頁連日期都不顯示——
+         *   按鈕只會讓人以為還有一步沒做。使用者的原話：
+         *     「另外解決方式除了要我手動指定日期外，還有一個前往流量核對
+         *       工作台的選項……請把前往流量核對工作台拿掉」
+         *
+         * ⚠️ 三支各有一顆同性質的按鈕，**三支一起移除了**：
+         *     路口轉向    → 流量核對工作台
+         *     交通服務水準 → 尖峰明細
+         *     全日交通量   → 可追溯明細
+         *   其餘 24 顆「前往…」按鈕都通過上面的準則，**一顆都不要動**。
+         */
         resolution: {
           kind: "人工確認",
           text: "同一份檔案上找到兩個以上不同的日期，系統無從判斷哪一個才是調查日期（另一個可能是製表、複核或現場補測的日期，本來就該留在表上）。請用這一列的「指定調查日期」選單挑出正確的調查日期，挑完就會記為已確認，紀錄卡、明細與「期別顯示調查月份」都會改用你指定的那一個。系統不會自己挑、也不會取平均——這一項不影響任何流量或 PCU 計算。",
-          view: "audit",
-          viewLabel: "流量核對工作台",
         },
       });
     /*
@@ -2381,9 +2748,8 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
     if (record.routes?.length)
       for (const peak of SCOPE_KEYS) {
         /*
-         * 沒有這個範圍的資料就跳過——不足 24 小時的調查，DAY 與 FULL 整組
-         * 是空的，兩邊都是 0、差值也是 0，跑下去只是白跑；但如果哪天其中
-         * 一邊有值另一邊沒有，那就是真的脫鉤，仍然要被抓出來。
+         * 沒有這個範圍的資料就跳過：兩邊都是 0 時差值也只是 0；但如果其中
+         * 一邊有值、另一邊沒有，那就是真的脫鉤，仍然要被抓出來。
          */
         const movementTotal = record.approaches.reduce(function (sum, approach) {
           return sum + totalMovement(approach, peak);
@@ -2393,6 +2759,12 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
         }, 0);
         if (!movementTotal && !routeTotal) continue;
         const difference = round1(movementTotal - routeTotal);
+        /*
+         * 異常訊息裡的單位也要帶涵蓋（2026-09-25 第六輪補）。
+         * 這一筆的涵蓋自己知道，沒有理由讓它退回預設的「調查時段」——
+         * 使用者拿這句話去和畫面上的「PCU/調查日」對照時會以為是兩件事。
+         */
+        const unit = scopeUnit(peak, "pcu", coverageOf(record));
         // 兩邊都做到小數一位，容差取 0.11 與 conservationCheck 一致。
         if (Math.abs(difference) >= 0.11)
           issues.push({
@@ -2401,7 +2773,7 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
             category: "總數不一致",
             station: record.station,
             quarter: record.quarter,
-            message: `${SCOPE_LABELS[peak]}：路口轉向總量 ${movementTotal.toLocaleString()} ${scopeUnit(peak)} 與逐條流向加總 ${routeTotal.toLocaleString()} ${scopeUnit(peak)} 相差 ${difference.toLocaleString()} ${scopeUnit(peak)}。常見原因是刪除支線後未重算，請到「流量核對工作台」確認。`,
+            message: `${SCOPE_LABELS[peak]}：路口轉向總量 ${movementTotal.toLocaleString()} ${unit} 與逐條流向加總 ${routeTotal.toLocaleString()} ${unit} 相差 ${difference.toLocaleString()} ${unit}。常見原因是刪除支線後未重算，請到「流量核對工作台」確認。`,
             resolution: {
               kind: "畫面修正",
               /*
@@ -2425,9 +2797,86 @@ export type IntervalRow = {
   start: number;
   label: string;
   values: number[];
+  /**
+   * ══════════════════════════════════════════════════════════════════
+   *  這一格**自己**幾分鐘（2026-09-24 新增）
+   * ══════════════════════════════════════════════════════════════════
+   *
+   * ⚠️ 在這之前，格長只有一個**整份檔案的眾數**（`intervalMinutes`），
+   *   逐格自己的長度沒有存。實測後果（混用 60＋15 分鐘的版型）：
+   *   `rollingPeak` 的相鄰檢查比的是**起點間距**，所以 08:45 的 15 分鐘格
+   *   接 09:00 的整點格、間距剛好 15 分鐘、檢查會通過，於是
+   *   50+50+50+100 ＝ 250 被當成 08:15–09:15 這一小時的量。
+   *   而那個 09:00 的格子其實裝的是一整小時。
+   *
+   * 值取自時間欄的原始文字（例如「07:00~07:15」）。
+   * ⚠️ 原始文字只寫起點（例如「07:00」）時是 `undefined`，代表「不知道」
+   *   ——呼叫端要退回原本的眾數判斷，**不可以當成 0 或當成眾數**。
+   *   v2.1.67 以前匯入的舊紀錄就是這一種，行為必須與改版前相同。
+   */
+  lengthMinutes?: number;
   /** One-based source row for each contributing worksheet. */
   sourceRows?: Record<string, number>;
 };
+
+/**
+ * 從時間欄的原始文字取出「這一格幾分鐘」。
+ *
+ * ⚠️ 只在文字**真的寫出起訖**時才回數字（「07:00~07:15」「07:00－07:15」
+ *   「07:00～07:15」都算）。只寫起點時回 undefined＝不知道，
+ *   由呼叫端退回眾數判斷。跨午夜（23:45~00:00）要算得出正數。
+ */
+export function intervalLengthFromLabel(text: string): number | undefined {
+  const times = [
+    ...String(text ?? "").matchAll(/(\d{1,2})\s*[:：]\s*(\d{2})/g),
+  ].map((m) => Number(m[1]) * 60 + Number(m[2]));
+  if (times.length < 2) return undefined;
+  let length = times[1] - times[0];
+  if (length <= 0) length += 24 * 60;
+  return length > 0 && length <= 24 * 60 ? length : undefined;
+}
+
+/**
+ * 這一格**自己**幾分鐘。
+ *
+ * 順序是刻意的：`lengthMinutes`（匯入時存的）→ 從 `label` 原始文字回推 → 眾數。
+ *
+ * ⚠️ 為什麼要有中間那一層（J2，2026-09-24）：v2.1.67 以前匯入的舊紀錄沒有
+ *   `lengthMinutes`，於是一路退回眾數——I2 修好的那個缺陷在這條路徑上還活著。
+ *   但匯入時 `label` 與 `lengthMinutes` 取自**同一個字串**
+ *  （`label: String(cell)` / `lengthMinutes: intervalLengthFromLabel(String(cell))`），
+ *   所以舊紀錄的長度是**回推得出來的**，不必等使用者重新匯入。
+ *   實測的錯誤樣態：混用 60＋15 的版型，50+50+50+100＝250 被當成
+ *   08:15–09:15 這一小時的量，而那個 09:00 的格子其實裝的是一整小時。
+ *
+ * ⚠️ 不可以在資訊不足時猜：`label` 真的只寫起點（「07:00」）時
+ *   `intervalLengthFromLabel()` 回 `undefined`，這裡就**照舊退回眾數**，
+ *   行為與改版前完全相同。`IntervalRow.lengthMinutes` 的註解
+ *  （undefined ＝不知道，呼叫端要退回眾數，不可以當成 0 或當成眾數）仍然成立。
+ */
+export function cellMinutesOf(row: IntervalRow, fallback: number): number {
+  return row.lengthMinutes ?? intervalLengthFromLabel(row.label) ?? fallback;
+}
+
+/**
+ * 一批時間格實際涵蓋的分鐘數。
+ *
+ * 必須與 rollingPeak 使用同一套逐格長度判斷；否則尖峰雖然挑對，
+ * `survey.minutes`、全調查時段的涵蓋判定與顯示單位仍會沿用錯的眾數算法。
+ */
+export function totalIntervalMinutes(
+  rows: IntervalRow[],
+  fallbackMinutes: number,
+): number {
+  const fallback =
+    Number.isFinite(fallbackMinutes) && fallbackMinutes > 0
+      ? fallbackMinutes
+      : 0;
+  return rows.reduce(function (sum, row) {
+    const length = cellMinutesOf(row, fallback);
+    return sum + (Number.isFinite(length) && length > 0 ? length : fallback);
+  }, 0);
+}
 
 export function rollingPeak(
   rows: IntervalRow[],
@@ -2454,7 +2903,13 @@ export function rollingPeak(
     60 % intervalMinutes !== 0
   )
     return null;
+  /*
+   * ⚠️ `needed` 不再用來組視窗（見下面的累計分鐘數），但**保留**這一行的
+   *   前置意義：上面那一段已經擋掉不能整除 60 與超過 60 的格長，
+   *   這裡順手確認整除的結果是正整數；不是的話一律當資料不足。
+   */
   const needed = 60 / intervalMinutes;
+  if (!Number.isInteger(needed) || needed <= 0) return null;
   /*
    * 視窗的**頭和尾都要落在時段內**。
    *
@@ -2481,14 +2936,44 @@ export function rollingPeak(
     values: number[];
   } | null = null;
   for (const { row, index } of candidates) {
-    const slice = rows.slice(index, index + needed);
-    if (
-      slice.length !== needed ||
-      slice.some(
-        (r, i) => i && r.start - slice[i - 1].start !== intervalMinutes,
-      )
-    )
-      continue;
+    /*
+     * ══════════════════════════════════════════════════════════════════
+     *  ⚠️ 2026-09-24：一小時由「**累計分鐘數**」組成，不是「數格數」
+     * ══════════════════════════════════════════════════════════════════
+     *
+     * 舊寫法是 `needed = 60 ÷ 眾數格長`，然後取 `needed` 格。
+     * 格長一致時數格數＝數分鐘，所以是對的；**混用格長時兩者就脫鉤了**：
+     *
+     *   ・眾數 60 → needed = 1，於是**任何一格**都被當成一個完整小時。
+     *     實測（全日整點每格 100、07–09 拆成 15 分鐘每格 50 的版型）：
+     *     真尖峰是 07:00–08:00 的 200，舊版報 00:00 的 **100**。
+     *   ・眾數 15 → needed = 4，四格的起點間距都是 15 就過關，
+     *     即使其中一格其實是 60 分鐘。實測報 250（50+50+50+100）。
+     *
+     * 現在逐格看**它自己的長度**（`lengthMinutes`，取自時間欄原始文字），
+     * 累加到**剛好** 60 分鐘才算一個視窗。相鄰的判準也跟著改成
+     * 「下一格的起點要等於上一格的起點＋上一格的長度」——比起點間距
+     * 過不了混用的關。
+     *
+     * ⚠️ `lengthMinutes` 未知時（v2.1.67 以前匯入、或時間欄只寫起點）
+     *   退回眾數 `intervalMinutes`，行為與改版前完全相同，不會誤殺。
+     * ⚠️ 姊妹專案全日交通量改的是同一件事、同一個判準。
+     */
+    const slice: IntervalRow[] = [];
+    let minutes = 0;
+    let expectedStart = row.start;
+    for (let cursor = index; cursor < rows.length && minutes < windowMinutes; cursor += 1) {
+      const current = rows[cursor];
+      if (current.start !== expectedStart) break;
+      const length = cellMinutesOf(current, intervalMinutes);
+      if (!Number.isFinite(length) || length <= 0) break;
+      if (minutes + length > windowMinutes) break;
+      slice.push(current);
+      minutes += length;
+      expectedStart = current.start + length;
+    }
+    /* 湊不出剛好一小時就不是一個尖峰小時的候選。 */
+    if (minutes !== windowMinutes || !slice.length) continue;
     const values = Array.from(
       { length: Math.max(...slice.map((r) => r.values.length), 0) },
       (_, col) =>
@@ -2509,18 +2994,6 @@ export function rollingPeak(
   return best;
 }
 
-/**
- * 一次算出三個尖峰的視窗——**全系統只有這一支**。
- *
- * 匯入預覽（inspectWorkbook）與換過當量係數後的重算（configuredImportPreview）
- * 都走這裡，所以兩邊不可能挑到不同的視窗。以前那兩處各寫一次 rollingPeak，
- * 要新增一個時段就得記得兩邊都補。
- *
- * @param surveyMinutes 這份調查總共涵蓋幾分鐘。不足 24 小時時 DAY 一律是 null：
- *   只做了 4 小時（例如 07–09＋17–19）卻回報一個「全日尖峰」，那個數字必然
- *   等於上午與下午尖峰裡較大的一個，看起來像新資訊其實不是，還會被當成
- *   整天的最大值寫進報告。
- */
 /*
  * ══════════════════════════════════════════════════════════════════════
  *  橫跨中午的尖峰小時：程式不自己決定，問使用者
@@ -2594,6 +3067,25 @@ export function noonStraddle(
   };
 }
 
+/**
+ * 一次算出三個尖峰的視窗——**全系統只有這一支**。
+ *
+ * 匯入預覽（inspectWorkbook）與換過當量係數後的重算（configuredImportPreview）
+ * 都走這裡，所以兩邊不可能挑到不同的視窗。以前那兩處各寫一次 rollingPeak，
+ * 要新增一個時段就得記得兩邊都補。
+ *
+ * @param surveyMinutes 這份調查總共涵蓋幾分鐘。**只用來決定單位要寫
+ *   「調查日」還是「調查時段」，不參與 DAY 算不算得出來的判斷**
+ *   （v2.1.64 起 DAY 不再卡 24 小時，理由寫在函式內第一段註解裡）。
+ *
+ * ⚠️ 2026-09-25 修正這段 JSDoc 的兩件事：
+ *   ① 它原本被 `NOON_MINUTES` 那一大段隔開了將近 90 行，實際附著在
+ *      `export const NOON_MINUTES` 上面——讀的人會以為那是常數的說明。
+ *   ② `@param surveyMinutes` 原本寫「不足 24 小時時 DAY 一律是 null」，
+ *      那是 v2.1.64 之前的行為，與函式內的註解**直接相反**。
+ *      版本紀錄宣稱已經清掉三處「與程式行為相反的過期註解」，這一處漏了，
+ *      而它正是交接文件那兩句錯誤敘述的來源。
+ */
 export function peakWindowsFor(
   rows: IntervalRow[],
   intervalMinutes: number,
@@ -2616,10 +3108,14 @@ export function peakWindowsFor(
    * 流量最大的那一小時」，4 小時的調查算出這個值是誠實的。
    *
    * ⚠️ 安全性由 rollingPeak 自己保證，不在這裡另外擋：
-   *   它要求視窗的 60 分鐘由**相接的**原始格組成
-   *  （`r.start - slice[i-1].start !== intervalMinutes` 就跳過），
+   *   它要求視窗的 60 分鐘由**相接的**原始格組成——現行判準是
+   *   「這一格的起點必須等於上一格起點＋上一格自己的長度」
+   *  （`if (current.start !== expectedStart) break;`），
    *   所以 07–09＋17–19 這種兩段式調查，視窗不可能橫跨中間那八小時的空隙。
    *   要改這裡之前先確認那一段還在，否則會算出一個橫跨空隙的假尖峰。
+   *   ⚠️ 2026-09-25 更正：這一段原本引用的是 v2.1.83 之前的寫法
+   *   （比「起點間距是不是等於眾數格長」），那個判斷式已經不存在了。
+   *   照字面去「確認那一段還在」的人會以為防護被拔掉。
    *
    * surveyMinutes 現在只用來標示涵蓋（單位要寫「調查日」還是「調查時段」），
    * 不再參與 DAY 算不算得出來的判斷。
@@ -2707,7 +3203,7 @@ export function approachPeakBreakdown(
       movement: string;
       destination?: string;
     }>;
-    rows: Array<{ start: number; label: string; values: number[] }>;
+    rows: IntervalRow[];
   },
   pce: PceMatrix,
   peak: PeakKey,
@@ -3030,6 +3526,8 @@ export type ImportPreview = {
   intervalRows?: Array<{
     start: number;
     label: string;
+    /** 這一格自己的起訖長度；只寫起點時為 undefined。 */
+    lengthMinutes?: number;
     values: number[];
     /** One-based source row for each contributing worksheet. */
     sourceRows?: Record<string, number>;
@@ -3045,7 +3543,8 @@ export type ImportPreview = {
    * 的地方有兩處，多一個時段就要記得兩邊都改，漏一邊就是「同一件事在不同畫面
    * 說不同話」。
    *
-   * DAY 只有 24 小時的調查檔才會有值（coversFullDay），否則是 null。
+   * DAY 是「全調查時段尖峰」：在實際調查涵蓋內挑一個完整的 60 分鐘視窗；
+   * 不要求涵蓋滿 24 小時，但不可以跨越資料空隙或用不足 60 分鐘的格子冒充。
    */
   peakWindows: Record<PeakKey, ReturnType<typeof rollingPeak>>;
   /*
@@ -3842,6 +4341,11 @@ export async function inspectWorkbook(
         const interval = intervalMap.get(start) || {
           start,
           label: String(cell),
+          /*
+           * 這一格自己的長度，取自原始文字。只寫起點時是 undefined
+           * ——見 IntervalRow.lengthMinutes 的說明，那時退回眾數判斷。
+           */
+          lengthMinutes: intervalLengthFromLabel(String(cell)),
           values: [],
           sourceRows: {},
         };
@@ -4010,6 +4514,7 @@ export async function inspectWorkbook(
    * rollingPeak 需要看到真實格距才判斷得出「這份資料組不成一小時」。
    */
   const intervalMinutes = Math.max(1, commonGap || 15);
+  const surveyMinutes = totalIntervalMinutes(intervalRows, intervalMinutes);
   const surveyValues = Array.from(
     {
       length: Math.max(
@@ -4060,16 +4565,8 @@ export async function inspectWorkbook(
   /*
    * 混合時間格：同一份檔案裡有些是 15 分鐘格、有些是整點格。
    *
-   * 格距只取全表眾數，而尖峰視窗是**數格數**（needed = 60 / 眾數格距）、
-   * 不是累計分鐘數。眾數是 60 時 needed = 1，等於任何一列都被當成一個完整
-   * 小時；台灣常見的「全日整點＋尖峰時段拆 15 分鐘」版型正好踩中，
-   * 尖峰那一小時被拆成 4 列，系統只取其中 1 列當成該小時的流率，
-   * 低估 75%，而且總量守恆，任何以總量為基礎的檢查都抓不到。
-   *
-   * 這裡**只做偵測與提醒，不改計算**。修正挑選邏輯會變更計算口徑，
-   * 那要連 LAST_CALC_CHANGE_VERSION 一起推進、讓既有鎖定全部重新確認，
-   * 屬於使用者要拍板的決定，不是可以順手做掉的事。
-   * （實測：使用者目前的 37 份真實工作簿沒有任何一份混用，0/37。）
+   * v2.1.83 起尖峰視窗逐格累計實際長度到剛好 60 分鐘；這裡另外偵測並提醒，
+   * 讓使用者確認混用是刻意拆細，還是時間欄誤植。偵測本身不改數值。
    */
   /*
    * 判準要抓「兩種規律的格距」，不是「格距不完全一致」。
@@ -4104,10 +4601,51 @@ export async function inspectWorkbook(
     warnings.push(
       "這份檔案混用了不同長度的時間格（" +
         spread +
-        "），系統以最常出現的 " +
-        intervalMinutes +
-        " 分鐘為準推算尖峰小時，該值可能不是真正的一小時流量，請人工核對尖峰時段的數字。",
+        "）。系統的尖峰小時是以「累計到剛好 60 分鐘」認定的，所以混用格長時數字仍然正確；" +
+        "要確認的是那是刻意拆細（例如全日整點、尖峰另外拆 15 分鐘），" +
+        "還是某一格的結束時間打錯了。匯入後到「資料維護」的異常清單也會列出這一項。",
     );
+  }
+  /*
+   * ══════════════════════════════════════════════════════════════════════
+   *  格距超過 1 小時：匯入時就提示（使用者 2026-09-24 指定，不阻擋匯入）
+   * ══════════════════════════════════════════════════════════════════════
+   *
+   * 使用者原話：「不可能出現 2 小時以上類型的調查資料，那反而要列為異常，
+   * 系統應該匯入時會提示，以及列入資料異常清單裡吧」
+   *
+   * ⚠️ 逐格看它**自己的長度**（時間欄原始文字寫出的起訖），不是看眾數：
+   *   48 格裡有 1 格誤植成 2 小時的話眾數仍是 60，那一格會被蓋掉。
+   * ⚠️ 門檻是「超過 60 分鐘」。15／20／30／60 都是正常格距，
+   *   手冊 4.5.1.3 還特別鼓勵用尖峰 15 分鐘的需求流率。
+   */
+  {
+    const tooLong = new Map<number, number>();
+    const samples: string[] = [];
+    for (const row of intervalRows) {
+      const length = cellMinutesOf(row, commonGap);
+      if (!Number.isFinite(length) || length <= 60) continue;
+      tooLong.set(length, (tooLong.get(length) ?? 0) + 1);
+      if (samples.length < 3 && !samples.includes(row.label)) samples.push(row.label);
+    }
+    if (tooLong.size) {
+      const parts = [...tooLong.entries()]
+        .sort((a, b) => b[0] - a[0])
+        .map(([length, n]) =>
+          Number.isInteger(length / 60)
+            ? `${length / 60} 小時 × ${n} 格`
+            : `${length} 分鐘 × ${n} 格`,
+        );
+      warnings.push(
+        `這份檔案有時間格長度超過 1 小時（${parts.join("、")}）。` +
+          (samples.length ? `例如 ${samples.join("、")}。` : "") +
+          "交通量調查以 1 小時一格為主、細一點是 15／20／30 分鐘，" +
+          "不會有 2 小時以上一格的調查——這多半是時間欄位誤植，" +
+          "例如把「07:00～08:00」打成「07:00～09:00」。" +
+          "這不會阻擋匯入，但那些時段算不出尖峰小時（那一欄會顯示「－」並寫出原因，" +
+          "也不把 2 小時的量當成一小時的流率）。匯入後的異常清單也會列出這一項。",
+      );
+    }
   }
   const distinctApproaches = new Set(
     detectedColumns.map(function (column) {
@@ -4370,14 +4908,14 @@ export async function inspectWorkbook(
     intervalRows: structuredClone(intervalRows),
     survey: {
       intervals: intervalRows.length,
-      minutes: intervalRows.length * intervalMinutes,
+      minutes: surveyMinutes,
       values: surveyValues,
     },
     peakWindows: peakWindowsFor(
       intervalRows,
       intervalMinutes,
       weights,
-      intervalRows.length * intervalMinutes,
+      surveyMinutes,
     ),
     noonQuestion: (() => {
       const info = noonStraddle(intervalRows, intervalMinutes, weights);

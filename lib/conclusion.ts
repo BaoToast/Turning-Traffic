@@ -19,17 +19,55 @@
 
 /*
  * 這裡刻意不從 lib/traffic 匯入型別：那一支會連帶把 xlsx 拉進來，
- * 而這個檔案是純文字產生器，測試要能單獨跑。三個鍵值必須和 lib/traffic
- * 的 PeakKey 一致——tests/conclusion.test.ts 有一項檢查釘住這件事。
+ * 而這個檔案是純文字產生器，測試要能單獨跑。鍵值必須和 lib/traffic
+ * 的 PeakKey／ScopeKey 一致——tests/conclusion.test.ts 有一項檢查釘住這件事。
  */
 export type PeakKey = "AM" | "PM" | "DAY";
+/**
+ * 結論草稿的「時段」＝**四個核心統計範圍**，不是三個尖峰。
+ *
+ * ⚠️ 使用者 2026-09-21 定案（原話：「這 4 個名詞是我們交通調查的 4 個核心」）：
+ *
+ *     AM    上午尖峰         該段裡流率最高的 1 小時       PCU/hr、輛/hr
+ *     PM    下午尖峰         該段裡流率最高的 1 小時       PCU/hr、輛/hr
+ *     DAY   全調查時段尖峰   調查涵蓋內流率最高的 1 小時   PCU/hr、輛/hr
+ *     FULL  全調查時段       調查涵蓋內的**累計量**        PCU/調查時段、輛/調查時段
+ *
+ * ⚠️⚠️ FULL 的單位**不是 /hr**。它是一整段的累計；把它寫成 PCU/hr 等於
+ *   把「一整天的總量」講成「一小時的流率」，而這句話會被原封不動抄進報告。
+ *   所有輸出一律走 scopeRateUnit()／scopeVehicleUnit()，不可以在任何一處
+ *   自己寫死 "PCU/hr" 或 "輛/hr"。
+ *
+ * ⚠️ v2.1.82 以前這裡只有三個尖峰，而且畫面上只擺了兩顆勾選框（上午／下午）：
+ *   「全調查時段」是靠**兩個都不勾**這個隱藏狀態表達的，於是使用者
+ *   沒辦法同時要「上午尖峰」和「全調查時段」。使用者 2026-09-21 指出
+ *   「正確做法應該是把全調查時段做為第 4 個可勾選選項」——就是這裡。
+ *   **不要把第四個選項再拿掉，也不要把它退回成「都不勾」的隱藏狀態。**
+ */
+export type ConclusionScopeKey = PeakKey | "FULL";
 
-/** 可勾選的敘述指標。 */
+/**
+ * 可勾選的敘述指標。
+ *
+ * ⚠️ 2026-09-25 第六輪：這些標籤原本把單位**寫死**在字面上
+ *   （「（PCU/hr）」「（輛/hr）」「（輛/調查時段）」）。那是錯的，而且是
+ *   兩種錯法疊在一起：
+ *     ① 使用者可以勾「全調查時段」，那時的單位不是 /hr；
+ *     ② 同一次可以勾**多個時段**，單位本來就不只一種。
+ *   於是勾選框寫「PCU/hr」，而草稿裡同一項寫「PCU/調查日」——
+ *   同一個畫面自己打自己。（第 120 行那一則註解自己就記著
+ *   「兩個勾選框互相打臉」，但當時只改了其中一個的字面。）
+ *
+ *   現在標籤**只寫是什麼量**（流量／車輛數／百分比），單位交給草稿本文
+ *   （它一律走 `scopeRateUnit()`／`scopeVehicleUnit()`，帶著該筆的涵蓋），
+ *   勾選區底下另有一句話說明單位怎麼決定。
+ *   **不要把單位寫回標籤裡。**
+ */
 export const CONCLUSION_METRICS = [
-  { key: "inflowPcu", label: "各支線駛入流量（PCU/hr）" },
-  { key: "outflowPcu", label: "各支線駛出流量（PCU/hr）" },
-  { key: "inflowVehicles", label: "各支線駛入車輛數（輛/hr）" },
-  { key: "outflowVehicles", label: "各支線駛出車輛數（輛/hr）" },
+  { key: "inflowPcu", label: "各支線駛入流量（PCU）" },
+  { key: "outflowPcu", label: "各支線駛出流量（PCU）" },
+  { key: "inflowVehicles", label: "各支線駛入車輛數" },
+  { key: "outflowVehicles", label: "各支線駛出車輛數" },
   /*
    * 佔比也拆成兩個方向（v2.1.25）。
    *
@@ -46,6 +84,25 @@ export const CONCLUSION_METRICS = [
    */
   { key: "shareIn", label: "各支線佔駛入路口總量百分比" },
   { key: "shareOut", label: "各支線佔駛出路口總量百分比" },
+  /*
+   * ── 車輛數版本的佔比（使用者 2026-09-23 核准新增）────────────────
+   *
+   * 上面那兩項的分子分母都是 **PCU**。但「各路口駛入／駛出流量」那張表
+   * 在「顯示數值＝車輛數＋百分比」時，百分比是拿**車輛數**算的
+   *（traffic-app 的 `useCount` 分支，分母是 inboundVehicles／outboundVehicles）。
+   * 同一個支線、同一個時段，兩種分母的百分比是不同的數字——
+   * 表格查得到車輛數版本，草稿只寫得出 PCU 版本。
+   *
+   * ⚠️ 刻意**另開兩個鍵**而不是改既有那兩個：改既有的等於讓所有既有範本
+   *   與備份的輸出換一套數字。兩個新鍵不勾就完全不出現。
+   *
+   * ⚠️ 分母用 `totalVehicles`（整個路口該時段的總車輛數）。
+   *   駛入各支線的車輛數合計與駛出各支線的合計都等於它——同一批車依起點
+   *   或終點重新分組，總量不變——所以兩個方向共用同一個分母，
+   *   各自加起來各是 100%。這和 PCU 版本是同一個道理。
+   */
+  { key: "shareInVehicles", label: "各支線佔駛入路口總車輛數百分比" },
+  { key: "shareOutVehicles", label: "各支線佔駛出路口總車輛數百分比" },
   { key: "total", label: "路口總流量與總車輛數" },
   { key: "peakHour", label: "尖峰時段（起訖時間）" },
   { key: "composition", label: "車種組成（輛數與百分比）" },
@@ -60,14 +117,25 @@ export const CONCLUSION_METRICS = [
    */
   {
     key: "branchCompositionIn",
-    label: "各支線各車種駛入車輛數（輛/調查時段）",
+    label: "各支線各車種駛入車輛數",
   },
   {
     key: "branchCompositionOut",
-    label: "各支線各車種駛出車輛數（輛/調查時段）",
+    label: "各支線各車種駛出車輛數",
   },
   { key: "balance", label: "駛入／駛出平衡差值" },
-  { key: "fullDay", label: "全日流量（輛／調查日）" },
+  /*
+   * ⚠️ 2026-09-23 改名。原本叫「全日流量（輛／調查日）」，而它讀的其實是
+   *   `row.inbound.FULL`＝**全調查時段**，而且**沒有任何 24 小時判斷**
+   *   （那個門檻 2026-09-11 就拿掉了，見 traffic-app 的註解）。
+   *   於是一份 4 小時的調查，它的 4 小時累計會被寫成
+   *   「全日駛入 N 輛/調查日」貼進報告——同一份草稿裡
+   *   `branchCompositionIn` 標的是「輛/調查時段」，兩個勾選框互相打臉。
+   *   名稱與單位一律跟著 `scopeVehicleUnit("FULL", coverage)`，不再自己寫死。
+   *   ⚠️ 2026-09-25 第六輪：標籤裡的「（輛／調查時段）」也拿掉了——
+   *     滿 24 小時的調查，草稿本文寫的是「輛/調查日」，標籤卻寫「調查時段」。
+   */
+  { key: "fullDay", label: "全調查時段流量（車輛數）" },
   { key: "growth", label: "季度之間的變動幅度" },
   { key: "extremes", label: "範圍內的最大／最小路口" },
 ] as const;
@@ -91,7 +159,12 @@ export type ConclusionGrouping = "byIntersection" | "byQuarter" | "overall";
 
 export type ConclusionCondition = {
   scope: ConclusionScope;
-  peaks: PeakKey[];
+  /*
+   * ⚠️ 欄位名稱維持 `peaks`：它**存在範本與備份裡**，改名會讓使用者既有的
+   *   範本讀不回來。型別已經是四個統計範圍（含 FULL＝全調查時段），
+   *   名字是歷史包袱，不是「只有尖峰」的意思。
+   */
+  peaks: ConclusionScopeKey[];
   /** 空陣列＝全部路口。存的是 recordIntersectionKey。 */
   intersectionKeys: string[];
   /**
@@ -135,6 +208,21 @@ export type ConclusionCondition = {
    */
   branchCompositionMode: BranchCompositionMode;
   /*
+   * ── 尖峰時段判定方式（使用者 2026-09-23 核准新增）──────────────
+   *
+   * "point"（預設）＝整個調查點同一時段：各支線的尖峰在同一小時，
+   *   各支線的量**可以相加**，合計等於路口總量。這是改版前的唯一行為。
+   *
+   * "direction" ＝各方向各自認定自己的尖峰：逐時段替每一條支線挑它自己
+   *   最忙的那一小時。兩種算出來的數字本來就不同（實測差距可以到 50 倍，
+   *   見 tests/approach-peak.test.mjs），而且**各支線的量不可以相加**——
+   *   它們不是同一時刻的量。草稿會把這句警告寫出來。
+   *
+   * ⚠️ 這一頁刻意**不跟著主工具列跑**（使用者 2026-09-14 裁示：結論草稿
+   *   與報表維持獨立）。要對齊請按「套用主工具列」。
+   */
+  peakRule?: "point" | "direction";
+  /*
    * ── 轉向別與車種（使用者 2026-09-15 指名補上）────────────────
    *
    * 主工具列有這兩項，結論草稿以前**完全沒有**——使用者沒辦法出
@@ -173,6 +261,12 @@ export const DEFAULT_CONDITION: ConclusionCondition = {
   branchCompositionMode: "follow",
   movement: "all",
   vehicle: "all",
+  /*
+   * ⚠️ 預設是「整個調查點同一時段」＝**改版前的行為**。
+   *   升級當天既有的範本、備份與畫面預設全部落在這一支，
+   *   草稿輸出逐字不變（有一支測試把這件事釘住）。
+   */
+  peakRule: "point",
 };
 
 export type ConclusionTemplate = {
@@ -250,11 +344,34 @@ export type ConclusionBranch = {
    * 讓草稿寫出來的樣子和使用者在分析頁看到的一致。
    */
   directionDisplay: "split" | "two-way";
+  /*
+   * ── 這條支線**自己**最忙的那一小時（使用者 2026-09-23 核准新增）────
+   *
+   * ⚠️ 只有條件選「各方向各自認定自己的尖峰」時才有值；選「整個調查點
+   *   同一時段」（預設）時一律是 null／undefined，草稿一個字都不會多寫，
+   *   輸出與改版前逐字相同。
+   *
+   * ⚠️ 算不出來的支線（v2.1.67 以前匯入、沒有 sourceIntervals，或格距
+   *   組不成整小時）是 null——**不可以偷偷沿用整個路口的視窗**。
+   *   那會讓同一段草稿裡有些是「自己的尖峰」、有些是「整路口的尖峰」，
+   *   而文字上只寫著一種判定方式。畫面那邊已經因為同一個理由把算不出來的
+   *   紀錄列出來明講，草稿要一致。
+   */
+  peakWindow?: string | null;
   inflowPcu: number | null;
   outflowPcu: number | null;
   inflowVehicles: number | null;
   outflowVehicles: number | null;
-  /** 全日（輛／調查日），只有完整 24 小時的資料才有。 */
+  /*
+   * 全調查時段的車輛數（單位走 scopeVehicleUnit("FULL")）。
+   *
+   * ⚠️ 欄位名稱裡的 `FullDay` 是歷史包袱，**它不是「全日」**：
+   *   來源是 `row.inbound.FULL`＝整份調查實際涵蓋的那一段，
+   *   沒有 24 小時門檻。null 代表「這一筆沒有逐流向明細」，
+   *   **不是**「涵蓋時數不足」。
+   *   （鍵名不改是因為它會出現在使用者存好的結論草稿範本裡；
+   *   要改就得連遷移一起做，而那不是這一版的範圍。）
+   */
   inflowFullDayVehicles: number | null;
   outflowFullDayVehicles: number | null;
 };
@@ -274,11 +391,58 @@ export type ConclusionRecord = {
   name: string;
   quarter: string;
   surveyType: string;
-  peaks: Partial<Record<PeakKey, ConclusionPeakData>>;
-  /** 車種組成：整份調查（或退回 AM 尖峰）的輛數。 */
+  peaks: Partial<Record<ConclusionScopeKey, ConclusionPeakData>>;
+  /** 車種組成：整份調查（或退回 AM 尖峰）的輛數。**這是整個路口的合計。** */
   composition: { label: string; count: number }[];
   compositionScope: string;
   compositionUnit: string;
+  /*
+   * 這一筆的調查涵蓋（`coverageOf(record)` 的輸出）。
+   *
+   * ⚠️ 只用來決定「全調查時段」那一個範圍的單位：滿 24 小時時是
+   *   `PCU／調查日`、`輛／調查日`，其餘一律 `／調查時段`。
+   *   `lib/traffic.ts` 的 `scopeUnit()` 本來就是這樣算的，Excel 欄名與
+   *   報告文字草稿也都走它——2026-09-23 的反向對帳抓到**只有結論草稿**
+   *   沒有跟上：同一筆 24 小時調查，Excel 寫「PCU/調查日」、
+   *   報告草稿寫「PCU/調查日」、結論草稿寫「PCU/調查時段」。
+   *
+   * ⚠️ **選填**。讀不到時一律當成「調查時段」，也就是改版前的行為——
+   *   舊的呼叫端與既有測試一個字都不會變。
+   *   方向也是刻意的：「調查時段」在滿 24 小時時只是講得保守，
+   *   反過來把 4 小時標成「調查日」則是講錯（見 scopeUnit 的註解：
+   *   「錯的方向要選會少講，不要選會多講」）。
+   */
+  surveyCoverage?: "full" | "partial" | "mixed" | "unknown";
+  /*
+   * 這一筆的調查日期（ISO）。
+   *
+   * ⚠️ 只用來數「這個範圍涵蓋幾個調查日」——儀表板的「本季調查路口 N 處」
+   *   底下那一行就是這個數字，而分析範圍段落常常要寫它，草稿卻寫不出來
+   *  （使用者 2026-09-23 核准新增）。
+   * ⚠️ 舊備份與沒有日期的紀錄是 undefined，那幾筆**不計入**，
+   *   而且會另外講出來——不可以把「沒有日期」默默算成一天。
+   */
+  surveyDate?: string;
+  /**
+   * 逐支線的車種輛數（**駛入方向**，全調查時段）。
+   *
+   * ⚠️ 為什麼需要這一欄（使用者 2026-09-21 回報）：
+   *   結論草稿的支線篩選對「車種組成」**完全無效**——勾路口A、勾路口B、
+   *   或全選，輸出的車種組成一模一樣（都是整個路口的合計），
+   *   而抬頭卻寫著「只敘述指定支線：路口 B」。
+   *   **抬頭說有篩、內容沒篩**，使用者會把整個路口的數字當成該支線的數字
+   *   抄進報告。`composition` 一欄天生就是路口層級的，接不住支線篩選，
+   *   所以另外備一份逐支線的。
+   *
+   * ⚠️ 只取**駛入**：四條支線的駛入合計＝路口總量，可以相加；
+   *   駛出合計也等於路口總量，兩者**相加會變成兩倍**。
+   *   這一筆若是以「雙向合計」呈現（沒有駛入／駛出之分），就沒有可以
+   *   安全相加的逐支線值——這時候是 null，敘述端要照實說不能篩，
+   *   **不可以拿路口合計硬充數**。
+   */
+  compositionByBranch:
+    | { code: string; name: string; items: { label: string; count: number }[] }[]
+    | null;
   /** 沒有逐流向資料時，很多敘述都不能寫，要在文中講清楚。 */
   routeless: boolean;
 };
@@ -314,12 +478,37 @@ export type ConclusionMeta = {
  */
 let quarterText: (quarter: string) => string = (quarter) => String(quarter ?? "");
 
-const PEAK_LABEL: Record<PeakKey, string> = {
+const PEAK_LABEL: Record<ConclusionScopeKey, string> = {
   AM: "上午尖峰",
   PM: "下午尖峰",
   /* 2026-09-10 依使用者指定改名，三支一致。見 lib/traffic.ts 的 SCOPE_SHORT_LABELS。 */
   DAY: "全調查時段尖峰",
+  FULL: "全調查時段",
 };
+
+/**
+ * 這個統計範圍的 PCU 單位。
+ *
+ * ⚠️ **只有 FULL 不是 /hr。** AM／PM／DAY 三者都是「某一個特定的 1 小時」，
+ *   所以是流率；FULL 是整段涵蓋的累計量，寫成 /hr 會把總量講成流率。
+ *   這一支存在的唯一理由，就是讓四個地方不要各自寫死字串。
+ */
+export function scopeRateUnit(
+  scope: ConclusionScopeKey,
+  coverage?: ConclusionRecord["surveyCoverage"],
+): string {
+  if (scope !== "FULL") return "PCU/hr";
+  return coverage === "full" ? "PCU/調查日" : "PCU/調查時段";
+}
+
+/** 這個統計範圍的車輛數單位。理由同 scopeRateUnit。 */
+export function scopeVehicleUnit(
+  scope: ConclusionScopeKey,
+  coverage?: ConclusionRecord["surveyCoverage"],
+): string {
+  if (scope !== "FULL") return "輛/hr";
+  return coverage === "full" ? "輛/調查日" : "輛/調查時段";
+}
 
 function num(value: number | null | undefined, digits: number) {
   if (value === null || value === undefined || !Number.isFinite(value))
@@ -437,7 +626,7 @@ export function normalizeCondition(
      * 舊寫法只看長度，兩種情況被當成同一件事。
      */
     peaks: Array.isArray(source.peaks)
-      ? (list(source.peaks) as PeakKey[])
+      ? (list(source.peaks) as ConclusionScopeKey[])
       : DEFAULT_CONDITION.peaks,
     intersectionKeys: list(source.intersectionKeys) as string[],
     branchNames: list(source.branchNames) as string[],
@@ -454,17 +643,34 @@ export function normalizeCondition(
      * 會讓 toLocaleString({ minimumFractionDigits: 100 }) 直接丟 RangeError
      * ——那正是這支函式要防的「舊範本讓整個分頁消失」。
      */
-    digits:
-      source.digits === null ||
-      source.digits === undefined ||
-      !Number.isFinite(Number(source.digits))
-        ? DEFAULT_CONDITION.digits
-        : Math.min(4, Math.max(0, Math.round(Number(source.digits)))),
+    /*
+     * ⚠️ 2026-09-25 修正：上面那段註解點名了 `Number("")`，程式卻沒擋它。
+     *
+     * 舊寫法只排掉 null 與 undefined，而實測：
+     *     digits=""    → 0（應為 1）      digits=" "   → 0
+     *     digits=[]    → 0               digits=false → 0
+     * 四種都通得過 `Number.isFinite(Number(...))`，於是使用者設的 1 位小數
+     * 被靜默換成 0 位，而結論草稿與報表草稿的位數從此對不起來。
+     * 照 lib/report-draft.ts 的 safeReportDigits() 改成先擋型別再轉數字。
+     */
+    digits: (() => {
+      const raw = source.digits as unknown;
+      const usable =
+        typeof raw === "number" || (typeof raw === "string" && raw.trim() !== "");
+      if (!usable || !Number.isFinite(Number(raw)))
+        return DEFAULT_CONDITION.digits;
+      return Math.min(4, Math.max(0, Math.round(Number(raw))));
+    })(),
     branchCompositionMode: ["follow", "split", "two-way"].includes(
       String(source.branchCompositionMode),
     )
       ? (source.branchCompositionMode as BranchCompositionMode)
       : "follow",
+    /*
+     * ⚠️ 舊範本與舊備份沒有這個欄位，一律回「整個調查點同一時段」——
+     *   也就是它們存檔當時的行為。套用舊範本不會突然換一套數字。
+     */
+    peakRule: source.peakRule === "direction" ? "direction" : "point",
   };
 }
 
@@ -490,7 +696,15 @@ export function selectRecords(
         const high = Math.max(from, to);
         // 季度字樣看不懂時（例如 114Q9）一律保留，讓使用者自己看到，
         // 不要無聲地把資料濾掉。
-        if (Number.isFinite(key) && key !== Number.NEGATIVE_INFINITY) {
+        /*
+         * ⚠️ 2026-09-25：拿掉贅餘的 `key !== Number.NEGATIVE_INFINITY`。
+         *   quarterKey() 認不得季度時回 -Infinity，而
+         *   `Number.isFinite(-Infinity)` 本來就是 false（實測），
+         *   所以第二個條件永遠成立、永遠多餘。留著會讓下一個人以為
+         *   「這裡已經多擋了一道」，改了 quarterKey 的回傳值（例如改成 NaN
+         *   或 -1）之後誤判為安全。行為完全不變。
+         */
+        if (Number.isFinite(key)) {
           if (key < low || key > high) return false;
         }
       }
@@ -556,11 +770,21 @@ function showYear(year: string, show: (quarter: string) => string) {
 /** 一個路口、一個尖峰要寫出來的那幾行。 */
 function describePeak(
   record: ConclusionRecord,
-  peak: PeakKey,
+  peak: ConclusionScopeKey,
   condition: ConclusionCondition,
 ): string[] {
   const data = record.peaks[peak];
-  if (!data) return [`　${PEAK_LABEL[peak]}：這一筆沒有 ${peak} 尖峰資料。`];
+  /*
+   * ⚠️ 單位一律由 peak 決定，不可以寫死：FULL（全調查時段）是累計量，
+   *   單位是 PCU/調查時段、輛/調查時段；AM／PM／DAY 才是 /hr 的流率。
+   */
+  /* ⚠️ 帶著這一筆的調查涵蓋：滿 24 小時的「全調查時段」單位是「／調查日」。 */
+  const rateUnit = scopeRateUnit(peak, record.surveyCoverage);
+  const vehicleUnit = scopeVehicleUnit(peak, record.surveyCoverage);
+  if (!data)
+    return [
+      `　${PEAK_LABEL[peak]}：這一筆沒有${PEAK_LABEL[peak]}的資料。`,
+    ];
   const lines: string[] = [];
   const wants = (key: ConclusionMetricKey) => condition.metrics.includes(key);
   const digits = condition.digits;
@@ -570,9 +794,9 @@ function describePeak(
   const headline: string[] = [];
   if (wants("total")) {
     if (data.totalPcu !== null)
-      headline.push(`總流量 ${num(data.totalPcu, digits)} PCU/hr`);
+      headline.push(`總流量 ${num(data.totalPcu, digits)} ${rateUnit}`);
     if (data.totalVehicles !== null)
-      headline.push(`總車輛數 ${whole(data.totalVehicles)} 輛/hr`);
+      headline.push(`總車輛數 ${whole(data.totalVehicles)} ${vehicleUnit}`);
   }
   lines.push(
     `　${head.join(" ")}${headline.length ? "：" + headline.join("、") : "："}`,
@@ -596,6 +820,8 @@ function describePeak(
     wants("outflowVehicles") ||
     wants("shareIn") ||
     wants("shareOut") ||
+    wants("shareInVehicles") ||
+    wants("shareOutVehicles") ||
     wants("balance") ||
     wants("fullDay") ||
     wants("branchCompositionIn") ||
@@ -605,13 +831,13 @@ function describePeak(
     for (const branch of branches) {
       const parts: string[] = [];
       if (wants("inflowPcu"))
-        parts.push(`駛入 ${num(branch.inflowPcu, digits)} PCU/hr`);
+        parts.push(`駛入 ${num(branch.inflowPcu, digits)} ${rateUnit}`);
       if (wants("outflowPcu"))
-        parts.push(`駛出 ${num(branch.outflowPcu, digits)} PCU/hr`);
+        parts.push(`駛出 ${num(branch.outflowPcu, digits)} ${rateUnit}`);
       if (wants("inflowVehicles"))
-        parts.push(`駛入 ${whole(branch.inflowVehicles)} 輛/hr`);
+        parts.push(`駛入 ${whole(branch.inflowVehicles)} ${vehicleUnit}`);
       if (wants("outflowVehicles"))
-        parts.push(`駛出 ${whole(branch.outflowVehicles)} 輛/hr`);
+        parts.push(`駛出 ${whole(branch.outflowVehicles)} ${vehicleUnit}`);
       /*
        * 佔比：兩個方向各自獨立，分母都是路口總量。
        *
@@ -631,11 +857,30 @@ function describePeak(
         if (wants("shareOut") && outShare !== null)
           parts.push(`佔駛出 ${pct(outShare, digits)}`);
       }
+      /*
+       * 車輛數版本的佔比（與「各路口駛入／駛出流量」表在「車輛數＋百分比」
+       * 顯示模式下算的是同一個口徑）。
+       *
+       * ⚠️ 單位詞一定要寫「車輛數」，不可以和上面的 PCU 版本都寫「佔駛入」——
+       *   同一行裡兩個不同分母的百分比並排而看不出差別，正是這個專案
+       *   一再出事的類型。
+       */
+      if (wants("shareInVehicles") || wants("shareOutVehicles")) {
+        const total = data.totalVehicles;
+        const shareOf = (value: number | null) =>
+          total && value !== null ? (value / total) * 100 : null;
+        const inShare = shareOf(branch.inflowVehicles);
+        const outShare = shareOf(branch.outflowVehicles);
+        if (wants("shareInVehicles") && inShare !== null)
+          parts.push(`佔駛入車輛數 ${pct(inShare, digits)}`);
+        if (wants("shareOutVehicles") && outShare !== null)
+          parts.push(`佔駛出車輛數 ${pct(outShare, digits)}`);
+      }
       if (wants("balance")) {
         if (branch.inflowPcu !== null && branch.outflowPcu !== null) {
           const diff = branch.inflowPcu - branch.outflowPcu;
           parts.push(
-            `駛入減駛出 ${diff >= 0 ? "+" : ""}${num(diff, digits)} PCU/hr`,
+            `駛入減駛出 ${diff >= 0 ? "+" : ""}${num(diff, digits)} ${rateUnit}`,
           );
         } else parts.push("駛入減駛出 無法計算（缺少其中一側）");
       }
@@ -693,38 +938,143 @@ function describePeak(
         }
       }
       if (wants("fullDay")) {
+        /*
+         * ⚠️ 單位一律走 scopeVehicleUnit("FULL")（＝輛/調查時段）。
+         *   2026-09-23 之前這裡寫死「輛/調查日」，而值是整段調查涵蓋的
+         *   累計量、沒有任何 24 小時判斷——4 小時的量被標成全日量。
+         *   系統本來就有 scopeUnit()／scopeVehicleUnit() 在管這件事，
+         *   註解還特別寫著「錯的方向要選會少講，不要選會多講」，
+         *   這裡正好反過來多講。
+         */
+        const fullUnit = scopeVehicleUnit("FULL", record.surveyCoverage);
         if (branch.inflowFullDayVehicles !== null)
-          parts.push(`全日駛入 ${whole(branch.inflowFullDayVehicles)} 輛/調查日`);
+          parts.push(
+            `全調查時段駛入 ${whole(branch.inflowFullDayVehicles)} ${fullUnit}`,
+          );
         if (branch.outflowFullDayVehicles !== null)
-          parts.push(`全日駛出 ${whole(branch.outflowFullDayVehicles)} 輛/調查日`);
+          parts.push(
+            `全調查時段駛出 ${whole(branch.outflowFullDayVehicles)} ${fullUnit}`,
+          );
         if (
           branch.inflowFullDayVehicles === null &&
           branch.outflowFullDayVehicles === null
         )
-          parts.push("全日數值需要完整 24 小時調查資料，這一筆沒有");
+          /*
+           * ⚠️ 這句話原本寫「需要完整 24 小時調查資料」——那是**錯的原因**。
+           *   null 的唯一成因是「這一筆沒有逐流向明細」，
+           *   涵蓋時數不足並不會讓它變成 null。照原本那樣寫，
+           *   使用者會去補時數，而那補不出東西來。
+           */
+          parts.push("這一筆沒有逐支線的駛入／駛出明細，算不出全調查時段流量");
       }
-      lines.push(`　　${branch.name}：${parts.join("；")}`);
+      /*
+       * ── 這條支線自己最忙的那一小時 ────────────────────────────
+       *
+       * ⚠️ 只有條件選「各方向各自認定自己的尖峰」時 `peakWindow` 才有值。
+       *   選預設的「整個調查點同一時段」時它是 undefined，這一段完全不執行，
+       *   輸出與改版前逐字相同。
+       *
+       * ⚠️ 支線名稱後面**立刻**寫視窗，而不是丟在句尾：
+       *   讀的人必須在看到數字之前就知道「這一行講的不是上面那個路口視窗」。
+       * ⚠️ 算不出來（null）也要寫出來。靜靜地不寫，讀者只會以為那條支線
+       *   和其他條走同一個視窗——而那正是這個判定方式最容易被誤讀的地方。
+       */
+      const own =
+        branch.peakWindow === undefined
+          ? ""
+          : branch.peakWindow
+            ? `（自己最忙 ${branch.peakWindow}）`
+            : "（這一筆算不出這條支線自己的尖峰，改用整個路口的時段）";
+      lines.push(`　　${branch.name}${own}：${parts.join("；")}`);
     }
   return lines;
 }
 
-function describeComposition(record: ConclusionRecord, digits: number) {
-  const total = record.composition.reduce((sum, item) => sum + item.count, 0);
-  if (!total) return ["　車種組成：這一筆沒有可用的車種數量。"];
-  const parts = record.composition
-    .filter((item) => item.count > 0)
-    .sort((a, b) => b.count - a.count)
-    .map(
-      (item) =>
-        `${item.label} ${whole(item.count)} ${record.compositionUnit}（${pct(
-          (item.count / total) * 100,
-          digits,
-        )}）`,
+/**
+ * 車種組成那一行（或那幾行）。
+ *
+ * ⚠️ **支線篩選一定要在這裡生效。**（使用者 2026-09-21 回報的缺陷）
+ *   舊版這一支只收 (record, digits)，`condition` 根本沒傳進來，
+ *   於是勾路口A、勾路口B、全選，寫出來的車種組成一模一樣——
+ *   都是整個路口的合計——而草稿抬頭同時印著「只敘述指定支線：路口 B」。
+ *   **抬頭說有篩、內容沒篩**，數字會被當成該支線的量抄進報告。
+ *
+ * ⚠️ 篩不了的時候要**說出來**，不可以靜靜地印路口合計：
+ *   這一筆若以「雙向合計」呈現，逐支線就沒有可以安全相加的值
+ *   （駛入合計與駛出合計各自等於路口總量，相加是兩倍）。
+ */
+function describeComposition(
+  record: ConclusionRecord,
+  digits: number,
+  condition: ConclusionCondition,
+) {
+  const wantedNames = condition.branchNames.map(typedNameKey);
+  const filtering = wantedNames.length > 0;
+  const line = (
+    scopeText: string,
+    items: { label: string; count: number }[],
+    lead: string,
+  ) => {
+    const total = items.reduce((sum, item) => sum + item.count, 0);
+    if (!total) return `${lead}（${scopeText}）：這一筆沒有可用的車種數量。`;
+    const parts = items
+      .filter((item) => item.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .map(
+        (item) =>
+          `${item.label} ${whole(item.count)} ${record.compositionUnit}（${pct(
+            (item.count / total) * 100,
+            digits,
+          )}）`,
+      );
+    return (
+      `${lead}（${scopeText}）：${parts.join("、")}；` +
+      `合計 ${whole(total)} ${record.compositionUnit}。`
     );
-  return [
-    `　車種組成（${record.compositionScope}）：${parts.join("、")}；` +
-      `合計 ${whole(total)} ${record.compositionUnit}。`,
-  ];
+  };
+
+  /* 沒有篩支線＝路口合計，輸出與 v2.1.80 **逐字相同**。 */
+  if (!filtering)
+    return [`　${line(record.compositionScope, record.composition, "車種組成")}`];
+
+  const wanted = new Set(wantedNames);
+  const branches = (record.compositionByBranch || []).filter((branch) =>
+    wanted.has(typedNameKey(branch.name)),
+  );
+  if (!record.compositionByBranch)
+    return [
+      `　${line(record.compositionScope, record.composition, "車種組成")}`,
+      "　　⚠️ 上面這一行是「整個路口的合計」，沒有依指定支線篩選：這一筆的" +
+        "車種資料是以「雙向合計」呈現的，逐支線沒有可以單獨列出的駛入方向數量。" +
+        "要得到逐支線的車種組成，請到「車種組成分析」把該支線改成分行車方向。",
+    ];
+  if (!branches.length)
+    return [
+      "　車種組成：指定的支線在這一筆找不到對應的名稱，因此沒有可寫的車種數量。" +
+        "（請確認支線名稱是否已在這一季改過。）",
+    ];
+  const lines = branches.map(
+    (branch) =>
+      `　${line(record.compositionScope + "・駛入", branch.items, `車種組成－${branch.name}`)}`,
+  );
+  if (branches.length > 1) {
+    const merged = new Map<string, number>();
+    for (const branch of branches)
+      for (const item of branch.items)
+        merged.set(item.label, (merged.get(item.label) ?? 0) + item.count);
+    lines.push(
+      `　${line(
+        record.compositionScope + "・駛入",
+        [...merged].map(([label, count]) => ({ label, count })),
+        `車種組成－指定 ${branches.length} 條支線合計`,
+      )}`,
+    );
+    lines.push(
+      "　　（可以相加是因為這裡取的是「駛入」方向：各支線的駛入合計＝路口總量。" +
+        "駛出合計也等於路口總量，兩者相加會變成兩倍。）",
+    );
+  }
+  return lines;
 }
 
 /** 同一路口、同一尖峰跨季度的變動幅度——只有這種比較是有意義的。 */
@@ -756,7 +1106,7 @@ function quarterTag(record: ConclusionRecord) {
  */
 function growthBySurveyType(
   group: ConclusionRecord[],
-  peaks: PeakKey[],
+  peaks: ConclusionScopeKey[],
   digits: number,
 ) {
   const byType = new Map<string, ConclusionRecord[]>();
@@ -787,7 +1137,7 @@ function growthBySurveyType(
 
 function describeGrowth(
   group: ConclusionRecord[],
-  peaks: PeakKey[],
+  peaks: ConclusionScopeKey[],
   digits: number,
 ) {
   const lines: string[] = [];
@@ -796,29 +1146,70 @@ function describeGrowth(
     .sort((a, b) => quarterKey(a.quarter) - quarterKey(b.quarter));
   if (ordered.length < 2) return lines;
   for (const peak of peaks) {
+    /*
+     * ══════════════════════════════════════════════════════════════
+     *  ⚠️ 2026-09-25 修正：`!== null` 擋不住 NaN
+     * ══════════════════════════════════════════════════════════════
+     *
+     * `NaN !== null` 為 true（過得了 filter），而 `NaN` 是 falsy
+     *（走進「起始季為 0」那一支）。實測到的輸出：
+     *
+     *   「上午尖峰總流量由 114Q4 的 — PCU/hr 變為 115Q2 的 1,000.0 PCU/hr，
+     *     起始季為 0，變動幅度無法以百分比表示；期間最高為 114Q4（— PCU/hr）。」
+     *
+     * 同一句話前半印「—」（讀不到）、後半宣稱「是 0」；而且
+     * `reduce` 以第一筆當初始值、`NaN > best.value` 恆為 false，
+     * 所以「期間最高」還會挑中那個讀不到的季。整句會被抄進報告。
+     *
+     * NaN 的來源：recordTotal → totalMovement，任一欄缺值或當量含壞值即為 NaN
+     *（與 pceFactor 的修正同源）。
+     *
+     * lib/report-draft.ts:582-591 對同一件事早就改用 Number.isFinite 了，
+     * 這一支沒跟上。三處一起修：filter、取最大值、以及「是 0 還是讀不到」的分辨。
+     */
     const points = ordered
       .map((record) => ({
         quarter: record.quarter,
         value: record.peaks[peak]?.totalPcu ?? null,
       }))
-      .filter((point) => point.value !== null) as {
+      .filter((point) => Number.isFinite(point.value as number)) as {
       quarter: string;
       value: number;
     }[];
-    if (points.length < 2) continue;
+    if (points.length < 2) {
+      /*
+       * ⚠️ 2026-09-25：被濾掉而湊不滿兩季時要**寫出理由**，不可以整段消失。
+       *   NaN 以前是被當成「有值」硬算下去的（於是印出「起始季為 0」）；
+       *   現在正確地濾掉了，但如果不交代，使用者會以為自己少勾了什麼。
+       *   這與 lib/conclusion.ts 其他段落的 fallback 一致。
+       */
+      const unreadable = ordered.filter(
+        (record) => !Number.isFinite(record.peaks[peak]?.totalPcu as number),
+      ).length;
+      if (unreadable)
+        lines.push(
+          `　${PEAK_LABEL[peak]}：有 ${unreadable} 季的總流量讀不到數值` +
+            `（可能是車種欄位缺值或當量係數設定有問題），可比較的季別不足兩季，未做變動幅度比較。`,
+        );
+      continue;
+    }
     const first = points[0];
     const last = points.at(-1)!;
-    const change = first.value ? (last.value / first.value - 1) * 100 : null;
+    /*
+     * 「基期是 0」與「基期讀不到」是兩件事，不可以講成同一句。
+     * 走到這裡時 filter 已經保證兩端都是有限數，所以只剩「真的是 0」。
+     */
+    const change = first.value === 0 ? null : (last.value / first.value - 1) * 100;
     const peakPoint = points.reduce((best, point) =>
       point.value > best.value ? point : best,
     );
     lines.push(
-      `　${PEAK_LABEL[peak]}總流量由 ${quarterText(first.quarter)} 的 ${num(first.value, digits)} PCU/hr ` +
-        `變為 ${quarterText(last.quarter)} 的 ${num(last.value, digits)} PCU/hr，` +
+      `　${PEAK_LABEL[peak]}總流量由 ${quarterText(first.quarter)} 的 ${num(first.value, digits)} ${scopeRateUnit(peak)} ` +
+        `變為 ${quarterText(last.quarter)} 的 ${num(last.value, digits)} ${scopeRateUnit(peak)}，` +
         (change === null
           ? "起始季為 0，變動幅度無法以百分比表示"
           : `${change >= 0 ? "增加" : "減少"} ${pct(Math.abs(change), digits)}`) +
-        `；期間最高為 ${quarterText(peakPoint.quarter)}（${num(peakPoint.value, digits)} PCU/hr）。`,
+        `；期間最高為 ${quarterText(peakPoint.quarter)}（${num(peakPoint.value, digits)} ${scopeRateUnit(peak)}）。`,
     );
   }
   return lines;
@@ -853,7 +1244,7 @@ function describeGrowth(
 const EXTREME_LINE_LIMIT = 12;
 function describeExtremes(
   records: ConclusionRecord[],
-  peaks: PeakKey[],
+  peaks: ConclusionScopeKey[],
   digits: number,
 ) {
   const lines: string[] = [];
@@ -867,21 +1258,37 @@ function describeExtremes(
         }）`,
         value: record.peaks[peak]?.totalPcu ?? null,
       }))
-      .filter((point) => point.value !== null) as {
+      /*
+       * ⚠️ 2026-09-25：`!== null` 擋不住 NaN，而 NaN 參與排序時
+       *   所有比較都是 false → 排序結果由原始順序決定 → 「最高／最低」
+       *   可能指到一個讀不到數值的紀錄（畫面上印「—」）。
+       *   與 describeGrowth 同一個修法。
+       */
+      .filter((point) => Number.isFinite(point.value as number)) as {
       label: string;
       value: number;
     }[];
-    if (points.length < 2) continue;
+    if (points.length < 2) {
+      const unreadable = records.filter(
+        (record) => !Number.isFinite(record.peaks[peak]?.totalPcu as number),
+      ).length;
+      if (unreadable)
+        lines.push(
+          `　${PEAK_LABEL[peak]}：有 ${unreadable} 筆的總流量讀不到數值，` +
+            `可比較的紀錄不足兩筆，未做大小比較。`,
+        );
+      continue;
+    }
     const sorted = points.slice().sort((a, b) => b.value - a.value);
     lines.push(
-      `　${PEAK_LABEL[peak]}：最高為 ${sorted[0].label} ${num(sorted[0].value, digits)} PCU/hr，` +
-        `最低為 ${sorted.at(-1)!.label} ${num(sorted.at(-1)!.value, digits)} PCU/hr。` +
+      `　${PEAK_LABEL[peak]}：最高為 ${sorted[0].label} ${num(sorted[0].value, digits)} ${scopeRateUnit(peak)}，` +
+        `最低為 ${sorted.at(-1)!.label} ${num(sorted.at(-1)!.value, digits)} ${scopeRateUnit(peak)}。` +
         `（各路口的尖峰小時不一定相同，此處僅比較大小，不做加總，也不取平均。）`,
     );
     if (sorted.length <= EXTREME_LINE_LIMIT)
       for (const point of sorted)
         lines.push(
-          `　　・${point.label}：${num(point.value, digits)} PCU/hr`,
+          `　　・${point.label}：${num(point.value, digits)} ${scopeRateUnit(peak)}`,
         );
     else
       lines.push(
@@ -958,10 +1365,29 @@ export function buildConclusion(
     (pendingCount
       ? `（另有 ${pendingCount} 筆尚未指定資料別，可在「流量核對工作台」補上）`
       : "");
+  /*
+   * 「涵蓋幾個調查日」（使用者 2026-09-23 核准新增）。
+   *
+   * ⚠️ 去重之後才算：同一天做了三個路口是**一個**調查日，不是三個。
+   *   儀表板那張卡也是這樣算的（`new Set(current.map(r => r.date)).size`），
+   *   兩處必須是同一個口徑。
+   * ⚠️ 沒有日期的紀錄不計入，而且要講出來——否則「涵蓋 2 個調查日」
+   *   會被讀成「這批資料只做了兩天」，而事實可能是還有五筆沒有日期。
+   * ⚠️ 一筆日期都讀不到時整段不寫（寫「0 個調查日」是錯的說法）。
+   */
+  const surveyDays = Array.from(
+    new Set(chosen.map((r) => r.surveyDate).filter((date) => Boolean(date))),
+  );
+  const undatedCount = chosen.filter((r) => !r.surveyDate).length;
+  const surveyDayText = surveyDays.length
+    ? `（涵蓋 ${surveyDays.length} 個調查日` +
+      (undatedCount ? `，另有 ${undatedCount} 筆讀不到調查日期` : "") +
+      "）"
+    : "";
   out.push("");
   out.push(
     `統計範圍：${quarters.length} 個季度（${quarters.map(quarterText).join("、")}）、` +
-      `${intersections.length} 個路口、共 ${chosen.length} 筆調查紀錄；` +
+      `${intersections.length} 個路口、共 ${chosen.length} 筆調查紀錄${surveyDayText}；` +
       `資料別：${surveyTypeText2}；` +
       (peaks.length
         ? `敘述時段：${peaks.map((p) => PEAK_LABEL[p]).join("、")}。`
@@ -993,14 +1419,98 @@ export function buildConclusion(
       (meta.vehicleLabel || "全部車種") +
       `；數值小數 ${digits} 位。`,
   );
-  out.push(
-    "本數值不適用「尖峰時段判定方式」條件：結論草稿一律以「整個調查點同一時段」" +
-      "計算（各支線的尖峰在同一小時，可以相加）。要看「各方向各自認定自己的尖峰」" +
-      "的結果，請改用「成果交付」裡的報告文字草稿，或畫面上的路口轉向圖。",
-  );
+  /*
+   * ⚠️ 2026-09-23：這一句原本是無條件印的——因為當時草稿**真的做不到**
+   *   「各方向各自認定」。現在做得到了（`peaks` 本來就按時段分開存，
+   *   所以每一個時段可以各自吃自己那一份重挑過的紀錄），所以這裡改成
+   *   **照實寫出這一份草稿用的是哪一種**。
+   *
+   * ⚠️ 選「各方向各自認定」時，最重要的那句話是**不可以相加**：
+   *   各支線的尖峰不在同一小時，把它們加起來得到的不是任何一個時刻的量。
+   *   畫面與報告文字草稿本來就印著同一句警告（report-draft.ts 的
+   *   `⚠️ 本數值不適用「相加」`），三處要一致。
+   */
+  /*
+   * ══════════════════════════════════════════════════════════════════
+   *  ⚠️ 2026-09-25 修正：宣告的判定方式必須是**真的套用到的**那一個
+   * ══════════════════════════════════════════════════════════════════
+   *
+   * 舊寫法照 `condition.peakRule` 無條件寫抬頭。但
+   * `recordWithApproachPeaks()` 對 `peak === "FULL"` **無條件回 null**
+   *（設計如此：全調查時段是一段累計量，不是一個尖峰小時，沒有視窗可挑）。
+   *
+   * 於是勾了「全調查時段」＋「各方向各自認定」時，實測輸出是：
+   *     有宣告「各方向各自認定」＝true、有印「不適用『相加』」＝true
+   * 而那些數字**一次都沒有被重挑過**，而且全調查時段的累計量
+   * **正是可以相加的**——草稿對可相加的數字印「請勿相加」，
+   * 又宣告了一個完全沒套用的判定方式。
+   *
+   * 改成逐時段說清楚：能套用的時段照實寫，FULL 這種套不上的要點名，
+   * 並且**只有真的有時段套用到 direction 時**才印「不適用相加」那句警告。
+   * 這與 lib/conclusion.ts 自己寫的「畫面那邊已經因為同一個理由把算不出來的
+   * 紀錄列出來明講，草稿要一致」一致。
+   */
+  const directionAble = peaks.filter((peak) => peak !== "FULL");
+  const directionUnable = peaks.filter((peak) => peak === "FULL");
+  if (condition.peakRule === "direction") {
+    if (directionAble.length)
+      out.push(
+        "尖峰時段判定方式：各方向各自認定自己的尖峰" +
+          `（逐時段替每一條支線挑它自己最忙的那一小時）；套用於：${directionAble
+            .map((peak) => PEAK_LABEL[peak])
+            .join("、")}。` +
+          /* ⚠️ 這一句的字面要與畫面、報表草稿（report-draft.ts）完全一致——
+             三處同一句話，任何一處改字就會漂移，tests/conclusion.test.ts
+             也釘著它。所以維持「本數值不適用「相加」」不改。 */
+          "⚠️ 本數值不適用「相加」：各支線的尖峰不在同一小時，" +
+          "各支線的量相加不等於路口總量，也不是任何一個時刻的量，請勿相加。",
+      );
+    if (directionUnable.length)
+      out.push(
+        `尖峰時段判定方式：${directionUnable
+          .map((peak) => PEAK_LABEL[peak])
+          .join("、")}不套用「各方向各自認定自己的尖峰」` +
+          "——那是一段累計量，不是一個尖峰小時，沒有視窗可以各自挑。" +
+          "這個時段的各支線量仍然可以相加，合計等於路口總量。",
+      );
+    if (!directionAble.length && !directionUnable.length)
+      out.push("尖峰時段判定方式：本次沒有勾選任何時段。");
+  } else {
+    out.push(
+      "尖峰時段判定方式：整個調查點同一時段（各支線的尖峰在同一小時，各支線的量可以相加，" +
+        "合計等於路口總量）。要改成「各方向各自認定自己的尖峰」請在上方條件切換。",
+    );
+  }
+  /*
+   * ⚠️ 這一句要把**這一次真的會出現的單位**列出來，不可以寫死。
+   *   舊版無條件寫「（PCU/hr、輛、%）」——使用者只勾「全調查時段」時，
+   *   草稿裡一個 PCU/hr 都不會出現，說明卻還在講它；
+   *   反過來也會讓人以為全調查時段的數字也是一小時的流率。
+   *   這種「說明與內容不符」正是這個專案一再出事的類型。
+   */
+  /*
+   * 「全調查時段」逐筆依實際涵蓋標示單位。選到 24 小時與部分時段的紀錄時，
+   * 下方內容會同時出現「／調查日」與「／調查時段」；抬頭也必須把兩種都列出，
+   * 不可以只用一個保守單位描述整批，否則說明會漏掉正文實際使用的單位。
+   */
+  const fullCoverages: ConclusionRecord["surveyCoverage"][] = chosen.length
+    ? [...new Set(chosen.map((record) => record.surveyCoverage ?? "unknown"))]
+    : ["unknown"];
+  const fullRateUnits = [
+    ...new Set(fullCoverages.map((coverage) => scopeRateUnit("FULL", coverage).replace("/", "／"))),
+  ];
+  const fullVehicleUnits = [
+    ...new Set(fullCoverages.map((coverage) => scopeVehicleUnit("FULL", coverage).replace("/", "／"))),
+  ];
+  const unitsInUse = [
+    ...(peaks.some((peak) => peak !== "FULL") ? ["PCU/hr", "輛/hr"] : []),
+    ...(peaks.includes("FULL") ? [...fullRateUnits, ...fullVehicleUnits] : []),
+    "輛",
+    "%",
+  ];
   out.push(
     "本數值不適用「顯示數值」條件：草稿裡每一句各自標明自己的單位" +
-      "（PCU/hr、輛、%），不跟著主工具列的「顯示數值」切換。",
+      `（${unitsInUse.join("、")}），不跟著主工具列的「顯示數值」切換。`,
   );
   if (condition.branchNames.length) {
     /*
@@ -1024,15 +1534,121 @@ export function buildConclusion(
       return shown.get(typedNameKey(value)) ?? value;
     });
     out.push(`只敘述指定支線：${names.join("、")}。`);
+    /*
+     * ══════════════════════════════════════════════════════════════════
+     *  ⚠️ 支線條件**不是每一個指標都吃得到**——吃不到的要逐項講明
+     * ══════════════════════════════════════════════════════════════════
+     *
+     * 2026-09-23 的反向對帳抓到：勾了支線之後，抬頭寫著「只敘述指定支線：
+     * 路口A」，但下面這幾個指標仍然是**整個路口**的數字：
+     *   ・總流量／總車輛數（`data.totalPcu`／`data.totalVehicles`）
+     *   ・季度之間的變動幅度（同樣讀 totalPcu）
+     *   ・範圍內的最大／最小路口（同樣讀 totalPcu）
+     * 實測：支線「路口A」駛入 400，草稿仍寫「總流量 1,000.0 PCU/hr」。
+     *
+     * ⚠️ 為什麼**不是**改成「只加總所選支線」：
+     *   路口總量是既有的、與畫面一致的數字；把它改成所選支線的和，
+     *   等於偷偷換一個口徑，而且駛入與駛出相加會得到剛好兩倍的假總量
+     *   （這一點本檔別處已經警告過）。使用者 2026-09-23 也明講
+     *   「不要因為補功能而讓現有功能異常」。
+     *   所以這裡採用本專案既有的做法：**篩不了就明講篩不了與為什麼**
+     *   （與 describeComposition 2026-09-21 的修法同一套）。
+     */
+    out.push(
+      "本數值不適用「支線」條件的部分：「總流量」「總車輛數」「季度之間的變動幅度」" +
+        "「範圍內的最大／最小路口」這四項是「整個路口」的數字，不是所選支線的和" +
+        "（各支線的駛入與駛出相加會得到兩倍的假總量，所以系統不替你加）。" +
+        "要看單一支線的量，請看下面各支線逐條列出的那幾行。",
+    );
   }
-  /* 沒有寫任何尖峰時，草稿裡不會出現 PCU/hr，這句說明反而讓人困惑。 */
-  if (peaks.length)
+  /*
+   * 沒有寫任何時段時，草稿裡不會出現這些單位，這句說明反而讓人困惑。
+   *
+   * ⚠️ 兩種單位要分開講。使用者勾了「全調查時段」卻讀到「這是一小時的流率」，
+   *   會把一整段的累計量當成流率抄進報告——那正是這一段要防的事。
+   */
+  /*
+   * ══════════════════════════════════════════════════════════════════════
+   *  ⚠️ 車種組成**不吃時段、也不吃轉向別與車種**——這三件都要講明
+   * ══════════════════════════════════════════════════════════════════════
+   *
+   * 2026-09-23 的反向對帳抓到三件「抬頭宣告了、內容沒套用」：
+   *
+   * ① **時段**：`describeComposition()` 的範圍固定是 `record.compositionScope`
+   *    （由畫面端依 `record.survey` 有沒有量決定），**沒有 peak 參數**。
+   *    實測：peaks 設 AM／PM／FULL，車種組成那一行**逐字相同**。
+   *    而 Excel 的「車種組成分析」是逐筆輸出 SURVEY＋AM＋PM＋DAY 四個範圍的。
+   *
+   * ② **轉向別**與 ③ **車種**：這兩個條件是在紀錄層套的
+   *    （`recordWithMovementFilter` → `recordWithVehicleFilter`），
+   *    而那兩支只改寫 `route.volumes` 與 `approach.movements`，
+   *    **完全沒碰 `record.survey` 與 `route.survey`**——
+   *    車種組成與各支線各車種讀的正是後者，所以數字一個都不會變。
+   *    畫面上的車種組成分析頁對這兩項**有**明寫的「不適用」提示，草稿漏了。
+   *
+   * ⚠️ 為什麼不是「讓它跟著變」：那要動到資料層供給哪些範圍的組成，
+   *   是既有功能的口徑改動，風險遠大於收益（使用者 2026-09-23：
+   *   「不要因為補功能而讓現有功能異常」）。
+   *   本專案既有的處理方式就是**篩不了就明講篩不了與為什麼**。
+   */
+  const usesComposition = (["composition", "branchCompositionIn", "branchCompositionOut"] as ConclusionMetricKey[]).some(
+    (key) => condition.metrics.includes(key),
+  );
+  if (usesComposition) {
+    const notApplicable: string[] = [];
+    if (peaks.length) notApplicable.push("「時段」");
+    if (condition.movement && condition.movement !== "all")
+      notApplicable.push("「轉向別」");
+    if (meta.vehicleLabel) notApplicable.push("「車種」");
+    if (notApplicable.length)
+      out.push(
+        `本數值不適用${notApplicable.join("與")}條件的部分：` +
+          "「車種組成」與「各支線各車種」讀的是整份調查的車種統計" +
+          "（與畫面上的車種組成分析頁同一份），它不隨時段改變，" +
+          "也不吃轉向別與車種的篩選。要看逐時段或逐轉向的車種數字，" +
+          "請用匯出中心的「車種組成分析」工作表。",
+      );
+  }
+  const hasRateScope = peaks.some((peak) => peak !== "FULL");
+  const hasFullScope = peaks.includes("FULL");
+  if (hasRateScope)
     out.push(
       "說明：PCU/hr 與 輛/hr 是該尖峰「一小時」的流率，僅在同一筆紀錄內可相加；" +
         "不同路口、不同季度之間只做比較，不做加總。",
     );
+  if (hasFullScope)
+    out.push(
+      `說明：「全調查時段」依每筆調查的實際涵蓋標示單位（${[
+        ...fullRateUnits,
+        ...fullVehicleUnits,
+      ].join("、")}），` +
+        "是這份調查「實際涵蓋的整段時間」的累計量，不是一小時的流率；" +
+        "它和上午尖峰、下午尖峰、全調查時段尖峰的數字不可以相加、也不可以直接比大小。" +
+        "（調查滿 24 小時時，這一段涵蓋剛好等於一個調查日。）",
+    );
 
   const wants = (key: ConclusionMetricKey) => condition.metrics.includes(key);
+  /*
+   * ── 駛入與駛出**不可以相加**（使用者 2026-09-21 指定）─────────────
+   *
+   * 四條支線的駛出合計＝駛入合計＝路口總量（同一批車依終點重新分組，
+   * 總量不變）。所以草稿同時寫出兩個方向時，讀者很容易把兩欄加起來，
+   * 得到**剛好兩倍**的「路口總量」，而這個數字看起來完全合理。
+   * 「各支線的雙向合計」再相加也是同一個兩倍。
+   *
+   * ⚠️ 這一句只在**真的兩個方向都寫出來**時才印。單方向時印它反而製造困惑。
+   */
+  const writesInflow =
+    wants("inflowPcu") || wants("inflowVehicles") || wants("branchCompositionIn");
+  const writesOutflow =
+    wants("outflowPcu") || wants("outflowVehicles") || wants("branchCompositionOut");
+  if (writesInflow && writesOutflow && peaks.length)
+    out.push(
+      "⚠️ 說明：草稿同時寫出「駛入」與「駛出」。這兩組數字不可以相加——" +
+        "各支線的駛出合計＝駛入合計＝路口總量（同一批車依終點重新分組），" +
+        "相加會得到剛好兩倍的假總量；各支線的「雙向合計」相加也是同樣的兩倍。" +
+        "要寫路口總量請直接用「路口總流量與總車輛數」那一項。",
+    );
   /*
    * 各支線的車種輛數是寫在「某一個尖峰」底下的，一個尖峰都沒選時根本不會
    * 出現，這句說明也就不必印——印了會讓人以為下面有東西卻找不到。
@@ -1058,18 +1674,60 @@ export function buildConclusion(
         "。",
     );
   /*
-   * 一個尖峰都不選是允許的（例如只要各路口的車種組成那一行），但這時
-   * 「要寫哪些數字」裡至少得有一項是跟尖峰無關的，否則草稿只會剩下標題。
-   * 與其交出一份空的草稿，不如直接說清楚差在哪裡。
+   * 一個時段都不選是允許的（例如只要各路口的車種組成那一行），但這時
+   * 「要寫哪些數字」裡至少得有一項是**不寫在時段底下**的，否則草稿只會剩標題。
+   *
+   * ⚠️⚠️ v2.1.82 起「都不勾」**不再等於「全調查時段」**。
+   *   全調查時段現在是第四個可以勾的選項（FULL），使用者 2026-09-21 定案。
+   *   舊版把「都不勾」當成一個隱藏的第四種狀態，後果是：
+   *     ・沒辦法同時要「上午尖峰」和「全調查時段」；
+   *     ・畫面上要靠一句說明文字去教使用者一個看不見的狀態。
+   *   **不要再把這個隱藏狀態加回來。**
+   *
+   * ⚠️ 這張清單要列出**每一個不依附時段的指標**，不是只列一個。
+   *   v2.1.80 以前這裡是 `["composition"]`——只放了一樣，於是
+   *   「只勾車種組成以外的無時段指標」就會被誤判成「沒有東西可產生」。
+   *   新增不依附時段的指標時，**一定要同時加進這張清單**。
    */
-  const PEAK_FREE_METRICS: ConclusionMetricKey[] = ["composition"];
-  if (!peaks.length && !PEAK_FREE_METRICS.some((key) => wants(key))) {
+  const SCOPE_FREE_METRICS: ConclusionMetricKey[] = [
+    /* 車種組成：整段調查的累計，本來就不分時段。 */
+    "composition",
+    /*
+     * ⚠️ 2026-09-23：`fullDay` **從這張清單移除**。
+     *
+     *   它的值確實是整份調查的累計（不依附某一個尖峰），但它**只在
+     *   `describePeak()` 裡輸出**，而 `describePeak` 只被
+     *   `for (const peak of peaks)` 呼叫。列在這張清單裡等於讓守門放行，
+     *   於是「只勾全調查時段流量、把四個時段都取消」會產出一份
+     *   **只剩標題、零數字、零說明**的草稿——而畫面上「符合條件 N 筆」還亮著。
+     *
+     *   使用者原話：「不要讓使用者出了題卻無法抓出答案來，但明明表格中
+     *   卻能查到答案」。這就是那個情形的字面版本。
+     *
+     *   修法刻意選**最小的那一種**：讓守門正確攔下來，並且**指名**是哪幾個
+     *   指標需要時段、該勾哪一個。不改 describePeak 的輸出路徑——
+     *   那條路徑是既有功能，動它的風險大於收益。
+     */
+  ];
+  /** 這幾個指標一定要有時段才寫得出來；訊息要指名，不可以只說「請勾一個時段」。 */
+  const NEEDS_PEAK_LABEL: Partial<Record<ConclusionMetricKey, string>> = {
+    fullDay: "全調查時段流量",
+  };
+  if (!peaks.length && !SCOPE_FREE_METRICS.some((key) => wants(key))) {
+    const blocked = (Object.keys(NEEDS_PEAK_LABEL) as ConclusionMetricKey[])
+      .filter((key) => wants(key))
+      .map((key) => NEEDS_PEAK_LABEL[key]!);
     out.push("");
     out.push(
-      "目前沒有勾選任何時段，而「要寫哪些數字」裡選的項目都是寫在尖峰時段底下的，" +
-        "因此沒有內容可以產生。請勾選「車種組成」（那一項寫的是全調查時段的累計量，" +
-        "不需要尖峰），或者回去勾一個尖峰時段。",
+      "目前四個時段（上午尖峰、下午尖峰、全調查時段、全調查時段尖峰）一個都沒有勾，" +
+        "而「要寫哪些數字」裡選的項目都是寫在時段底下的，因此沒有內容可以產生。" +
+        "請至少勾一個時段，或改勾「車種組成」這類不分時段的項目。",
     );
+    if (blocked.length)
+      out.push(
+        `⚠️ 其中「${blocked.join("」「")}」看名字像是不分時段，但它是寫在時段底下的：` +
+          "請把「全調查時段」那一個時段勾起來，就會寫出來。",
+      );
     return out.join("\n");
   }
 
@@ -1094,7 +1752,8 @@ export function buildConclusion(
           out.push(`　〔${quarterText(record.quarter)}${quarterTag(record)}〕`);
         for (const peak of peaks)
           out.push(...describePeak(record, peak, condition));
-        if (wants("composition")) out.push(...describeComposition(record, digits));
+        if (wants("composition"))
+          out.push(...describeComposition(record, digits, condition));
       }
       if (wants("growth")) {
         /*
@@ -1117,7 +1776,8 @@ export function buildConclusion(
         out.push(`　〔${record.station}　${record.name}〕`);
         for (const peak of peaks)
           out.push(...describePeak(record, peak, condition));
-        if (wants("composition")) out.push(...describeComposition(record, digits));
+        if (wants("composition"))
+          out.push(...describeComposition(record, digits, condition));
       }
       if (wants("extremes")) {
         const lines = describeExtremes(group, peaks, digits);
@@ -1159,7 +1819,7 @@ export function buildConclusion(
       for (const peak of peaks)
         out.push(...describePeak(representative, peak, condition));
       if (wants("composition"))
-        out.push(...describeComposition(representative, digits));
+        out.push(...describeComposition(representative, digits, condition));
     }
     if (chosen.length > 1) {
       const others = chosen

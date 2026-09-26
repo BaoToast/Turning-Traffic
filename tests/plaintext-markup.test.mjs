@@ -354,12 +354,22 @@ const libSource = readFileSync(
   new URL("../lib/traffic.ts", import.meta.url),
   "utf8",
 );
+/*
+ * ⚠️ 2026-09-25 補上 `pceMatrixIssue()`（F6 第三輪）。
+ *   那一支也會 push 一筆異常到同一份清單，但它住在 `qualityIssues()` **外面**
+ *   （因為當量係數是計畫層級的設定，不在 records 裡），
+ *   所以原本的範圍切法**掃不到它**——星號、缺 resolution、共用通用句
+ *   這三條對它一律無效。範圍要把兩段都收進來。
+ */
 function qualityIssuesBody(source) {
   const start = source.indexOf("export function qualityIssues");
   const end = source.indexOf("export type IntervalRow");
   if (start < 0 || end < 0 || end <= start)
     throw new Error("找不到 qualityIssues() 的範圍——這支測試要跟著改，不是刪掉");
-  return source.slice(start, end);
+  const wrapper = /export function pceMatrixIssue\([\s\S]*?\n\}/.exec(source);
+  if (!wrapper)
+    throw new Error("找不到 pceMatrixIssue()——它也會產生異常，必須一起掃");
+  return source.slice(start, end) + "\n" + wrapper[0];
 }
 
 test("前置：qualityIssues() 的範圍真的切得出來，而且不是空的", () => {
@@ -378,7 +388,15 @@ test("X-49：解決方式的文字不可以留下 Markdown 粗體記號", () => 
 
 test("X-49：每一筆異常都要有「解決方式」，一個都不可以漏", () => {
   const body = qualityIssuesBody(libSource);
-  const pushes = body.match(/issues\.push\(\{/g) || [];
+  /*
+   * ⚠️ 兩種產生方式都要算：`qualityIssues()` 裡是 `issues.push({`，
+   *   `pceMatrixIssue()` 是 `return {`（它一次只回一筆）。
+   *   只算 push 的話，後者漏掉 resolution 不會被抓到。
+   */
+  const pushes = [
+    ...(body.match(/issues\.push\(\{/g) || []),
+    ...(body.match(/\n {2}return \{\n {4}id: /g) || []),
+  ];
   const resolutions = body.match(/\n\s+resolution: \{/g) || [];
   assert.equal(
     resolutions.length,
@@ -391,9 +409,22 @@ test("X-49：每一筆異常都要有「解決方式」，一個都不可以漏"
 
 test("X-49：解決方式不可以共用一句通用句（每一種異常各寫各的）", () => {
   const body = qualityIssuesBody(libSource);
-  const texts = [...body.matchAll(/\n\s+text:\s*("(?:[^"\\]|\\.)*")/g)].map(
-    (m) => m[1],
-  );
+  /*
+   * ⚠️ 2026-09-25 改寫（F6 第三輪）：原本的正規式只抓 `text:` 後面**第一個**
+   *   字串字面值，所以像
+   *       text:
+   *         "第一段…" +
+   *         "第二段…",
+   *   這種用 `+` 串起來的寫法，只會被抓到第一段——於是「這一句太短」
+   *   會對一段其實很完整的文字誤報，而共用通用句的判斷也只比到第一段。
+   *   現在抓的是**從 `text:` 到那一筆的下一個欄位之前**的整段，
+   *   再把裡面的字串字面值接起來。
+   */
+  const texts = [...body.matchAll(/\n\s+text:([\s\S]*?),\n\s+(?:view|viewLabel|kind)\s*:/g)]
+    .map((m) =>
+      [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((piece) => piece[1]).join(""),
+    )
+    .filter((text) => text.length > 0);
   assert.ok(texts.length >= 7, `只抓到 ${texts.length} 句解決方式`);
   assert.equal(
     new Set(texts).size,

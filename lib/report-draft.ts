@@ -47,7 +47,23 @@ export const DRAFT_SECTION_LABELS: Record<DraftSectionKey, string> = {
   ...Object.fromEntries(DRAFT_ONLY_SECTIONS.map((item) => [item.key, item.label])),
 } as Record<DraftSectionKey, string>;
 
-export type ArmFlow = { name: string; am: number; pm: number };
+export type ArmFlow = {
+  name: string;
+  am: number;
+  pm: number;
+  /*
+   * ── 另外兩個核心統計範圍（使用者 2026-09-23 核准新增）────────────
+   *
+   * 「這 4 個名詞是我們交通調查的 4 個核心」（使用者 2026-09-21）。
+   * 各支線流量表本來就四個範圍都列得出來，報表文字草稿卻只寫 AM 與 PM。
+   *
+   * ⚠️ 選填，而且**缺值時整段不寫**（不是寫 0）：
+   *   舊的呼叫端與既有測資沒有這兩個欄位，輸出必須逐字不變。
+   *   null 代表「這個範圍算不出來」，也一樣不寫。
+   */
+  day?: number | null;
+  full?: number | null;
+};
 
 export type ReportDraftContext = {
   projectName: string;
@@ -88,6 +104,18 @@ export type ReportDraftContext = {
     peaks: {
       label: string;
       hour: string;
+      /**
+       * 這一段的單位（A23，使用者 2026-09-21 定案）。
+       *
+       * ⚠️ **不可以寫死 PCU/hr。** 四個核心統計範圍裡，只有
+       *   上午尖峰、下午尖峰、全調查時段尖峰是「某一個小時」的流率；
+       *   「全調查時段」是整段涵蓋的累計量，單位是 PCU／調查時段。
+       *   寫錯的話，一整段的量會被當成一小時的流率抄進報告。
+       *   舊版沒有這一欄，因為舊版根本沒寫全調查時段那一段。
+       * ⚠️ 選填是為了讓舊的呼叫端與測資不必全部改；沒帶時退回 PCU/hr，
+       *   而 FULL 那一段一定要帶（畫面端由 scopeUnit() 產生）。
+       */
+      unit?: string;
       /** false 代表這個範圍無法計算；不得把相容欄位的 0 當成真值。 */
       available?: boolean;
       /** 路口轉向總量（PCU/hr）。 */
@@ -103,7 +131,23 @@ export type ReportDraftContext = {
   /** 各支線的駛入尖峰量（PCU/hr），已由大到小排序。 */
   inbound: ArmFlow[];
   /** 各路口轉向總量的合計（與 Excel 的「路口轉向總量」同一個數字）。 */
-  totals: { am: number; pm: number };
+  totals: {
+    am: number;
+    pm: number;
+    /* 見 ArmFlow 的同名欄位：選填，缺值時整段不寫。 */
+    day?: number | null;
+    full?: number | null;
+  };
+  /**
+   * 四個統計範圍各自的單位（由畫面端的 scopeUnit() 產生）。
+   *
+   * ⚠️ **不可以寫死 PCU/hr。** AM／PM／全調查時段尖峰是某一小時的流率；
+   *   「全調查時段」是整段涵蓋的累計量，滿 24 小時是 PCU／調查日、
+   *   否則是 PCU／調查時段。同一段文字裡把累計量標成流率，
+   *   一整天的量會被當成一小時的量抄進報告。
+   * ⚠️ 缺值時 AM／PM 退回 PCU/hr＝改版前的行為。
+   */
+  scopeUnits?: { am?: string; pm?: string; day?: string; full?: string };
   /**
    * 匯出範圍內有幾筆是「舊版匯入、沒有逐條 OD 流向」的紀錄。
    * 這種紀錄的駛入／守恆數字是由幾何推算出來的，不是實際流向，
@@ -116,6 +160,11 @@ export type ReportDraftContext = {
     outboundPm: number;
     inboundAm: number;
     inboundPm: number;
+    /* 見 ArmFlow 的同名欄位：選填，缺值時整段不寫。 */
+    outboundDay?: number | null;
+    outboundFull?: number | null;
+    inboundDay?: number | null;
+    inboundFull?: number | null;
   };
   vehicles: { label: string; count: number; share: number }[];
   /** 車種組成的統計範圍說明，例如「全調查時段」。 */
@@ -202,10 +251,37 @@ const pct = (value: number, digits: number) =>
     ? `${value >= 0 ? "增加" : "減少"} ${Math.abs(value).toFixed(digits)}%`
     : "變動幅度無法計算（資料含非數值欄位）";
 
-const armList = (rows: ArmFlow[], digits: number, limit = 3) =>
+/*
+ * 各支線那一串。
+ *
+ * ⚠️ `units` 沒傳、或某一個範圍沒有值時，輸出與改版前**逐字相同**
+ *   ——「（AM 123.4、PM 234.5 PCU/hr）」。新增的兩個範圍只在真的有值時
+ *   才接在後面，而且各自帶自己的單位（全調查時段是累計量，不是 /hr）。
+ */
+const armList = (
+  rows: ArmFlow[],
+  digits: number,
+  limit = 3,
+  units?: ReportDraftContext["scopeUnits"],
+) =>
   rows
     .slice(0, limit)
-    .map((row) => `${row.name}（AM ${nf(row.am, digits)}、PM ${nf(row.pm, digits)} PCU/hr）`)
+    .map((row) => {
+      const hourUnit = units?.am || "PCU/hr";
+      const parts = [
+        `AM ${nf(row.am, digits)}`,
+        `PM ${nf(row.pm, digits)} ${hourUnit}`,
+      ];
+      if (row.day !== undefined && row.day !== null)
+        parts.push(
+          `全調查時段尖峰 ${nf(row.day, digits)} ${units?.day || hourUnit}`,
+        );
+      if (row.full !== undefined && row.full !== null)
+        parts.push(
+          `全調查時段 ${nf(row.full, digits)} ${units?.full || "PCU/調查時段"}`,
+        );
+      return `${row.name}（${parts.join("、")}）`;
+    })
     .join("、");
 
 const rest = (rows: unknown[], limit = 3, unit = "條支線", tail = "見表") =>
@@ -280,16 +356,48 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
             "不代表同一時刻的路口總量。要取可相加的數字，請把判定方式改回" +
             "「整個調查點同一時段」。",
         );
+      /*
+       * ⚠️ 2026-09-23 修正：這一串單位原本是**寫死的**（「PCU/hr、輛、%」）。
+       *
+       *   v2.1.82 把 `siteSummaries` 由 3 個尖峰擴成 4 個統計範圍之後，
+       *   草稿裡會出現 `PCU/調查時段`（甚至 `PCU/調查日`），
+       *   而這句話說那些單位不存在——同一份草稿裡前一句宣告、
+       *   下一句就印出被宣告不存在的單位。
+       *   結論草稿那一支（lib/conclusion.ts 的 unitsInUse）2026-09-21 就改對了，
+       *   報表草稿這一份漏了。
+       *
+       *   改法與那一支相同：**從實際要印出去的資料現算**，不自己寫死。
+       */
+      const unitsInUse = Array.from(
+        new Set(
+          c.siteSummaries
+            .flatMap((site) => site.peaks)
+            .filter((peak) => peak.available !== false)
+            .map((peak) => peak.unit)
+            .filter((unit): unit is string => Boolean(unit)),
+        ),
+      );
+      /* 車種占比與車輛數不隨統計範圍變，固定補上；順序固定才不會每次都不一樣。 */
+      const unitText = [...unitsInUse, "輛", "%"].join("、");
       lines.push(
         "本數值不適用「顯示數值」條件：草稿裡每一句各自標明自己的單位" +
-          "（PCU/hr、輛、%），不跟著主工具列的「顯示數值」切換。",
+          `（${unitText}），不跟著主工具列的「顯示數值」切換。`,
       );
       return lines;
     }
     case "sites": {
       if (!c.siteSummaries.length) return [];
       const lines = [
-        "各路口分項結果（每一筆路口季度資料各自的尖峰時段與流量，時段標籤即為該筆自己的尖峰小時）：",
+        "各路口分項結果（每一筆路口季度資料各自寫出四個統計範圍：上午尖峰、下午尖峰、全調查時段、全調查時段尖峰）：",
+        /*
+         * ⚠️ 這一行也不可以寫死單位。
+         *   「全調查時段」的單位跟著調查涵蓋走（滿 24 小時是 PCU／調查日），
+         *   寫死「PCU／調查時段」會和下一行實際印出來的對不起來。
+         *   所以只講**兩類的差別**，實際單位由每一行自己標。
+         */
+        "⚠️「全調查時段」是這份調查實際涵蓋的整段時間的「累計量」，"
+          + "其餘三個是某一個小時的「流率」；兩類不可以相加，也不可以直接比大小。"
+          + "每一行的單位各自標在數字後面，以那個為準。",
       ];
       for (const site of c.siteSummaries) {
         lines.push(`【${site.name}】`);
@@ -298,13 +406,14 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
             lines.push(`・${peak.label}（${peak.hour}）：無法計算。`);
             continue;
           }
+          const unit = peak.unit || "PCU/hr";
           const arms = peak.arms.length
             ? `各支線駛出／駛入：${peak.arms
                 .map(
                   (arm) =>
                     `${arm.name} ${nf(arm.outbound, d)}／${nf(arm.inbound, d)}`,
                 )
-                .join("、")} PCU/hr`
+                .join("、")} ${unit}`
             : "";
           // 車種占比最多列 5 種，其餘併成一句，免得一個路口就佔掉半頁。
           const shown = peak.vehicles.slice(0, 5);
@@ -320,7 +429,7 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
               }`
             : "";
           const parts = [
-            `路口轉向總量 ${nf(peak.total, d)} PCU/hr`,
+            `路口轉向總量 ${nf(peak.total, d)} ${unit}`,
             arms,
             composition,
           ].filter(Boolean);
@@ -337,27 +446,65 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
       if (!c.outbound.length) return [];
       return [
         `${c.focusLabel} 各支線駛出尖峰流量（駛出路口X＝以支線 X 為起點、開往其他支線的車）：` +
-          `${armList(c.outbound, d)}${rest(c.outbound)}。`,
+          `${armList(c.outbound, d, 3, c.scopeUnits)}${rest(c.outbound)}。`,
       ];
     }
     case "inboundPeak": {
       if (!c.inbound.length) return [];
       return [
         `${c.focusLabel} 各支線駛入尖峰流量（駛入路口X＝以支線 X 為終點、由其他支線開來的車）：` +
-          `${armList(c.inbound, d)}${rest(c.inbound)}。`,
+          `${armList(c.inbound, d, 3, c.scopeUnits)}${rest(c.inbound)}。`,
       ];
     }
     case "inboundOutbound": {
       if (!c.totals.am && !c.totals.pm) return [];
+      /*
+       * ⚠️ 另外兩個核心統計範圍只在真的有值時才接在後面，而且各自帶自己的
+       *   單位——「全調查時段」是累計量，標成 PCU/hr 會把一整段的量講成
+       *   一小時的量。沒有值時這一句與改版前逐字相同。
+       */
+      const totalParts = [
+        `上午尖峰 ${nf(c.totals.am, d)} ${c.scopeUnits?.am || "PCU/hr"}`,
+        `下午尖峰 ${nf(c.totals.pm, d)} ${c.scopeUnits?.pm || "PCU/hr"}`,
+      ];
+      if (c.totals.day !== undefined && c.totals.day !== null)
+        totalParts.push(
+          `全調查時段尖峰 ${nf(c.totals.day, d)} ${c.scopeUnits?.day || "PCU/hr"}`,
+        );
+      if (c.totals.full !== undefined && c.totals.full !== null)
+        totalParts.push(
+          `全調查時段 ${nf(c.totals.full, d)} ${c.scopeUnits?.full || "PCU/調查時段"}`,
+        );
       const lines = [
-        `${c.focusLabel} 路口轉向總量：上午尖峰 ${nf(c.totals.am, d)} PCU/hr、下午尖峰 ${nf(c.totals.pm, d)} PCU/hr。`,
+        `${c.focusLabel} 路口轉向總量：${totalParts.join("、")}。`,
       ];
       const f = c.flowTotals;
       const amBalanced = same(f.outboundAm, f.inboundAm, d);
       const pmBalanced = same(f.outboundPm, f.inboundPm, d);
+      /*
+       * ⚠️ 駛出／駛入合計同理：新增的兩個範圍缺值時整段不寫，
+       *   輸出與改版前逐字相同。
+       */
+      const sideText = function (
+        am: number,
+        pm: number,
+        day: number | null | undefined,
+        full: number | null | undefined,
+      ) {
+        const parts = [`上午 ${nf(am, d)}`, `下午 ${nf(pm, d)} ${c.scopeUnits?.am || "PCU/hr"}`];
+        if (day !== undefined && day !== null)
+          parts.push(
+            `全調查時段尖峰 ${nf(day, d)} ${c.scopeUnits?.day || "PCU/hr"}`,
+          );
+        if (full !== undefined && full !== null)
+          parts.push(
+            `全調查時段 ${nf(full, d)} ${c.scopeUnits?.full || "PCU/調查時段"}`,
+          );
+        return parts.join("、");
+      };
       lines.push(
-        `各支線駛出合計：上午 ${nf(f.outboundAm, d)}、下午 ${nf(f.outboundPm, d)} PCU/hr；` +
-          `各支線駛入合計：上午 ${nf(f.inboundAm, d)}、下午 ${nf(f.inboundPm, d)} PCU/hr。`,
+        `各支線駛出合計：${sideText(f.outboundAm, f.outboundPm, f.outboundDay, f.outboundFull)}；` +
+          `各支線駛入合計：${sideText(f.inboundAm, f.inboundPm, f.inboundDay, f.inboundFull)}。`,
       );
       // 「駛入合計＝駛出合計」是資料完整時才成立的性質，不能無條件寫死；
       // 有流向沒被分配到支線時它就不成立，那正是報告該提醒的地方。
@@ -383,7 +530,12 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
     case "odMatrix": {
       if (!c.topFlow) return [];
       return [
-        `OD 轉向矩陣中流量最高的一筆為 ${c.topFlow.station} ${c.topFlow.peak} 尖峰的 ` +
+        /*
+         * ⚠️ `peak` 傳進來的已經是**顯示名稱**（「AM Peak」「全調查時段尖峰」），
+         *   所以這裡**不可以**再接一個「尖峰」——會變成「全調查時段尖峰 尖峰」。
+         *   舊版傳的是內部鍵值（"DAY"），才需要那兩個字。
+         */
+        `OD 轉向矩陣中流量最高的一筆為 ${c.topFlow.station}（${c.topFlow.peak}）的 ` +
           `${c.topFlow.from} → ${c.topFlow.to}，${nf(c.topFlow.pcu, d)} PCU/hr。`,
       ];
     }
@@ -393,7 +545,7 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
         lines.push(
           same(c.worstBalance.difference, 0, d)
             ? "支線流量平衡檢核：全部支線的駛入與駛出差值皆為 0，流向資料守恆。"
-            : `支線流量平衡檢核：差值最大的是 ${c.worstBalance.station} ${c.worstBalance.peak} 尖峰的 ${c.worstBalance.name}，` +
+            : `支線流量平衡檢核：差值最大的是 ${c.worstBalance.station}（${c.worstBalance.peak}）的 ${c.worstBalance.name}，` +
               `駛入減駛出 ${nf(c.worstBalance.difference, d)} PCU/hr，請確認是否有未分配的流向。`,
         );
       // 守恆檢核的結果不能被平衡檢核的早退吃掉——它是各自獨立的檢查，
@@ -462,7 +614,7 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
            *   草稿上會印出「18,481.30000 PCU/hr」——而它看起來只是「比較長」，
            *   不會有人察覺那是參數位置錯了。
            */
-          `${armList(c.compare, d, 5)}${rest(c.compare, 5, "筆", "，完整清單見表")}。`,
+          `${armList(c.compare, d, 5, c.scopeUnits)}${rest(c.compare, 5, "筆", "，完整清單見表")}。`,
       ];
     }
     case "quality": {

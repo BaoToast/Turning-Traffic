@@ -68,6 +68,7 @@ import {
   roundedPcu,
   Project,
   qualityIssues,
+  pceMatrixIssue,
   referenceMovementForOd,
   recordTotal,
   peakWindowsFor,
@@ -163,6 +164,13 @@ import {
   trendScript,
 } from "../lib/trend-metrics";
 import { loadState, readRawState, saveState } from "../lib/state-storage";
+/*
+ * ⚠️ 受控數字輸入框**一律**走這一支，不要在畫面上再寫
+ *   `<input type="number" value={數字} onChange={…Number(e.target.value)}>`。
+ *   那個寫法會讓欄位被按空時黏一個 0（見 lib/number-field.tsx 的說明），
+ *   tests/number-field-usage.test.mjs 會擋住新的違規。
+ */
+import { NumberField } from "../lib/number-field";
 import {
   DRAFT_ONLY_SECTIONS,
   DRAFT_SECTION_LABELS,
@@ -183,6 +191,7 @@ import {
   selectRecords,
   type ConclusionCondition,
   type ConclusionScope,
+  type ConclusionScopeKey,
   type ConclusionMetricKey,
   type ConclusionRecord,
   type ConclusionTemplate,
@@ -344,9 +353,28 @@ function compositionScopeLabel(
     : "全調查時段";
 }
 
-/** 分析範圍的單位。車種組成一律報實際車輛數，不套 PCU 當量。 */
-function compositionScopeUnit(scope: CompositionScope) {
-  return scope === "SURVEY" ? "輛/調查時段" : scopeUnit(scope, "vehicle");
+/**
+ * 分析範圍的單位。車種組成一律報實際車輛數，不套 PCU 當量。
+ *
+ * ⚠️ 2026-09-25 第六輪：這一支原本把 `SURVEY` 的單位**寫死**成「輛/調查時段」，
+ *   而其餘範圍走 `scopeUnit()` 時**沒有傳涵蓋**，於是全調查時段也永遠是
+ *   「輛/調查時段」。同一頁的範圍標籤（`compositionScopeLabel`）拿得到
+ *   `record`、會寫出實際涵蓋時數，單位卻不跟著走——滿 24 小時的檔，
+ *   標籤寫「全調查時段（24 小時）」而單位寫「輛/調查時段」，
+ *   和同一批資料在別頁的「輛/調查日」互相矛盾。
+ *
+ *   `SURVEY` 與 `FULL` 的分母規則是**同一條**（見 lib 的 scopeUnit 註解：
+ *   24 小時就是「調查時段剛好等於一日」），所以這裡把 `SURVEY` 直接映到
+ *   `FULL` 去問同一支函式，不再自己寫死一份。
+ */
+function compositionScopeUnit(
+  record: TrafficRecord | TrafficRecord[] | null | undefined,
+  scope: CompositionScope,
+) {
+  const coverage = coverageOf(record);
+  return scope === "SURVEY"
+    ? scopeUnit("FULL", "vehicle", coverage)
+    : scopeUnit(scope, "vehicle", coverage);
 }
 type ImportResolution = {
   action: "auto" | "auto-new" | "new" | "merge" | "skip";
@@ -792,7 +820,14 @@ const PCE_LABELS = {
   car: "小型車",
   motorcycle: "機車",
 };
-const MOVE_LABELS = { left: "左轉", through: "直行", right: "右轉" };
+/*
+ * ⚠️ 2026-09-25 第六輪：這裡原本自己寫了一份轉向標籤表，而 lib 也有一份
+ *   （`MOVEMENT_LABELS`），兩份的「through」一個寫「直行」、一個寫「直進」，
+ *   兩份都印在畫面上。現在一律用 lib 那一份，這個名字只留作別名，
+ *   免得下面幾十處都要改（改動範圍越大越容易漏）。
+ *   **不要把它改回自己寫一份物件。**
+ */
+const MOVE_LABELS = MOVEMENT_LABELS;
 const ANALYSIS_VEHICLES = ["motorcycle", "car", "heavy", "special"] as const;
 const EMPTY_REPORT_TEMPLATES: ReportTemplate[] = [];
 const EMPTY_CONCLUSION_TEMPLATES: ConclusionTemplate[] = [];
@@ -1744,8 +1779,10 @@ export function diagramLayout(
    * 全調查時段是整段涵蓋的累計。
    *
    * ⚠️ 分母要看**這一筆**的涵蓋：滿 24 小時寫「調查日」，否則寫「調查時段」。
-   *   這張圖一次只畫一個路口，涵蓋是明確的，所以一定要把它傳進去；
-   *   不傳的話會走安全預設（調查時段），24 小時的圖上就少講了一件事。
+   *   這張圖一次只畫一個路口，涵蓋是明確的，所以一定要把它傳進去。
+   *   ⚠️ 2026-09-25 第六輪更正：這一行原本寫「不傳的話會走安全預設（調查時段）」
+   *     ——`scopeUnit()` 的三個參數已經全部改成**必填**，「不傳」在型別上就過不了。
+   *     註解留著舊的可能性，下一個人會以為不傳是合法的省事寫法。
    */
   const valueKind = displayValueKind(mode);
   const unit = scopeUnit(peak, valueKind, coverageOf(record));
@@ -3394,9 +3431,31 @@ function recordFromPreview(
    * ⚠️ 選填：不傳＝沒有覆寫＝改版前的行為，一個數字都不會變。
    */
   scopes?: FactorScope<PceMatrix>[] | null,
+  /*
+   * ══════════════════════════════════════════════════════════════════
+   *  這一筆要用**哪一個路口名稱**去查／存「這個轉向存不存在」的答案
+   *  （2026-09-25 新增）
+   * ══════════════════════════════════════════════════════════════════
+   *
+   * ⚠️ 選填。不傳＝用調查表自己的名字，行為與改版前相同。
+   *
+   * 為什麼需要它：`movementPresence` 的鍵是
+   *   `canonicalIntersectionKey(路口名) | 起 | 訖 | 轉向`。
+   * 舊版**查詢端**用的是「這次調查表自己的名字」（item.name），
+   * 而**寫入端**用的是 `record.name`，那個值在併入既有路口之後
+   * 已經被改寫成合併目標的名字。只要使用者選過一次「併入既有路口」，
+   * 兩把鍵就永遠不相等（併入的條件本身保證 from !== to），
+   * 於是答案寫進去之後**永遠查不到**——裁決視窗每一季再跳一次。
+   *
+   * 而程式三處註解都宣稱「下一季再匯入同一個路口就直接套用，不會再問第二次」。
+   *
+   * 正解：由呼叫端把**解析過別名／合併目標之後的名字**傳進來，
+   * 讓查與存用同一把鑰匙。
+   */
+  presenceKeyName?: string,
 ): TrafficRecord {
   const intersectionKeyForPresence = canonicalIntersectionKey(
-    storedNameOf({ name: item.name } as TrafficRecord),
+    storedNameOf({ name: presenceKeyName ?? item.name } as TrafficRecord),
   );
   /*
    * ── 這一筆要用哪一組當量係數？ ──────────────────────────
@@ -3748,8 +3807,10 @@ function recordFromPreview(
    * 逐格追溯只做三個尖峰，不做全日時段。
    *
    * 尖峰是一小時、頂多四格，攤開來看得出「哪一格哪一欄湊成這個數字」；
-   * 全日時段是 24 小時 × 每一欄，一筆七叉路口就是好幾萬列，存進
-   * localStorage 會直接把配額吃光，而且沒有人會去逐格看一整天。
+   * 全調查時段是整段涵蓋 × 每一欄，一筆七叉路口就是好幾萬列，存下來會
+   * 把儲存配額吃掉，而且沒有人會去逐格看一整天。
+   * ⚠️ 本系統自 v2.1.53 起存的是 **IndexedDB**（見 lib/state-storage.ts），
+   *   不是 localStorage；配額大得多，但仍然不是拿來放好幾萬列的地方。
    * 全日的數字仍然可以在「流量核對工作台」與匯出的 Excel 裡對得出來。
    */
   const traceCells = PEAK_KEYS.flatMap(function (tracePeak) {
@@ -3898,9 +3959,8 @@ function recordFromPreview(
     /*
      * 匯入時讀到的逐時間格原始資料，原樣留著（見 TrafficRecord.sourceIntervals）。
      *
-     * ⚠️ 目前沒有任何功能讀它——這是刻意的，它是為了未來留的原料。
-     *   使用者 2026-09-12：「不論未來有沒其他重算功能，至少有新增功能時，
-     *   不需要使用者把所有計畫都重新匯入一次（工作量太大）。」
+     * 現在「各方向各自認定尖峰」會讀它重新挑選各支線時段；同時保留它作為
+     * 未來重算的原料，避免新增功能時要求使用者重匯全部計畫。
      *
      * ⚠️ 只留「值」與「這一欄是誰」，不留樣式、不留原始儲存格座標——
      *   後者已經由既有的逐格追溯（sourceCells）負責，存兩份會分岔。
@@ -3918,7 +3978,12 @@ function recordFromPreview(
               };
             }),
             rows: item.intervalRows.map(function (row) {
-              return { start: row.start, label: row.label, values: row.values };
+              return {
+                start: row.start,
+                label: row.label,
+                lengthMinutes: row.lengthMinutes,
+                values: row.values,
+              };
             }),
           }
         : undefined,
@@ -4343,7 +4408,36 @@ function inboundAnalysisRows(
  * recordTotal、recordVehicleTotal）。只要這裡不另外算，草稿寫的數字就
  * 不可能和成果表對不起來。
  */
-function toConclusionRecords(records: TrafficRecord[]): ConclusionRecord[] {
+/**
+ * ══════════════════════════════════════════════════════════════════════
+ *  把畫面的紀錄轉成結論草稿要的形狀
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * `perScope`（2026-09-23 新增）：尖峰時段判定方式選「各方向各自認定自己的
+ * 尖峰」時，**每一個時段各有一份重挑過的紀錄**（見 recordWithApproachPeaks）。
+ *
+ * ⚠️ 這件事以前被判定為「草稿做不到」，理由寫在 conclusion.ts 的註解裡：
+ *   「一筆紀錄裝不下三份」。那個判斷是錯的——`peaks` 本來就是**按時段分開
+ *   存**的，所以 `peaks.AM` 可以吃 AM 那一份重挑的紀錄、`peaks.PM` 吃 PM 那
+ *   一份，互不干擾。裝不下的是「整筆紀錄」，不是 `peaks`。
+ *
+ * ⚠️ 不傳 `perScope`（預設）時，這一支走的路與改版前**完全相同**：
+ *   同一份 `rows`、同一個 `record`，輸出逐字不變。
+ *
+ * ⚠️ FULL（全調查時段）**永遠不重挑**：它是整段涵蓋的累計量，不是某一個
+ *   小時，「各方向各自認定」對它沒有意義（recordWithApproachPeaks 對 FULL
+ *   直接回 null，這裡跟著不套）。
+ */
+function toConclusionRecords(
+  records: TrafficRecord[],
+  perScope?: (
+    scope: ScopeKey,
+    record: TrafficRecord,
+  ) => {
+    record: TrafficRecord;
+    windows: Record<string, { start: number; end: number } | null>;
+  } | null,
+): ConclusionRecord[] {
   return records.map(function (record) {
     const rows = inboundAnalysisRows(record);
     const vehicleIds = recordVehicleIds(record);
@@ -4395,20 +4489,57 @@ function toConclusionRecords(records: TrafficRecord[]): ConclusionRecord[] {
     }, 0);
     /* 車種組成：整份調查有資料就用它，否則退回 AM 尖峰（與分析頁一致）。 */
     const scope: CompositionScope = surveyTotal > 0 ? "SURVEY" : "AM";
-    const peakData = function (peak: PeakKey) {
-      const window = record.peaks?.[peak];
-      const totalVehicles = rows.reduce(function (sum, row) {
-        const value = peak === "AM" ? row.inbound.AM.vehicles : row.inbound.PM.vehicles;
+    /*
+     * ⚠️ 這一支收的是**四個統計範圍**（AM／PM／DAY／FULL），不是兩個尖峰。
+     *
+     *   v2.1.80 以前它只認得 AM 與 PM：每一個欄位都寫成
+     *   `peak === "AM" ? row.inbound.AM.x : row.inbound.PM.x` 這種三元判斷，
+     *   於是傳 DAY 進來會**靜靜地拿到 PM 的數字**，而下面組出來的物件更是
+     *   只有 `{ AM, PM }` 兩個鍵——結論草稿上那顆「全調查時段尖峰」勾選框
+     *   因此永遠接在空的地方，勾了只會得到「這一筆沒有資料」，
+     *   **連 24 小時的調查檔也一樣**（使用者 2026-09-21 回報）。
+     *
+     *   現在一律走 `row.inbound[scope]`／`row.outbound[scope]`：
+     *   inboundAnalysisRows 本來就把 SCOPE_KEYS 四個都算好了。
+     *
+     * ⚠️ FULL 沒有「視窗」可寫（它不是某一個小時），所以 window 走
+     *   scopeWindowLabel()——那一支會寫出實際涵蓋時數。
+     */
+    const peakData = function (peak: ScopeKey) {
+      /*
+       * 這一個時段要用哪一份紀錄算。
+       *
+       * ⚠️ `perScope` 沒傳、或這一個時段重挑不出來（FULL、或這一筆沒有
+       *   15 分鐘細格）時一律回 null，底下整段就走原紀錄——與改版前相同。
+       */
+      const rewritten = perScope ? perScope(peak, record) : null;
+      const source = rewritten ? rewritten.record : record;
+      const scopeRows = rewritten ? inboundAnalysisRows(source) : rows;
+      const window = peak === "FULL" ? null : record.peaks?.[peak as PeakKey];
+      const totalVehicles = scopeRows.reduce(function (sum, row) {
+        const value = row.inbound[peak].vehicles;
         return value === null ? sum : sum + value;
       }, 0);
-      const hasVehicles = rows.some(function (row) {
-        return (peak === "AM" ? row.inbound.AM.vehicles : row.inbound.PM.vehicles) !== null;
+      const hasVehicles = scopeRows.some(function (row) {
+        return row.inbound[peak].vehicles !== null;
       });
       return {
-        window: window ? window.start + "–" + window.end : "",
-        totalPcu: recordTotal(record, peak),
+        /*
+         * ⚠️ 各方向各自認定時，**路口層級沒有一個共同的視窗**——
+         *   這裡的合計是把各支線各自最忙的那一小時加起來得到的，
+         *   不是任何一個時刻的量。寫一個時段在抬頭會讓人以為它是。
+         *   所以留空，由各支線各自寫自己的視窗，並由草稿印出不可相加的警告。
+         */
+        window: rewritten
+          ? ""
+          : window
+            ? window.start + "–" + window.end
+            : peak === "FULL"
+              ? scopeWindowLabel(record, "FULL")
+              : "",
+        totalPcu: recordTotal(source, peak),
         totalVehicles: hasVehicles ? totalVehicles : null,
-        branches: rows.map(function (row) {
+        branches: scopeRows.map(function (row) {
           const composition = byArm.get(row.approach.id);
           return {
             /*
@@ -4426,12 +4557,29 @@ function toConclusionRecords(records: TrafficRecord[]): ConclusionRecord[] {
             inflowByVehicleSafe: composition ? composition.inbound : null,
             twoWayByVehicleSafe: composition ? composition.twoWay : null,
             directionDisplay: composition ? composition.display : "split",
-            inflowPcu: peak === "AM" ? row.inbound.AM.pcu : row.inbound.PM.pcu,
-            outflowPcu: peak === "AM" ? row.outbound.AM.pcu : row.outbound.PM.pcu,
-            inflowVehicles:
-              peak === "AM" ? row.inbound.AM.vehicles : row.inbound.PM.vehicles,
-            outflowVehicles:
-              peak === "AM" ? row.outbound.AM.vehicles : row.outbound.PM.vehicles,
+            /*
+             * 這條支線自己最忙的那一小時。
+             *
+             * ⚠️ `windows` 的鍵是 **sourceCode**（A／B／C…），不是 approach.id
+             *   ——recordWithApproachPeaks 就是這樣建的。用錯鍵的話每一支都
+             *   查不到，草稿會一律印「算不出來」而測試照樣綠。
+             * ⚠️ 沒套重挑時是 `undefined`（草稿完全不寫這一段）；
+             *   套了但這一支算不出來是 `null`（草稿明講算不出來）。
+             *   兩者不可以混成同一個值。
+             */
+            peakWindow: rewritten
+              ? (function () {
+                  const own =
+                    rewritten.windows[row.approach.sourceCode || row.approach.id];
+                  return own
+                    ? formatMinutes(own.start) + "–" + formatMinutes(own.end)
+                    : null;
+                })()
+              : undefined,
+            inflowPcu: row.inbound[peak].pcu,
+            outflowPcu: row.outbound[peak].pcu,
+            inflowVehicles: row.inbound[peak].vehicles,
+            outflowVehicles: row.outbound[peak].vehicles,
             inflowFullDayVehicles: row.inbound.FULL.vehicles,
             outflowFullDayVehicles: row.outbound.FULL.vehicles,
           };
@@ -4446,15 +4594,60 @@ function toConclusionRecords(records: TrafficRecord[]): ConclusionRecord[] {
       quarter: record.quarter,
       surveyType: record.surveyType || "待設定",
       routeless: !record.routes?.length,
+      /*
+       * ⚠️ 這一筆的調查涵蓋要帶給結論草稿，它才知道「全調查時段」該標
+       *   「／調查日」還是「／調查時段」（滿 24 小時是前者）。
+       *   Excel 欄名與報告文字草稿本來就走 scopeUnit()／coverageOf()，
+       *   2026-09-23 的反向對帳抓到只有結論草稿沒跟上。
+       */
+      surveyCoverage: coverageOf(record),
+      /* 只用來數「涵蓋幾個調查日」，與儀表板那張卡同一個欄位（r.date）。 */
+      surveyDate: record.date,
       compositionScope: scope === "SURVEY" ? "全調查時段" : "上午尖峰小時",
-      compositionUnit: scope === "SURVEY" ? "輛/調查時段" : "輛/hr",
+      compositionUnit: compositionScopeUnit(record, scope),
       composition: vehicleIds.map(function (id) {
         return {
           label: vehicleLabel(record, id),
           count: recordVehicleTotal(record, scope, id),
         };
       }),
-      peaks: { AM: peakData("AM"), PM: peakData("PM") },
+      /*
+       * 逐支線的車種輛數，給結論草稿的**支線篩選**用。
+       *
+       * ⚠️ 只取**駛入**方向：各支線的駛入合計＝路口總量，可以相加；
+       *   駛出合計也等於路口總量，兩者相加是兩倍。
+       * ⚠️ 只要有一條支線沒有「駛入」那一份（整筆以雙向合計呈現），
+       *   就整筆回 null——寧可讓草稿照實說「這一筆篩不了」，
+       *   也不要把路口合計當成支線的量交出去。那正是 v2.1.80 的毛病。
+       */
+      compositionByBranch: (function () {
+        if (!directionRows.length) return null;
+        const list = rows.map(function (row) {
+          const entry = byArm.get(row.approach.id);
+          return {
+            code: row.approach.sourceCode || row.approach.id,
+            name: row.approach.name,
+            items: entry?.inbound?.length ? entry.inbound : null,
+          };
+        });
+        if (list.some((item) => item.items === null)) return null;
+        return list as {
+          code: string;
+          name: string;
+          items: { label: string; count: number }[];
+        }[];
+      })(),
+      /*
+       * ⚠️ **四個都要建**。少建一個，畫面上對應的那顆勾選框就接在空的地方，
+       *   而且不會有任何錯誤——只會安靜地寫出「這一筆沒有資料」。
+       *   v2.1.80 以前這裡是 `{ AM, PM }`，DAY 與 FULL 兩顆因此永遠是空的。
+       */
+      peaks: {
+        AM: peakData("AM"),
+        PM: peakData("PM"),
+        DAY: peakData("DAY"),
+        FULL: peakData("FULL"),
+      },
     };
   });
 }
@@ -4614,6 +4807,19 @@ function AuditWorkbench(props: {
   /* 相減之後要給人看的數字一律走 round1()——理由寫在 lib/traffic.ts 的註解裡。 */
   const difference = round1(peakTotal - routeTotal);
   const pceMatrix = record.pceUsed || DEFAULT_PCE;
+  /*
+   * 這一頁的單位一律問同一支 `scopeUnit()`，而且**一定要帶這一筆的涵蓋**。
+   *
+   * ⚠️ 2026-09-25 第六輪：這一頁原本十幾處都寫 `scopeUnit(props.peak)`，
+   *   靠的是那支函式的預設涵蓋（`"unknown"`）。選「全調查時段」時，
+   *   同一批資料在轉向圖抬頭寫「PCU/調查日」（那裡有帶涵蓋），
+   *   在這一頁寫「PCU/調查時段」——**同一個數字兩種單位**，
+   *   而核對工作台正是使用者用來追「數字對不對」的那一頁。
+   *   算一次、存成變數，就沒有下一次只改到其中幾處的機會。
+   */
+  const auditCoverage = coverageOf(record);
+  const auditPcuUnit = scopeUnit(props.peak, "pcu", auditCoverage);
+  const auditVehUnit = scopeUnit(props.peak, "vehicle", auditCoverage);
   const downloadAuditWorkbook = function () {
     const workbook = XLSX.utils.book_new();
     const routeRows = routes.map(function (route) {
@@ -4625,13 +4831,13 @@ function AuditWorkbench(props: {
         終點: destination?.name || route.toApproachId,
         轉向: MOVE_LABELS[route.movement],
         流量: route.volumes[props.peak].pcu,
-        流量單位: scopeUnit(props.peak),
+        流量單位: auditPcuUnit,
       };
       recordVehicleIds(record).forEach(function (vehicleKey) {
         row[
           vehicleLabel(record, vehicleKey) +
             "（" +
-            scopeUnit(props.peak, "vehicle") +
+            auditVehUnit +
             "）"
         ] = Number(
           route.volumes[props.peak].vehicle[vehicleKey] || 0,
@@ -5029,17 +5235,17 @@ function AuditWorkbench(props: {
           label={
             props.peak === "FULL" ? "系統全日總量" : "系統尖峰總量"
           }
-          value={peakTotal.toLocaleString() + " " + scopeUnit(props.peak)}
+          value={peakTotal.toLocaleString() + " " + auditPcuUnit}
           note={scopeWindowLabel(record, props.peak)}
         />
         <Kpi
           label="OD 逐筆加總"
-          value={routeTotal.toLocaleString() + " " + scopeUnit(props.peak)}
+          value={routeTotal.toLocaleString() + " " + auditPcuUnit}
           note={routes.length + " 筆 OD 流向"}
         />
         <Kpi
           label="核對差值"
-          value={difference.toLocaleString() + " " + scopeUnit(props.peak)}
+          value={difference.toLocaleString() + " " + auditPcuUnit}
           note={Math.abs(difference) < 0.11 ? "兩者一致" : "請展開下表追查"}
           accent={Math.abs(difference) < 0.11 ? "" : "warn"}
         />
@@ -5072,9 +5278,9 @@ function AuditWorkbench(props: {
             </h2>
             <p className="audit-unit-note">
               這一頁是核對<b>換算過程</b>用的：中間各車種欄位是原始的
-              <b>調查車輛數（{scopeUnit(props.peak, "vehicle")}）</b>
+              <b>調查車輛數（{auditVehUnit}）</b>
               ，乘上該車種在該轉向的當量係數（見「換算式」），
-              才得到<b>交通流量（{scopeUnit(props.peak)}）</b>那一欄。
+              才得到<b>交通流量（{auditPcuUnit}）</b>那一欄。
               車種欄若標成 PCU 就沒有東西可以核對了。
             </p>
           </div>
@@ -5088,7 +5294,7 @@ function AuditWorkbench(props: {
               onChange={setFlowView}
             />
             <span className="status-dot">
-              車種欄＝調查輛數；流量欄＝當量 {scopeUnit(props.peak)}
+              車種欄＝調查輛數；流量欄＝當量 {auditPcuUnit}
             </span>
           </div>
         </div>
@@ -5114,8 +5320,8 @@ function AuditWorkbench(props: {
           return (
             <p className={gap ? "audit-flow-gap warn" : "audit-flow-gap"}>
               {gap
-                ? `駛出合計 ${outbound.toLocaleString()} ${scopeUnit(props.peak)}、駛入合計 ${inbound.toLocaleString()} ${scopeUnit(props.peak)}，差 ${gap.toLocaleString()} ${scopeUnit(props.peak)}。這代表有流向沒有指定目的支線，請到「道路與流向管理」補齊；在補齊之前，「駛入」視角會少掉這個量。`
-                : `駛出與駛入合計相同（${outbound.toLocaleString()} ${scopeUnit(props.peak)}）：每一筆流向都有指定目的支線，兩種視角可以互相核對。`}
+                ? `駛出合計 ${outbound.toLocaleString()} ${auditPcuUnit}、駛入合計 ${inbound.toLocaleString()} ${auditPcuUnit}，差 ${gap.toLocaleString()} ${auditPcuUnit}。這代表有流向沒有指定目的支線，請到「道路與流向管理」補齊；在補齊之前，「駛入」視角會少掉這個量。`
+                : `駛出與駛入合計相同（${outbound.toLocaleString()} ${auditPcuUnit}）：每一筆流向都有指定目的支線，兩種視角可以互相核對。`}
             </p>
           );
         })()}
@@ -5148,7 +5354,7 @@ function AuditWorkbench(props: {
                     : arm.sourceCode || arm.name}
                 </span>
                 <strong>
-                  {armTotal.toLocaleString()} {scopeUnit(props.peak)}
+                  {armTotal.toLocaleString()} {auditPcuUnit}
                 </strong>
               </summary>
               <div className="table-scroll">
@@ -5156,8 +5362,8 @@ function AuditWorkbench(props: {
                   <thead>
                     {/*
                       這一張表是「核對換算過程」用的，所以左半邊一定要是
-                      原始調查車輛數（{scopeUnit(props.peak, "vehicle")}），
-                      右半邊才是乘上當量後的 {scopeUnit(props.peak)}。
+                      原始調查車輛數（{auditVehUnit}），
+                      右半邊才是乘上當量後的 {auditPcuUnit}。
                       沒有分組標題時，很容易誤以為中間那幾欄也應該是 PCU。
                     */}
                     <tr className="audit-group-row">
@@ -5175,7 +5381,7 @@ function AuditWorkbench(props: {
                           <th key={vehicleKey}>
                             {vehicleLabel(record, vehicleKey)}
                             <br />
-                            {scopeUnit(props.peak, "vehicle")}
+                            {auditVehUnit}
                           </th>
                         );
                       })}
@@ -5183,7 +5389,7 @@ function AuditWorkbench(props: {
                       <th>
                         流量
                         <br />
-                        {scopeUnit(props.peak)}
+                        {auditPcuUnit}
                       </th>
                     </tr>
                   </thead>
@@ -7103,6 +7309,12 @@ export default function TrafficApp() {
         vehicleMappings,
         movementPresence,
         pceScopes,
+        /*
+         * ⚠️ 重算時用**這一筆已經定案的名字**（下面 fresh.name 也是接回它）。
+         *   用 preview 裡的舊檔名會讓重算後查到另一把鑰匙，
+         *   等於把使用者答過的裁決結果丟掉。
+         */
+        previous.name,
       );
       /* ── 把使用者匯入後改過的東西原樣接回來 ── */
       fresh.id = previous.id;
@@ -7794,22 +8006,36 @@ export default function TrafficApp() {
           : mainFilters.day === "holiday"
             ? ["假日"]
             : [];
-      const peakMap: Record<string, PeakKey[]> = {
+      /*
+       * ⚠️ 主工具列的「時段」共有五種選法，這張表**每一種都要有**。
+       *   漏掉哪一種，「套用主工具列」就會對那一種靜靜地不動作
+       *   （`peaks || conclusionCondition.peaks` 會保留舊值），
+       *   而畫面上還是會顯示「已套用」。FULL 是 v2.1.82 補上的——
+       *   在那之前使用者把主工具列切到「全調查時段」再套用，
+       *   草稿的時段完全不會變。
+       */
+      const peakMap: Record<string, ConclusionScopeKey[]> = {
         AM: ["AM"],
         PM: ["PM"],
         DAY: ["DAY"],
+        FULL: ["FULL"],
         AMPM: ["AM", "PM"],
       };
       const peaks = peakMap[mainFilters.peak];
       setConclusionCondition({
         ...conclusionCondition,
         scope,
-        peaks: peaks || conclusionCondition.peaks,
+        /* ⚠️ 2026-09-25：peakMap 的鍵涵蓋 PeakChoice 的全部五個值，
+           所以 peaks 恆為真值，舊的 `|| conclusionCondition.peaks`
+           是永不執行的死分支（理由詳見下面 return 前的說明）。 */
+        peaks,
         intersectionKeys: [...keys],
         surveyTypes,
         /* 轉向別與車種現在**是**結論草稿的條件（2026-09-15 補），一併帶過來。 */
         movement: mainFilters.movement,
         vehicle: mainFilters.vehicle,
+        /* 尖峰時段判定方式同理（2026-09-23 補）。 */
+        peakRule: mainFilters.peakRule === "direction" ? "direction" : "point",
       });
       /* (3) 說出套用了什麼，以及(2)沒套進去的那一項。 */
       const parts = [
@@ -7821,21 +8047,34 @@ export default function TrafficApp() {
         peaks ? `時段 ${peaks.join("、")}` : null,
         `轉向別 ${MOVEMENT_CHOICE_LABELS[mainFilters.movement]}`,
         `車種 ${mainFilters.vehicle === "all" ? "全部車種" : showVehicle(mainFilters.vehicle)}`,
+        `尖峰時段判定方式 ${
+          mainFilters.peakRule === "direction"
+            ? "各方向各自認定自己的尖峰"
+            : "整個調查點同一時段"
+        }`,
       ].filter(Boolean);
       /*
        * ⚠️ 沒套進去的一定要點名。
-       *   「尖峰時段判定方式」在結論草稿裡是做不到的：草稿的每一筆紀錄要
-       *   同時提供 AM／PM／DAY 三個時段的數字，而「各方向各自認定」是
-       *   **逐時段各自重新挑尖峰**、每個時段得到一份不同的紀錄——
-       *   一筆紀錄裝不下三份。結論草稿因此一律以「整個調查點同一時段」計算
-       *  （那也是可以相加的那一種），草稿裡會寫明這件事。
+       *
+       * ⚠️ 2026-09-23：「尖峰時段判定方式」**現在套得進去了**。
+       *   舊註解寫著草稿做不到，理由是「一筆紀錄裝不下三份」——那個判斷
+       *   是錯的：`peaks` 本來就按時段分開存，每一個時段可以各自吃自己
+       *   那一份重挑過的紀錄。現在它是結論草稿自己的條件，這裡跟著套，
+       *   不再列為「沒套進去」。
+       *
+       * ⚠️ 2026-09-25：拿掉 `skipped` 這個**死分支＋內容相反的殘留提示**。
+       *   `peakMap` 的鍵剛好是 AM/PM/DAY/FULL/AMPM 五個，而
+       *   `mainFilters.peak` 的型別 `PeakChoice = ScopeKey | "AMPM"`
+       *  （`ScopeKey = PeakKey | "FULL"`）就是那五個，所以
+       *   `peakMap[mainFilters.peak]` 恆為真值 → `skipped` 恆為空字串，
+       *   那一行提示一次都不會顯示。
+       *   而它要印的那句話本身也已經是錯的：「『全調查時段』不是結論草稿的
+       *   時段選項」——FULL 明確**是**結論草稿的時段選項（peakMap 有它、
+       *   lib/conclusion.ts 有 PEAK_LABEL.FULL、也有 peaks.includes("FULL")）。
+       *   留著等於埋一句錯的話，等某天型別放寬就會印出來。
+       *   `peaks || conclusionCondition.peaks` 那個 fallback 一併簡化掉。
        */
-      const skipped =
-        (peaks ? "" : "（「全調查時段」不是結論草稿的時段選項，時段維持原設定）") +
-        (mainFilters.peakRule === "direction"
-          ? "（「各方向各自認定自己的尖峰」不是結論草稿的條件——草稿一律以「整個調查點同一時段」計算，這一點會寫在草稿裡）"
-          : "");
-      return "已套用主工具列：" + parts.join("、") + "。" + skipped;
+      return "已套用主工具列：" + parts.join("、") + "。";
     },
     [
       mainFilters,
@@ -8045,18 +8284,43 @@ export default function TrafficApp() {
   const DIRECTION_PEAK_SCOPES: ScopeKey[] = ["AM", "PM", "DAY", "FULL"];
   const directionPeakMaps = useMemo(
     function () {
+      /*
+       * ⚠️ 2026-09-25：`unsupported` 必須分成兩種，原因完全不同。
+       *
+       *   notApplicable ＝這個時段**本來就沒有尖峰視窗可挑**（只有 FULL：
+       *     全調查時段是一段累計量，recordWithApproachPeaks 依設計回 null）。
+       *     這不是資料的問題，而且那個時段的量**可以相加**。
+       *   unsupported   ＝這一筆**真的缺逐格資料**（或格距組不成整小時）。
+       *
+       * 混成一個之後，勾「全調查時段」＋「各方向各自認定」時橫幅會把
+       * **全部**調查點列成「這些資料匯入時還沒有保留各支線的逐格資料，
+       * 要用這個判定方式請重新匯入原始檔」——原因是假的，那些檔案有完整
+       * 逐格資料。使用者會照指示把整個計畫重新匯入一次（正是
+       * lib/traffic.ts 記載過的那個痛），而重匯完訊息一字不變。
+       */
       const out = new Map<
         string,
         {
           map: Map<string, TrafficRecord>;
           unsupported: string[];
+          /** 這個時段本來就不套用這個判定方式（只有全調查時段）。 */
+          notApplicable: boolean;
           windows: Map<
             string,
             Record<string, { start: number; end: number } | null>
           >;
         }
       >();
-      if (mainFilters.peakRule !== "direction") return out;
+      /*
+       * ⚠️ 2026-09-23：**結論草稿也可以選這個判定方式了**，所以觸發條件
+       *   不再只看主工具列。兩處都沒選時這一份仍然是空的，
+       *   `recordWithApproachPeaks` 一次都不會跑——效能與改版前相同。
+       */
+      if (
+        mainFilters.peakRule !== "direction" &&
+        conclusionCondition.peakRule !== "direction"
+      )
+        return out;
       for (const scope of DIRECTION_PEAK_SCOPES) {
         const map = new Map<string, TrafficRecord>();
         const windows = new Map<
@@ -8064,19 +8328,30 @@ export default function TrafficApp() {
           Record<string, { start: number; end: number } | null>
         >();
         const unsupported: string[] = [];
-        for (const record of projectRecords) {
-          const result = recordWithApproachPeaks(record, scope);
-          if (result) {
-            map.set(record.id, result.record);
-            windows.set(record.id, result.windows);
-          } else unsupported.push(record.station || record.name);
-        }
-        out.set(scope, { map, unsupported: [...new Set(unsupported)], windows });
+        /*
+         * 全調查時段：recordWithApproachPeaks 依設計一律回 null，
+         * 所以不要把每一筆都記成「算不出來」——那是時段的性質，不是資料的問題。
+         */
+        const notApplicable = scope === "FULL";
+        if (!notApplicable)
+          for (const record of projectRecords) {
+            const result = recordWithApproachPeaks(record, scope);
+            if (result) {
+              map.set(record.id, result.record);
+              windows.set(record.id, result.windows);
+            } else unsupported.push(record.station || record.name);
+          }
+        out.set(scope, {
+          map,
+          unsupported: [...new Set(unsupported)],
+          notApplicable,
+          windows,
+        });
       }
       return out;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projectRecords, mainFilters.peakRule],
+    [projectRecords, mainFilters.peakRule, conclusionCondition.peakRule],
   );
   /*
    * 判定方式是「整個調查點同一時段」時，這一份是空的——
@@ -8087,6 +8362,7 @@ export default function TrafficApp() {
       return {
         map: new Map<string, TrafficRecord>(),
         unsupported: [] as string[],
+        notApplicable: false,
         windows: new Map<
           string,
           Record<string, { start: number; end: number } | null>
@@ -8102,6 +8378,29 @@ export default function TrafficApp() {
     [directionPeakMaps, EMPTY_DIRECTION_PEAK],
   );
   const directionPeak = directionPeakFor(peak);
+  /*
+   * 結論草稿要用的「這一個時段那一份重挑過的紀錄」。
+   *
+   * ⚠️ 一定要是**穩定的參考**（useCallback），不可以在 JSX 裡寫行內箭頭函式。
+   *   ConclusionStudio 裡是 `useMemo(() => toConclusionRecords(records, fn),
+   *   [records, fn])`——行內函式每一次 render 都是新的，那個 memo 會每次
+   *   重算整份草稿資料（含逐筆 inboundAnalysisRows）。使用者 2026-09-23：
+   *   「程式性能上不要有 Lag 情況發生」。
+   * ⚠️ 條件是「整個調查點同一時段」（預設）時回 undefined，
+   *   toConclusionRecords 走原路，輸出與改版前逐字相同。
+   */
+  const conclusionPeakRuleRecordFor = useMemo(
+    function () {
+      if (conclusionCondition.peakRule !== "direction") return undefined;
+      return function (scope: ScopeKey, record: TrafficRecord) {
+        const { map, windows } = directionPeakFor(scope);
+        const rewritten = map.get(record.id);
+        const own = windows.get(record.id);
+        return rewritten && own ? { record: rewritten, windows: own } : null;
+      };
+    },
+    [conclusionCondition.peakRule, directionPeakFor],
+  );
   /**
    * 顯示用的紀錄。判定方式是「整個調查點同一時段」時就是原紀錄本身
    *（同一個物件參考，不是複製品——這樣既有的 memo 都不會失效）。
@@ -8243,6 +8542,25 @@ export default function TrafficApp() {
     })
       ? "ALL"
       : peaksIntersection;
+  /*
+   * 「各路口尖峰彙總」那一頁的資料集算一次。
+   *
+   * ⚠️ 2026-09-25 第六輪：這個篩選條件原本在同一頁**抄了兩份**
+   *   （彙總表與支線卡片各一），而表頭的單位又完全沒有問涵蓋，
+   *   於是滿 24 小時的整批資料，表頭寫「PCU/調查時段」；
+   *   下面那段說明更是直接寫死「單位均為 PCU/hr」，
+   *   選「全調查時段」時整段都是錯的。
+   *   ⚠️ 涵蓋一定要取**整張表**：逐列算會讓同一張表出現兩種欄名。
+   */
+  const peaksSummaryRecords = records.filter(function (record) {
+    return (
+      record.projectId === activeProjectId &&
+      record.quarter === quarter &&
+      (peaksIntersectionValue === "ALL" ||
+        record.station === peaksIntersectionValue)
+    );
+  });
+  const peaksSummaryCoverage = coverageOf(peaksSummaryRecords.map(viewRecord));
   const canonicalRecords = useMemo(
     function () {
       return [
@@ -8649,6 +8967,15 @@ export default function TrafficApp() {
     },
     [inboundRows],
   );
+  /*
+   * 這張表（各路口駛入／駛出流量）一次只看一個路口，所以涵蓋就是那一筆的。
+   * ⚠️ 2026-09-25 第六輪補：表頭原本完全沒有問涵蓋，滿 24 小時的檔
+   *   在「全調查時段」那幾欄會寫成「PCU/調查時段」，
+   *   而同一筆資料的轉向圖抬頭寫「PCU/調查日」。
+   */
+  const inboundCoverage = coverageOf(
+    inboundRecord ? viewRecord(inboundRecord) : null,
+  );
   /* 「顯示數值」決定這張表出現哪幾組欄位。 */
   const inboundShowsPcu =
     inboundFilters.display === "volume" || inboundFilters.display === "both";
@@ -8784,6 +9111,15 @@ export default function TrafficApp() {
   /* 轉向進階分析自己的時段。 */
   const advancedPeak: ScopeKey =
     advancedFilters.peak === "AMPM" ? "AM" : advancedFilters.peak;
+  /*
+   * 這一頁只看 `selected` 這一筆，所以涵蓋就是那一筆的。
+   * ⚠️ 2026-09-25 第六輪補：這一頁四處單位標籤原本都沒有問涵蓋
+   *   （頁首那一句、守恆差值、OD 矩陣、各支線流量平衡），
+   *   選「全調查時段」而資料滿 24 小時時，四處都寫「PCU/調查時段」，
+   *   而同一筆的轉向圖抬頭寫「PCU/調查日」——**同一份資料兩種單位**。
+   *   算一次存成變數，下一次就不會只改到其中幾處。
+   */
+  const advancedCoverage = coverageOf(selected ? viewRecord(selected) : null);
   /**
    * 轉向進階分析那一頁**實際在算的那一份紀錄**。
    *
@@ -8873,9 +9209,39 @@ export default function TrafficApp() {
   );
   const issues = useMemo(
     function () {
-      return qualityIssues(projectRecords);
+      const list = qualityIssues(projectRecords);
+      /*
+       * ══════════════════════════════════════════════════════════════════
+       *  當量係數有壞格也要進異常清單（2026-09-25，F6 第三輪抓到）
+       * ══════════════════════════════════════════════════════════════════
+       *
+       * ⚠️ v2.1.83 寫了 `pceIssues()` 並對外宣告「逐格指名哪一格壞掉」，
+       *   但**它一個呼叫點都沒有**——整個函式被 tree-shake 掉、沒進 bundle。
+       *   淨效果只是「靜靜變成 0」換成「靜靜變成 NaN」，使用者照樣沒被告知，
+       *   而 NaN 會一路傳到畫面、Excel 與結論草稿。
+       *
+       * ⚠️ `qualityIssues()` 只吃 records，而當量是**計畫層級的設定**
+       *   （還有「季別 × 路口」覆寫），所以在這裡接，不改那一支的簽名。
+       * ⚠️ 依使用者定的順序：先判定是不是異常 → 列進清單讓他確認 →
+       *   確認不是異常才套用處理方式。這裡不自己把壞值改回 1。
+       */
+      const base = pceMatrixIssue(pce, "計畫預設", "default");
+      if (base) list.push(base);
+      pceScopes.forEach(function (scope, index) {
+        /*
+         * ⚠️ 只用 scope 自己的 quarter／roadId 組標籤，**不查路口名稱**。
+         *   查名稱要 `intersectionNameOf`，那是一個每次 render 都重建的
+         *   普通函式；把它放進 deps 會讓這個 memo 每一次 render 都重算
+         *   （等於沒有 memo）。異常清單只需要認得出是哪一條覆寫，
+         *   代碼就夠了，使用者點進「車種轉向當量」就會看到完整的那一列。
+         */
+        const label = pceScopeLabel(scope.quarter, scope.roadId, "", "全路口");
+        const one = pceMatrixIssue(scope.factors, label, `scope-${index}`);
+        if (one) list.push(one);
+      });
+      return list;
     },
-    [projectRecords],
+    [projectRecords, pce, pceScopes],
   );
   /*
    * 報表匯出的季度範圍與資料筆數。
@@ -8908,6 +9274,26 @@ export default function TrafficApp() {
         records: projectRecords.filter(function (record) {
           if (!selectedQuarters.includes(record.quarter)) return false;
           if (wanted.size && !wanted.has(record.station)) return false;
+          /*
+           * ⚠️ 2026-09-23 補上「資料別」。
+           *
+           *   這裡原本只篩季度與路口，**完全沒有篩資料別**，
+           *   而草稿開頭卻照樣印出「統計條件：…；資料別＝平日；…」
+           *   （見下方 conditions 那一段）。
+           *   於是主工具列選「平日」時：畫面每一張表都只剩平日，
+           *   產生出來的報告草稿卻把假日那幾筆一起寫進去，
+           *   而第一段白紙黑字宣告只有平日。
+           *   **草稿宣告了一個沒有套用的條件**，那比少寫更糟。
+           *
+           * ⚠️ 判準與畫面用的那一份（`current`）**逐字相同**，
+           *   不另寫一套，否則兩邊遲早分岔。
+           * ⚠️ `mainFilters.day` 的預設是「兩種都看」，那時候這兩行都不成立，
+           *   行為與改版前完全一樣。
+           */
+          if (mainFilters.day === "weekday" && record.surveyType !== "平日")
+            return false;
+          if (mainFilters.day === "holiday" && record.surveyType !== "假日")
+            return false;
           return true;
         }),
       };
@@ -8918,6 +9304,7 @@ export default function TrafficApp() {
       reportEndQuarter,
       projectRecords,
       mainIntersectionStations,
+      mainFilters.day,
     ],
   );
   /*
@@ -9030,7 +9417,14 @@ export default function TrafficApp() {
         others.delete(own);
         return own + (others.size ? `（其餘資料另有 ${others.size} 種時段）` : "");
       };
-      const focusRows = inboundAnalysisRows(focus);
+      /*
+       * ⚠️ 2026-09-23 修正：同 siteSummaries 那一處——這裡原本沒有經過
+       *   `viewRecord()`，於是 `outbound`／`inbound`／`flowTotals` 三段
+       *   都是**未套轉向別與尖峰判定**的數字，而同一份草稿的 `totals`
+       *   走的是 `recordTotal(viewRecord(focus), …)`，是**已套**的。
+       *   兩者並排在同一份報告草稿裡，各支線加總會遠大於總量。
+       */
+      const focusRows = inboundAnalysisRows(viewRecord(focus));
       const armFlows = function (direction: "inbound" | "outbound") {
         return focusRows
           .map(function (row) {
@@ -9042,6 +9436,20 @@ export default function TrafficApp() {
                 .pcu ?? 0,
               pm: (direction === "inbound" ? row.inbound.PM : row.outbound.PM)
                 .pcu ?? 0,
+              /*
+               * ── 另外兩個核心統計範圍（2026-09-23 新增）──────────────
+               *
+               * ⚠️ 這兩個**可能是 null**（沒有逐條流向的舊紀錄、或這一筆
+               *   算不出全調查時段），與 AM／PM 不同。null 要原樣往下傳，
+               *   草稿那邊看到 null 會整段不寫——**不可以 `?? 0`**：
+               *   0 會被當成「這個範圍沒有車」抄進報告。
+               */
+              day: (direction === "inbound" ? row.inbound.DAY : row.outbound.DAY)
+                .pcu,
+              full: (direction === "inbound"
+                ? row.inbound.FULL
+                : row.outbound.FULL
+              ).pcu,
             };
           })
           .sort(function (a, b) {
@@ -9049,13 +9457,22 @@ export default function TrafficApp() {
           });
       };
       const sumBy = function (
-        rows: { am: number; pm: number }[],
-        peak: "am" | "pm",
+        rows: { am: number; pm: number; day?: number | null; full?: number | null }[],
+        peak: "am" | "pm" | "day" | "full",
       ) {
+        /*
+         * ⚠️ 只要有**任何一條支線**在這個範圍算不出來，整個合計就是 null。
+         *   把算不出來的那幾條當成 0 加進去，得到的合計會比真值小，
+         *   而草稿還會拿它去和駛出合計比守恆——兩邊各缺不同的支線時，
+         *   會得到一個「不守恆」的假警報；剛好缺同幾條時更糟，
+         *   會得到一個看起來守恆的假保證。
+         */
+        if (rows.some((row) => row[peak] === null || row[peak] === undefined))
+          return null;
         return (
           Math.round(
             rows.reduce(function (sum, row) {
-              return sum + row[peak];
+              return sum + Number(row[peak] ?? 0);
             }, 0) * 10,
           ) / 10
         );
@@ -9096,7 +9513,14 @@ export default function TrafficApp() {
               if (value > 0 && (!topFlow || value > topFlow.pcu))
                 topFlow = {
                   station: siteLabelOf(record),
-                  peak: peakKey,
+                  /*
+                   * ⚠️ 要傳**顯示名稱**，不是內部鍵值。
+                   *   舊版直接傳 "AM"／"PM"／"DAY"，草稿就印成「DAY 尖峰」——
+                   *   「DAY 尖峰」在這個系統裡不是任何一個名詞，而 Excel 的
+                   *   「OD轉向矩陣」同一列寫的是「全調查時段尖峰」。
+                   *   同一筆資料，兩份成果兩種寫法，而草稿會被整段抄進報告。
+                   */
+                  peak: SCOPE_SHORT_LABELS[peakKey] ?? peakKey,
                   from: row.origin,
                   to: destination.name,
                   pcu: value,
@@ -9114,7 +9538,8 @@ export default function TrafficApp() {
             )
               worstBalance = {
                 station: siteLabelOf(record),
-                peak: peakKey,
+                /* ⚠️ 同上：顯示名稱，不是內部鍵值。 */
+                peak: SCOPE_SHORT_LABELS[peakKey] ?? peakKey,
                 name: row.name,
                 difference: row.difference,
               };
@@ -9190,19 +9615,59 @@ export default function TrafficApp() {
           })
           .slice(0, SITE_SUMMARY_LIMIT)
           .map(function (record) {
-            const rows = inboundAnalysisRows(record);
+            /*
+             * ⚠️ 2026-09-23 修正：這裡原本是 `inboundAnalysisRows(record)`
+             *   ——**沒有經過 viewRecord()**，也就是不吃「轉向別」與
+             *   「尖峰時段判定方式」。而同一個物件的 `total` 走的是
+             *   `recordTotal(viewRecord(record), …)`，**有**吃。
+             *
+             *   後果是同一段自相矛盾：主工具列選「只看左轉」之後，
+             *     「路口轉向總量 1,422.8 PCU/hr」
+             *     「各支線駛出／駛入：路口A 3,976.6／…」
+             *   並排出現，各支線加總遠大於總量，而草稿上方寫著「轉向別＝左轉」。
+             *   畫面上的各支線卡片與各路口流量頁**都有**套（viewFor／viewRecordFor），
+             *   只有這一份草稿沒有。
+             */
+            const rows = inboundAnalysisRows(viewRecord(record));
             const vehicleIds = recordVehicleIds(record);
             return {
               name: siteLabelOf(record),
-              peaks: PEAK_KEYS.map(function (peakKey) {
+              /*
+               * ⚠️ 走 SCOPE_KEYS（四個），不是 PEAK_KEYS（三個）。
+               *
+               *   A23，使用者 2026-09-21：「這 4 個名詞是我們交通調查的
+               *   4 個核心」。舊版這裡少了 FULL＝全調查時段，於是報表文字
+               *   草稿從頭到尾不會出現那一段，而結論草稿有——同一份資料
+               *   兩份草稿講的東西不一樣。
+               * ⚠️ 單位一定要跟著 scope 走，見 scopeUnit()。
+               */
+              peaks: SCOPE_KEYS.map(function (peakKey) {
+                /*
+                 * ⚠️ 車種組成的「範圍」與流量的「範圍」不是同一組鍵。
+                 *   approach.movements 只有三個尖峰（AM／PM／DAY）；
+                 *   「全調查時段」的車種輛數在 record.survey 底下，
+                 *   也就是 CompositionScope 的 "SURVEY"。
+                 *   直接把 "FULL" 丟進 recordVehicleTotal 會讀到 undefined
+                 *   而整排變成 0——0 會被抄進報告。
+                 */
+                const compositionKey: CompositionScope =
+                  peakKey === "FULL" ? "SURVEY" : peakKey;
                 const vehicleSum = vehicleIds.reduce(function (sum, id) {
-                  return sum + recordVehicleTotal(viewRecord(record), peakKey, id);
+                  return (
+                    sum +
+                    recordVehicleTotal(viewRecord(record), compositionKey, id)
+                  );
                 }, 0);
                 return {
                   label: SCOPE_LABELS[peakKey],
                   available: hasScopeValue(viewRecord(record), peakKey),
                   hour:
                     scopeWindowLabel(viewRecord(record), peakKey),
+                  unit: scopeUnit(
+                    peakKey,
+                    "pcu",
+                    coverageOf([viewRecord(record)]),
+                  ),
                   total: recordTotal(viewRecord(record), peakKey),
                   arms: rows.map(function (row) {
                     return {
@@ -9219,7 +9684,11 @@ export default function TrafficApp() {
                           return {
                             label: vehicleLabel(record, id),
                             share:
-                              (recordVehicleTotal(viewRecord(record), peakKey, id) /
+                              (recordVehicleTotal(
+                                viewRecord(record),
+                                compositionKey,
+                                id,
+                              ) /
                                 vehicleSum) *
                               100,
                           };
@@ -9247,12 +9716,40 @@ export default function TrafficApp() {
         totals: {
           am: recordTotal(viewRecord(focus), "AM"),
           pm: recordTotal(viewRecord(focus), "PM"),
+          /*
+           * ⚠️ `hasScopeValue` 先問「這個範圍算不算得出來」。
+           *   不問的話 recordTotal 會回 0，而 0 在報告裡讀起來是
+           *   「這個範圍沒有車」，不是「這個範圍沒有資料」。
+           *   siteSummaries 那一段 2026-09-21 就是為了同一件事加了 available。
+           */
+          day: hasScopeValue(viewRecord(focus), "DAY")
+            ? recordTotal(viewRecord(focus), "DAY")
+            : null,
+          full: hasScopeValue(viewRecord(focus), "FULL")
+            ? recordTotal(viewRecord(focus), "FULL")
+            : null,
+        },
+        /*
+         * 四個範圍各自的單位。
+         * ⚠️ 一律走 scopeUnit()，不可以寫死——「全調查時段」滿 24 小時是
+         *   PCU／調查日，否則是 PCU／調查時段；標成 PCU/hr 會把一整段的量
+         *   講成一小時的量。這與 siteSummaries 那一段同一支函式。
+         */
+        scopeUnits: {
+          am: scopeUnit("AM", "pcu", coverageOf([viewRecord(focus)])),
+          pm: scopeUnit("PM", "pcu", coverageOf([viewRecord(focus)])),
+          day: scopeUnit("DAY", "pcu", coverageOf([viewRecord(focus)])),
+          full: scopeUnit("FULL", "pcu", coverageOf([viewRecord(focus)])),
         },
         flowTotals: {
-          outboundAm: sumBy(outbound, "am"),
-          outboundPm: sumBy(outbound, "pm"),
-          inboundAm: sumBy(inbound, "am"),
-          inboundPm: sumBy(inbound, "pm"),
+          outboundAm: sumBy(outbound, "am") ?? 0,
+          outboundPm: sumBy(outbound, "pm") ?? 0,
+          inboundAm: sumBy(inbound, "am") ?? 0,
+          inboundPm: sumBy(inbound, "pm") ?? 0,
+          outboundDay: sumBy(outbound, "day"),
+          outboundFull: sumBy(outbound, "full"),
+          inboundDay: sumBy(inbound, "day"),
+          inboundFull: sumBy(inbound, "full"),
         },
         vehicles: compositionCounts.map(function (item) {
           return {
@@ -9263,7 +9760,7 @@ export default function TrafficApp() {
         }),
         compositionScope:
           compositionKey === "SURVEY" ? "全調查時段" : "上午尖峰小時",
-        compositionUnit: compositionKey === "SURVEY" ? "輛/調查時段" : "輛/hr",
+        compositionUnit: compositionScopeUnit(focus, compositionKey),
         trend: trendRecords.map(function (record) {
           return {
             quarter: record.quarter,
@@ -9285,6 +9782,13 @@ export default function TrafficApp() {
               name: siteLabelOf(record),
               am: recordTotal(viewRecord(record), "AM"),
               pm: recordTotal(viewRecord(record), "PM"),
+              /* 見 armFlows：算不出來是 null，不是 0。 */
+              day: hasScopeValue(viewRecord(record), "DAY")
+                ? recordTotal(viewRecord(record), "DAY")
+                : null,
+              full: hasScopeValue(viewRecord(record), "FULL")
+                ? recordTotal(viewRecord(record), "FULL")
+                : null,
             };
           })
           .sort(function (a, b) {
@@ -9548,6 +10052,35 @@ export default function TrafficApp() {
     );
   };
   const ackedCount = currentIssues.filter(issueAcked).length;
+  /*
+   * ══════════════════════════════════════════════════════════════════
+   *  「還沒處理的」只有這一份（A10，使用者 2026-09-21 回報）
+   * ══════════════════════════════════════════════════════════════════
+   *
+   * 使用者原話：
+   *   「但左側欄位的資料維護 2，沒有恢復正常……是我沒確認成功還是 bug 呢?」
+   *
+   * 是 bug。他按完「已人工確認」之後，同一份資料在畫面上有**五個數字**，
+   * 而**只有一個**扣掉了已確認：
+   *   ① 側欄「資料維護」旁的紅字      currentIssues.length        ← 沒扣
+   *   ② 本季檢核摘要的品質分數        100 − currentIssues.length×4 ← 沒扣
+   *   ③ 摘要「待人工確認」            warning 的筆數              ← 沒扣
+   *   ④ 摘要「需處理錯誤」            error 的筆數                ← 沒扣
+   *   ⑤ 檢查結果的狀態列              currentIssues − ackedCount  ← 只有這個對
+   *
+   * 所以他按完確認，最顯眼的那個紅字 2 紋風不動，看起來像確認沒生效。
+   *
+   * ⚠️ **不可以把已確認的從 currentIssues 裡刪掉**：他還要能按「顯示已確認」
+   *   把它們叫回來、也要能取消確認。所以留一份完整的、另外派生一份未確認的，
+   *   凡是回答「**還有幾件事等著我處理**」的地方一律讀 openIssues。
+   *
+   * ⚠️ 新增「還有幾件待處理」的顯示時，**一定要用這一份**。
+   *   這個專案最常犯的錯就是「該列 N 樣的地方只列了 1 樣」——
+   *   tests/issue-ack-sync.test.mjs 會掃描，別讓它抓到第六個。
+   */
+  const openIssues = currentIssues.filter(function (issue) {
+    return !issueAcked(issue);
+  });
   /*
    * ══════════════════════════════════════════════════════════════════
    *  清掉「再也對不上任何一筆現存異常」的確認紀錄（使用者 2026-09-20）
@@ -10070,8 +10603,9 @@ export default function TrafficApp() {
     );
     /*
      * 這個計畫的每一份設定與還原點也要跟著刪掉，否則會留下孤兒資料，
-     * 一直吃 localStorage 的空間（空間不足時的降級寫入正是先丟還原點），
+     * 一直吃儲存空間（空間不足時的降級寫入正是先丟還原點），
      * 而且下次若出現同 id 的計畫會撿到上一個計畫的當量矩陣。
+     * ⚠️ 儲存層是 IndexedDB（v2.1.53 起），不是 localStorage。
      */
     const dropProject = function <T>(map: Record<string, T>) {
       const next = { ...map };
@@ -10087,8 +10621,8 @@ export default function TrafficApp() {
      * ⚠️ 路口別名的鍵是「計畫id｜舊名」，不是單純的計畫 id，
      *   所以 dropProject 清不掉，要自己依前綴篩。
      *   漏掉的話會留下一堆撿不回來的孤兒（新計畫是新的 id，對不上），
-     *   只是一直佔 localStorage 的空間——而空間不足時的降級寫入
-     *   正是先丟還原點，等於別人的資料替它背黑鍋。
+     *   只是一直佔儲存空間——而空間不足時的降級寫入正是先丟還原點，
+     *   等於別人的資料替它背黑鍋。（儲存層是 IndexedDB，見 lib/state-storage.ts。）
      */
     const aliasPrefix = project.id + "|";
     setIntersectionAliases(
@@ -10791,6 +11325,19 @@ export default function TrafficApp() {
         skipped += 1;
         return;
       }
+      /*
+       * ⚠️ 2026-09-25：resolution／mergeTarget 必須在 recordFromPreview
+       *   **之前**算出來。它們只依賴 importResolutions 與 projectRecords，
+       *   與 created 無關，所以提前算不改變任何行為；
+       *   而 recordFromPreview 需要「解析後的路口名」才能用正確的鑰匙
+       *   去查「這個轉向存不存在」的既有答案（詳見它的 presenceKeyName 說明）。
+       */
+      const resolution = importResolutions[item.file] || { action: "new" };
+      const mergeTarget = resolution.targetId
+        ? projectRecords.find(function (record) {
+            return recordIntersectionKey(record) === resolution.targetId;
+          })
+        : undefined;
       const created = recordFromPreview(
         configuredItem,
         activeProjectId,
@@ -10799,13 +11346,9 @@ export default function TrafficApp() {
         vehicleMappings,
         movementPresence,
         pceScopes,
+        /* 併入既有路口時用那個路口的名字，否則用這一次進來的名字。 */
+        mergeTarget?.name || nameMap[item.file] || item.name,
       );
-      const resolution = importResolutions[item.file] || { action: "new" };
-      const mergeTarget = resolution.targetId
-        ? projectRecords.find(function (record) {
-            return recordIntersectionKey(record) === resolution.targetId;
-          })
-        : undefined;
       created.intersectionId =
         mergeTarget?.intersectionId ||
         resolution.targetId ||
@@ -11477,11 +12020,14 @@ export default function TrafficApp() {
    * 拖曳圖卡與路口標籤。
    *
    * 舊版在每一個 pointermove 都呼叫 updateSelectedGeometry：那會 structuredClone
-   * 整筆紀錄、把快照塞進 300 筆的版本歷程、再把整包狀態 JSON.stringify 寫進
-   * localStorage，接著整個畫面連同兩三份 SVG 重新產生。滑鼠每秒送 60～120 個事件，
+   * 整筆紀錄、把快照塞進 300 筆的版本歷程、再把整包狀態寫進本機儲存，
+   * 接著整個畫面連同兩三份 SVG 重新產生。滑鼠每秒送 60～120 個事件，
    * 這些工作全部堆在主執行緒上，拖沒幾秒分頁就會被瀏覽器判定沒有回應而顯示
-   * 「This page couldn't load」；一旦 localStorage 被寫爆（QuotaExceededError），
+   * 「This page couldn't load」；一旦儲存空間被寫爆（QuotaExceededError），
    * 之後只要再碰圖卡就會再爆一次。
+   * ⚠️ 這段描述的是 v2.1.52 以前（當時存 localStorage）觀察到的症狀。
+   *   儲存層在 v2.1.53 改成 IndexedDB，配額大得多，但「拖曳中不寫入」
+   *   這個做法與儲存層無關，**不要因為換了儲存層就把它改回去**。
    *
    * 現在改成：拖曳過程完全不碰 React 狀態，只用 requestAnimationFrame 直接改
    * 那一個 <g> 的 transform（最多每幀一次）；放開滑鼠才寫入一次狀態。
@@ -11893,6 +12439,19 @@ export default function TrafficApp() {
     if (!exportRecords.length) throw new Error("選定期間沒有可輸出的資料。");
     const wanted = new Set(items);
     if (!wanted.size) throw new Error("請至少勾選一個要匯出的分析項目。");
+    /*
+     * 這一份活頁簿裡**所有**工作表的單位共用同一個涵蓋判定。
+     *
+     * ⚠️ 不可以逐列算涵蓋。Excel 的欄名就是物件的鍵：某幾列算出「PCU/調查日」、
+     *   另幾列算出「PCU/調查時段」時，`json_to_sheet` 會生出**兩組欄位**，
+     *   同一種數字散在兩欄、加總全錯。
+     * ⚠️ 而且這正是使用者定的規則：「（混合的表）欄名就統一用 調查時段，
+     *   然後表下方註明清楚」——整批混合時取的就是「調查時段」，
+     *   由 `coverageOf()` 對整批回 `"mixed"` 自然得到。
+     *   （2026-09-25 第六輪：原本這幾張表都沒有傳涵蓋，所以永遠寫「調查時段」，
+     *   滿 24 小時的整批資料交出去的欄名是錯的。）
+     */
+    const exportCoverage = coverageOf(exportRecords.map(viewRecord));
     // 挑選規則與報告文字草稿共用同一個函式，兩邊的數字才不會分岔。
     const trendRows = trendSeriesRecords(exportRecords, selected).map(
       function (record) {
@@ -11903,7 +12462,7 @@ export default function TrafficApp() {
             PEAK_KEYS.flatMap(function (key) {
               return [
                 [
-                  `${SCOPE_SHORT_LABELS[key]}（${scopeUnit(key)}）`,
+                  `${SCOPE_SHORT_LABELS[key]}（${scopeUnit(key, "pcu", exportCoverage)}）`,
                   scopeValueOrNull(viewRecord(record), key, recordTotal(viewRecord(record), key)),
                 ],
               ];
@@ -11958,13 +12517,12 @@ export default function TrafficApp() {
                     )} 小時）`
                   : scopeWindowLabel(viewRecord(record), scope),
               車種: vehicleLabel(record, vehicleKey),
-              單位: scope === "SURVEY" ? "輛/調查時段" : "輛/hr",
+              單位: compositionScopeUnit(record, scope),
               /*
                * 這個統計範圍算不出來時要寫「－」，不能寫 0。
                *
-               * 不足 24 小時的調查沒有「全日尖峰小時」（peakWindows.DAY 是
-               * null），實測 11017T1502～T1505 這幾份 4 小時的真實檔就是如此。
-               * 舊版照樣為 DAY 產生列、數量寫 0、組成比例寫 0.0%，那些 0 會被
+               * 格距組不成完整 60 分鐘，或舊紀錄沒有逐格資料時，該尖峰範圍
+               * 可能算不出來。舊版仍會產生列、數量寫 0、組成比例寫 0.0%，那些 0 會被
                * Excel 的自動篩選、加總與平均一起吃進去，看起來像「那個時段真的
                * 沒有車」。同一支函式裡的另一張表早就是這樣處理的
                * （見上方「算不出來的一律寫「－」，不是 0」那段註解），
@@ -11998,8 +12556,8 @@ export default function TrafficApp() {
           ...Object.fromEntries(
             SCOPE_KEYS.flatMap(function (scope) {
               const label = SCOPE_SHORT_LABELS[scope];
-              const pcu = scopeUnit(scope);
-              const veh = scopeUnit(scope, "vehicle");
+              const pcu = scopeUnit(scope, "pcu", exportCoverage);
+              const veh = scopeUnit(scope, "vehicle", exportCoverage);
               const cell = function (value: number | null) {
                 return value == null ? "－" : value;
               };
@@ -12147,13 +12705,14 @@ export default function TrafficApp() {
                 return [
                   [`${scopeLabel} 時段`, scopeWindowLabel(viewRecord(record), scope)],
                   [
-                    `${scopeLabel} ${label}量（${scopeUnit(scope)}）`,
+                    `${scopeLabel} ${label}量（${scopeUnit(scope, "pcu", exportCoverage)}）`,
                     flow.pcu == null ? "－" : flow.pcu,
                   ],
                   [
                     `${scopeLabel} ${label}實際車輛數（${scopeUnit(
                       scope,
                       "vehicle",
+                      exportCoverage,
                     )}）`,
                     flow.vehicles == null ? "－" : flow.vehicles,
                   ],
@@ -12461,7 +13020,7 @@ export default function TrafficApp() {
 
   function exportCompositionExcel() {
     if (!current.length) return notify("本季度沒有可輸出的車種組成資料。");
-    const unit = compositionScopeUnit(compositionScope);
+    const unit = compositionScopeUnit(current.map(viewRecord), compositionScope);
     const summaryRows = current.map(function (record) {
       /* 選定的統計範圍算不出來時（例如不足 24 小時卻選了全日尖峰小時），
          數量與比例一律寫「－」，不可以寫 0。 */
@@ -12576,11 +13135,19 @@ export default function TrafficApp() {
      *   這一頁自己的時段與車種，而且一律全部轉向。
      */
     const view = advancedRecordFor(record);
+    /*
+     * 這一份活頁簿的單位涵蓋算一次（2026-09-25 第六輪補）。
+     * 原本兩張表都只傳統計範圍、不傳涵蓋，於是選「全日時段」時活頁簿寫
+     * 「PCU/調查時段」，而畫面上的同一批數字寫「PCU/調查日」。
+     * 變數名刻意與畫面那一份（`advancedCoverage`）不同：這一份的來源是
+     * `advancedRecordFor(record)`（真正要匯出的那一筆），不是畫面上選到的那一筆。
+     */
+    const advancedExportCoverage = coverageOf(view);
     const matrix = odMatrix(view, advancedPeak);
     const matrixRows = matrix.map(function (row) {
       const output: Record<string, string | number> = {
         來源支線: row.origin,
-        單位: scopeUnit(advancedPeak),
+        單位: scopeUnit(advancedPeak, "pcu", advancedExportCoverage),
       };
       record.approaches.forEach(function (approach, index) {
         output["駛入 " + approach.name] = row.values[index];
@@ -12593,10 +13160,10 @@ export default function TrafficApp() {
         駛入流量: item.inbound,
         駛出流量: item.outbound,
         差值: item.difference,
-        /* 同一個活頁簿裡 OD 矩陣已經用 scopeUnit(advancedPeak)；這裡寫死 PCU/hr
+        /* 同一個活頁簿裡 OD 矩陣已經用同一組參數；這裡寫死 PCU/hr
            會讓兩張表對同一批數字說兩種話（FULL 時差約 24 倍的語意），
            而且與畫面上的「各支線流量平衡」面板也對不起來。 */
-        單位: scopeUnit(advancedPeak),
+        單位: scopeUnit(advancedPeak, "pcu", advancedExportCoverage),
       };
     });
     const sensitivityRows = peakSensitivity(record).map(function (item) {
@@ -12909,7 +13476,17 @@ export default function TrafficApp() {
        * 業主的成果。實測選「全日時段」時：圖上是「PCU/調查日」，
        * README 卻寫「時段：FULL 尖峰／單位 PCU/hr」。
        */
-      const diagramUnit = scopeUnit(peak, vehicle === "all" ? "pcu" : "vehicle");
+      /*
+        * ⚠️ 涵蓋取**整包**（2026-09-25 第六輪補）：README 描述的是整個 ZIP，
+        *   逐筆算會寫出一個只對其中一個路口成立的單位。整包混合時
+        *   `coverageOf()` 回 `"mixed"`，單位落在「調查時段」——
+        *   那正是使用者定的「混合就統一用調查時段」。
+        */
+      const diagramUnit = scopeUnit(
+        peak,
+        vehicle === "all" ? "pcu" : "vehicle",
+        coverageOf(rows.map(viewRecord)),
+      );
       zip.file(
         "README.txt",
         "Turning Traffic 批次成果包\r\n範圍：" +
@@ -12986,6 +13563,37 @@ export default function TrafficApp() {
           )
         : map;
     };
+    /*
+     * ══════════════════════════════════════════════════════════════
+     *  ⚠️ 2026-09-25 新增：鍵是「計畫id|其他」這種複合鍵的要走這一支
+     * ══════════════════════════════════════════════════════════════
+     *
+     * pick() 比的是**整個鍵**等不等於計畫 id，所以對
+     * `intersectionAliases`（鍵是 `計畫id|舊名`，見別名寫入處）
+     * 完全篩不到東西。原本 intersectionAliases 就是直接整包帶走的，
+     * 後果有兩個：
+     *
+     *   ① 匯出**單一計畫**給業主／同事時，檔案裡帶著這台電腦上
+     *      **每一個委託案**的路口舊名（別名的值就是路口名稱）。
+     *   ② 對方併入後這些鍵帶著來源電腦的計畫 id，永遠對不到任何計畫，
+     *      成為清不掉的孤兒（刪計畫的清理只依本機 project.id 前綴篩）。
+     *
+     * 而同一個物件字面裡的 pceByProject／pceScopesByProject／
+     * catalogByProject／reportTemplatesByProject 全部都走了 pick()，
+     * 上面還寫著「一定要走 pick()——它只取這次要匯出的那幾個計畫」。
+     *
+     * ⚠️ 只有這一個 BACKUP payload 要篩。整機 state（TURNING_TRAFFIC_STATE）
+     *   本來就該存全部，不可以一起改。
+     */
+    const pickPrefixed = function <T>(map: Record<string, T>) {
+      if (!scoped) return map;
+      return Object.fromEntries(
+        Object.entries(map || {}).filter(function ([key]) {
+          const cut = key.indexOf("|");
+          return cut > 0 && scopedIds.has(key.slice(0, cut));
+        }),
+      );
+    };
     return {
       kind: "TURNING_TRAFFIC_BACKUP",
       version: VERSION,
@@ -13031,17 +13639,46 @@ export default function TrafficApp() {
       /* 「這個轉向存不存在」的使用者答案；換一台電腦要一起帶走。 */
       movementPresence: movementPresence,
       /*
+       * 「已人工確認」的異常紀錄（2026-09-23 補）。
+       *
+       * ⚠️ 原本**整個沒有進備份**，兩條還原路徑也都不讀（`setAckedIssues`
+       *   在還原區塊裡出現 0 次）。它是使用者**一顆一顆按出來**的裁決，
+       *   與上面的 movementPresence／下面的 intersectionAliases 是同一類東西——
+       *   那兩個的註解都寫著「換一台電腦要一起帶走」，只有它漏了。
+       *
+       * ⚠️ 症狀不是理論：`chooseSurveyDate()` 在使用者指定調查日期時
+       *   **同時**寫 surveyDateOverrides 與 ackedIssues（那裡的註解自己寫著
+       *   「只寫覆寫的話這一列會一直掛著」）。換電腦還原之後覆寫回來了、
+       *   確認沒回來，「調查日期不只一個」整批重新變成未處理，
+       *   側欄紅字、品質分數、待人工確認、需處理錯誤四個數字一起回跳，
+       *   而畫面只會說「還原完成」。
+       *
+       * ⚠️ 走 pick()：它依計畫保存，單一計畫備份不可夾帶其他計畫的確認。
+       */
+      ackedIssues: pick(ackedIssues),
+      /*
        * 同一份調查檔有多個日期時，使用者指定的日期要跟著備份走。
        * 這是依計畫保存的資料；單一計畫備份不可夾帶其他計畫的覆寫。
        */
       surveyDateOverrides: pick(surveyDateOverrides),
-      /* 調查日期欄的顯示偏好也要能在換電腦後還原。 */
-      showSurveyDate: showSurveyDate,
+      /*
+       * 「顯示調查日期」是**這台電腦這個人**的顯示偏好，不是計畫資料。
+       *
+       * ⚠️ 所以只放進「全部計畫」的個人備份包，**單一計畫備份不寫**
+       *   （A2／A3，2026-09-21，三支統一，以交通服務水準為準）。
+       *   單一計畫備份是拿去給別人、或拿別人的進來用的東西；
+       *   夾帶顯示偏好的結果就是併入之後開關被別人的習慣翻掉，
+       *   而且畫面上不會有任何提示。還原端也已經不讀它了。
+       */
+      ...(scoped ? null : { showSurveyDate: showSurveyDate }),
       /*
        * 路口名稱別名。換一台電腦沒帶走的話，那台電腦每一季匯入都會
        * 重新問「要不要併入」——正是這一版要修掉的毛病，換個地方重演。
+       *
+       * ⚠️ 2026-09-25：鍵是 `計畫id|舊名`，所以走 pickPrefixed() 而不是 pick()。
+       *   理由見 pickPrefixed() 的說明（單一計畫匯出會夾帶別的委託案的路口清單）。
        */
-      intersectionAliases: intersectionAliases,
+      intersectionAliases: pickPrefixed(intersectionAliases),
       /*
        * 範本也要存每個計畫各自那一份，理由與上面的當量矩陣相同：
        * 只存「匯出當下開著的那個計畫」的話，換一台電腦還原之後其他計畫的
@@ -13363,11 +14000,62 @@ export default function TrafficApp() {
           typeof data.surveyDateOverrides === "object"
         )
           setSurveyDateOverrides(function (existing) {
-            /* 只覆蓋這次併入的計畫，其他計畫的日期指定保留。 */
-            return { ...existing, ...data.surveyDateOverrides };
+            /*
+             * ⚠️ **要逐筆併，不可以整個計畫換掉**（A6，2026-09-21）。
+             *
+             *   舊寫法是 `{ ...existing, ...data.surveyDateOverrides }`——
+             *   那是**淺層**合併：這份備份裡有 P-1 這個計畫，本機 P-1 底下
+             *   原有的其他日期指定就被整批換成備份裡的那一份，**靜默消失**，
+             *   畫面上不會有任何提示。
+             *
+             *   同一支程式裡「紀錄」本身是逐筆合併的（mergeById），
+             *   兩個標準不一致的結果就是掉資料。規則統一成：
+             *   **備份裡有的覆蓋，備份裡沒有的保留。**
+             */
+            const merged: Record<string, Record<string, string>> = {
+              ...existing,
+            };
+            for (const [projectId, picks] of Object.entries(
+              data.surveyDateOverrides as Record<string, Record<string, string>>,
+            )) {
+              if (!picks || typeof picks !== "object") continue;
+              merged[projectId] = { ...(existing[projectId] || {}), ...picks };
+            }
+            return merged;
           });
-        if (typeof data.showSurveyDate === "boolean")
-          setShowSurveyDate(data.showSurveyDate);
+        /*
+         * 「已人工確認」的異常紀錄（2026-09-23 補）：與上面同一套逐筆合併。
+         *
+         * ⚠️ 兩條還原路徑原本都不讀它，而 `chooseSurveyDate()` 是
+         *   **同時**寫 surveyDateOverrides 與 ackedIssues 的——只還原前者的話，
+         *   覆寫回來了、確認沒回來，那幾列會整批重新掛回未處理。
+         * ⚠️ 一樣是逐筆併，不可以整個計畫換掉（理由同上）。
+         */
+        if (data.ackedIssues && typeof data.ackedIssues === "object")
+          setAckedIssues(function (existing) {
+            const merged: Record<string, Record<string, { at: string }>> = {
+              ...existing,
+            };
+            for (const [projectId, acks] of Object.entries(
+              data.ackedIssues as Record<
+                string,
+                Record<string, { at: string }>
+              >,
+            )) {
+              if (!acks || typeof acks !== "object") continue;
+              merged[projectId] = { ...(existing[projectId] || {}), ...acks };
+            }
+            return merged;
+          });
+        /*
+         * ⚠️ **「顯示調查日期」不跟著單一計畫備份走**（A2／A3，2026-09-21）。
+         *
+         *   它是「這台電腦這個人想不想看到那一欄」的顯示偏好，不是計畫資料。
+         *   舊寫法在併入別人的單一計畫備份時會把它翻掉——使用者只是想拿
+         *   一個計畫進來，開關卻被別人的習慣改掉，而且不會有任何提示。
+         *   三支統一以交通服務水準的做法為準：**跟人走，不跟單一計畫備份走**。
+         *   （完整的個人全部計畫包仍然會還原它，見下方 restore 那一段。）
+         */
         setRecordRevisions(
           trimRevisionBatches(
             mergeById(
@@ -13494,6 +14182,18 @@ export default function TrafficApp() {
         data.surveyDateOverrides &&
           typeof data.surveyDateOverrides === "object"
           ? data.surveyDateOverrides
+          : {},
+      );
+      /*
+       * 「已人工確認」（2026-09-23 補）。這一條是**完整取代**分支，
+       * 所以與上面幾個一樣直接換掉；備份沒有這一欄時給空物件。
+       */
+      setAckedIssues(
+        data.ackedIssues && typeof data.ackedIssues === "object"
+          ? (data.ackedIssues as Record<
+              string,
+              Record<string, { at: string }>
+            >)
           : {},
       );
       setShowSurveyDate(
@@ -13804,8 +14504,14 @@ export default function TrafficApp() {
                   }}
                 >
                   {item.label}
-                  {item.id === "maintenance" && currentIssues.length > 0 && (
-                    <b>{currentIssues.length}</b>
+                  {/*
+                   * ⚠️ 側欄這個紅字回答的是「還有幾件事等著我處理」，
+                   *   所以讀 openIssues（已確認的不算）。讀 currentIssues 的話，
+                   *   使用者按完確認、其他地方都歸零了，只有這裡還亮著，
+                   *   他會以為確認沒成功——2026-09-21 回報的就是這一幕。
+                   */}
+                  {item.id === "maintenance" && openIssues.length > 0 && (
+                    <b>{openIssues.length}</b>
                   )}
                 </button>
                 )}
@@ -14198,17 +14904,43 @@ export default function TrafficApp() {
               每一條支線各自取自己最忙的那一小時。
               <b>各方向的值不可以相加</b>——它們不在同一小時，
               相加不對應任何一個真實的小時。
-              {directionPeak.unsupported.length > 0 && (
+              {/*
+                ⚠️ 2026-09-25：「算不出來」的兩種原因要分開講。
+                  舊版把全調查時段（本來就沒有尖峰視窗可挑）也算進
+                  unsupported，於是橫幅把每一個調查點都指成「沒有逐格資料、
+                  請重新匯入原始檔」——原因是假的，而使用者真的會照做。
+              */}
+              {directionPeak.notApplicable && (
                 <>
                   {" "}
-                  另外有 {directionPeak.unsupported.length} 個調查點算不出來
-                  （{directionPeak.unsupported.slice(0, 3).join("、")}
-                  {directionPeak.unsupported.length > 3 ? "…" : ""}）：
-                  這些資料匯入時還沒有保留各支線的逐格資料，
-                  要用這個判定方式請重新匯入原始檔。
-                  <b>它們目前顯示的仍然是「整個調查點同一時段」的數字。</b>
+                  <b>
+                    目前的時段是「全調查時段」，這個判定方式不適用於它
+                  </b>
+                  ——全調查時段是一段累計量，不是一個尖峰小時，沒有視窗可以
+                  各自挑。這個時段的各支線量仍然可以相加，合計等於路口總量。
+                  要看各方向各自的尖峰，請把時段切成上午尖峰、下午尖峰
+                  或全調查時段尖峰。
                 </>
               )}
+              {!directionPeak.notApplicable &&
+                directionPeak.unsupported.length > 0 && (
+                  <>
+                    {" "}
+                    另外有 {directionPeak.unsupported.length} 個調查點算不出來
+                    （{directionPeak.unsupported.slice(0, 3).join("、")}
+                    {directionPeak.unsupported.length > 3 ? "…" : ""}）：
+                    這些資料沒有各支線的逐格資料，或是時間格距組不成一個整小時。
+                    {/*
+                      * ⚠️ 2026-09-25 第六輪：這一句原本寫「按一下『重新套用計算』」，
+                      *   而**全站沒有那一顆按鈕**——實際是「車種轉向當量」頁的
+                      *   「用目前的設定重算（N 筆）」與當量套用範圍那一列的
+                      *   「用這一組重算」。使用者照著找會找不到。
+                      */}
+                    v2.1.65 之後匯入的紀錄，到「車種轉向當量」按
+                    「用目前的設定重算」就會補上；更早匯入的才需要重新匯入原始檔。
+                    <b>它們目前顯示的仍然是「整個調查點同一時段」的數字。</b>
+                  </>
+                )}
             </p>
           )}
           {currentBeforeFilter.length > 0 && current.length === 0 && (
@@ -14576,13 +15308,12 @@ export default function TrafficApp() {
                           style={
                             {
                               "--score":
-                                Math.max(45, 100 - currentIssues.length * 4) +
-                                "%",
+                                Math.max(45, 100 - openIssues.length * 4) + "%",
                             } as React.CSSProperties
                           }
                         >
                           <strong>
-                            {Math.max(45, 100 - currentIssues.length * 4)}
+                            {Math.max(45, 100 - openIssues.length * 4)}
                           </strong>
                           <small>品質分數</small>
                         </div>
@@ -14596,7 +15327,7 @@ export default function TrafficApp() {
                             待人工確認{" "}
                             <b>
                               {
-                                currentIssues.filter(function (i) {
+                                openIssues.filter(function (i) {
                                   return i.severity === "warning";
                                 }).length
                               }
@@ -14607,12 +15338,22 @@ export default function TrafficApp() {
                             需處理錯誤{" "}
                             <b>
                               {
-                                currentIssues.filter(function (i) {
+                                openIssues.filter(function (i) {
                                   return i.severity === "error";
                                 }).length
                               }
                             </b>
                           </li>
+                          {/*
+                           * 已確認的不計入上面三行，但**不可以完全不提**：
+                           * 使用者要看得出「不是消失了，是我按過確認」。
+                           */}
+                          {ackedCount > 0 && (
+                            <li>
+                              <span className="good" />
+                              已人工確認 <b>{ackedCount}</b>
+                            </li>
+                          )}
                         </ul>
                       </div>
                     </article>
@@ -15140,19 +15881,17 @@ export default function TrafficApp() {
                                   function (movement) {
                                     return (
                                       <td key={movement}>
-                                        <input
-                                          type="number"
-                                          min="0"
-                                          step="0.1"
+                                        {/* ⚠️ 受控數字框一律走 NumberField，理由見 lib/number-field.tsx。 */}
+                                        <NumberField
+                                          min={0}
+                                          step={0.1}
                                           value={factors[movement]}
-                                          onChange={function (event) {
+                                          onCommit={function (next) {
                                             setPce({
                                               ...pce,
                                               [target]: {
                                                 ...factors,
-                                                [movement]: Number(
-                                                  event.target.value,
-                                                ),
+                                                [movement]: next,
                                               },
                                             });
                                           }}
@@ -16421,25 +17160,25 @@ export default function TrafficApp() {
                                       );
                                     return (
                                       <td key={move}>
-                                        <input
-                                          type="number"
-                                          min="0"
-                                          step="0.1"
+                                        {/* ⚠️ 受控數字框一律走 NumberField，理由見 lib/number-field.tsx。 */}
+                                        <NumberField
+                                          min={0}
+                                          step={0.1}
                                           value={
                                             editingPce[vehicleKey]?.[move] ?? 1
                                           }
-                                          aria-label={
+                                          ariaLabel={
                                             (vehicleCatalog[vehicleKey] ||
                                               vehicleKey) +
                                             MOVE_LABELS[move] +
                                             "當量"
                                           }
-                                          onChange={function (e) {
+                                          onCommit={function (committed) {
                                             const next = {
                                               ...editingPce,
                                               [vehicleKey]: {
                                                 ...editingPce[vehicleKey],
-                                                [move]: Number(e.target.value),
+                                                [move]: committed,
                                               },
                                             };
                                             /*
@@ -16780,7 +17519,10 @@ export default function TrafficApp() {
                                   computable
                                     ? count.toLocaleString() +
                                       " " +
-                                      compositionScopeUnit(compositionScope)
+                                      compositionScopeUnit(
+                                        viewRecord(selected),
+                                        compositionScope,
+                                      )
                                     : "－"
                                 }
                                 note={
@@ -16805,7 +17547,8 @@ export default function TrafficApp() {
                           <h2>全調查時段道路方向車種數量</h2>
                           <small>
                             依各支線的駛出／駛入 OD
-                            流量統計；雙向合計等同兩個行車方向相加。單位：輛／調查時段（
+                            流量統計；雙向合計等同兩個行車方向相加。單位：
+                            {compositionScopeUnit(selected, "SURVEY").replace("/", "／")}（
                             {selected.survey?.minutes || 0} 分鐘）
                           </small>
                         </div>
@@ -16852,11 +17595,14 @@ export default function TrafficApp() {
                                   return (
                                     <th key={vehicleKey}>
                                       {vehicleLabel(selected, vehicleKey)}
-                                      （輛／調查時段）
+                                      （{compositionScopeUnit(selected, "SURVEY").replace("/", "／")}）
                                     </th>
                                   );
                                 })}
-                                <th>實際車輛合計（輛／調查時段）</th>
+                                <th>
+                                  實際車輛合計（
+                                  {compositionScopeUnit(selected, "SURVEY").replace("/", "／")}）
+                                </th>
                               </tr>
                             </thead>
                             <tbody>
@@ -17016,9 +17762,7 @@ export default function TrafficApp() {
                                   {vehicleLabel(selected, vehicleKey)}（
                                   {[
                                     compositionShowsValue
-                                      ? compositionScope === "SURVEY"
-                                        ? "輛/調查時段"
-                                        : "輛/hr"
+                                      ? compositionScopeUnit(current, compositionScope)
                                       : null,
                                     compositionShowsPercent ? "%" : null,
                                   ]
@@ -17030,9 +17774,7 @@ export default function TrafficApp() {
                             })}
                             <th>
                               實際車輛合計（
-                              {compositionScope === "SURVEY"
-                                ? "輛/調查時段"
-                                : "輛/hr"}
+                              {compositionScopeUnit(current, compositionScope)}
                               ）
                             </th>
                           </tr>
@@ -17359,7 +18101,7 @@ export default function TrafficApp() {
                                 return (
                                   <th key={"pcu-" + scope}>
                                     {SCOPE_SHORT_LABELS[scope]} {inboundFlowTitle}
-                                    （{scopeUnit(scope)}）
+                                    （{scopeUnit(scope, "pcu", inboundCoverage)}）
                                   </th>
                                 );
                               })}
@@ -17368,7 +18110,8 @@ export default function TrafficApp() {
                                 return (
                                   <th key={"veh-" + scope}>
                                     {SCOPE_SHORT_LABELS[scope]} {inboundFlowTitle}
-                                    車輛數（{scopeUnit(scope, "vehicle")}）
+                                    車輛數（
+                                    {scopeUnit(scope, "vehicle", inboundCoverage)}）
                                   </th>
                                 );
                               })}
@@ -17491,7 +18234,7 @@ export default function TrafficApp() {
                       </table>
                     </div>
                     <div className="source-note">
-                      判定原則：駛入路口X＝其他支線開往X的車；駛出路口X＝從X開往其他支線的車。同一統計範圍內，各支線的駛入合計與駛出合計應相等，也等於該路口總量；若有未分配流向，資料品質檢查將提示差異，不採用外部計算表的漏算結果。
+                      判定原則：駛入路口X＝其他支線開往X的車；駛出路口X＝從X開往其他支線的車。同一統計範圍內，各支線的駛入合計與駛出合計應相等，也等於該路口總量；若有未分配流向，「資料維護」的資料異常檢查將提示差異，不採用外部計算表的漏算結果。
                     </div>
                   </section>
                 </>
@@ -17683,9 +18426,17 @@ export default function TrafficApp() {
                       >
                         {SCOPE_KEYS.map(function (key) {
                           /*
-                           * 全日尖峰小時與全日時段要有 24 小時的調查資料才
-                           * 算得出來。選項照樣列出來（不然使用者不知道有這個
-                           * 功能），但選不下去，並在後面寫出為什麼。
+                           * 某些時段算不出來時，選項照樣列出來（不然使用者
+                           * 不知道有這個功能），但選不下去，並在後面寫出為什麼。
+                           *
+                           * ⚠️ 原本這裡寫「全日尖峰小時與全日時段要有 24 小時
+                           *   的調查資料才算得出來」，用的是 v2.1.64 之前的
+                           *   舊時段名，而且那條 24 小時規則早就不成立：
+                           *   `fullDayUnavailableReason()` 對 FULL 只在
+                           *   「沒有記錄調查時數」時才回原因，DAY 自 v2.1.64
+                           *   起也不要求 24 小時。註解就貼在呼叫它的那一行上面，
+                           *   照它去改會把正確的行為改回錯的。
+                           *   （2026-09-25 第五輪複查更正。）
                            */
                           const reason = selected
                             ? fullDayUnavailableReason(selected, key)
@@ -17773,18 +18524,31 @@ export default function TrafficApp() {
                           );
                         }}
                       >
+                        {/*
+                          * ⚠️ 這幾個選項的單位**必須傳 coverage**，
+                          *   和轉向圖抬頭（scopeUnit(diagramPeak, kind,
+                          *   coverageOf(diagramRecord))）走同一個判斷。
+                          *
+                          *   不傳的話 coverage 是 "unknown"，於是
+                          *   scope === "FULL" 時選單恆寫「PCU/調查時段」，
+                          *   而同一頁的圖面對滿 24 小時的檔寫「PCU/調查日」
+                          *   ——同一頁對同一批資料印出兩種單位。
+                          *   規則是「單位的唯一來源是 scopeUnit()」，三處都
+                          *   呼叫了同一支，但傳的參數不同，規則字面過關、
+                          *   畫面仍然不一致。（2026-09-25 第五輪複查抓到。）
+                          */}
                         <option value="volume">
-                          交通量（{scopeUnit(diagramPeak)}）
+                          交通量（{scopeUnit(diagramPeak, "pcu", coverageOf(diagramRecord))}）
                         </option>
                         <option value="count">
-                          車輛數（{scopeUnit(diagramPeak, "vehicle")}）
+                          車輛數（{scopeUnit(diagramPeak, "vehicle", coverageOf(diagramRecord))}）
                         </option>
                         <option value="percent">百分比</option>
                         <option value="both">
-                          {scopeUnit(diagramPeak)}＋百分比
+                          {scopeUnit(diagramPeak, "pcu", coverageOf(diagramRecord))}＋百分比
                         </option>
                         <option value="countPercent">
-                          {scopeUnit(diagramPeak, "vehicle")}＋百分比
+                          {scopeUnit(diagramPeak, "vehicle", coverageOf(diagramRecord))}＋百分比
                         </option>
                       </select>
                     </label>
@@ -17956,6 +18720,19 @@ export default function TrafficApp() {
                                     );
                                   })}
                                 </ul>
+                                {/*
+                                  ⚠️ 占比逐項各自四捨五入到小數第 1 位，所以這一串
+                                    加起來不一定剛好 100%（三項各 1/3 會是
+                                    33.3＋33.3＋33.3＝99.9）。這張卡會被抄進正式報告，
+                                    審查時一定有人把它加起來，所以要先說。
+                                    刻意不把差額塞給任何一項——塞了之後那一項的占比
+                                    就對不上它自己的數值÷總量，讀者自己驗算會更困惑。
+                                */}
+                                <small className="summary-rounding">
+                                  各項占比分別四捨五入到小數第 1
+                                  位，加起來可能不等於 100%（差額不塞給任何一項，
+                                  每一項都對得上它自己的數值÷總量）。
+                                </small>
                               </dd>
                             </div>
                           )}
@@ -18244,14 +19021,25 @@ export default function TrafficApp() {
                               </label>
                               <label>
                                 角度（°）
-                                <input
-                                  type="number"
+                                {/*
+                                  ⚠️ **不要改回 `<input type="number" value={數字}>`。**
+                                    那個寫法在使用者把欄位按到空的那一刻，
+                                    `Number("")===0` 會把 0 寫回欄位、游標被推到最前面，
+                                    後面打的字全部接在 0 後面（090、045、1809）。
+                                    使用者 2026-09-21 形容成「集體無法輸入除了 0 以外的數字」，
+                                    而且他一開始以為是「兩個角度設成一樣」造成的保護機制——
+                                    不是，那是純粹的輸入 bug。詳見 lib/number-field.tsx。
+                                */}
+                                <NumberField
                                   value={approach.angle}
-                                  onChange={function (e) {
+                                  step={1}
+                                  min={-180}
+                                  max={360}
+                                  testId={`arm-angle-${index}`}
+                                  ariaLabel={`${approach.name} 角度`}
+                                  onCommit={function (next) {
                                     updateSelectedGeometry(function (record) {
-                                      record.approaches[index].angle = Number(
-                                        e.target.value,
-                                      );
+                                      record.approaches[index].angle = next;
                                       record.approaches[index].bearing =
                                         bearingFromAngle(
                                           record.approaches[index].angle,
@@ -18259,10 +19047,32 @@ export default function TrafficApp() {
                                       return syncRouteGeometry(record);
                                     });
                                   }}
+                                  /*
+                                   * ⚠️ 兩條支線角度相同的提醒放在**這裡**，
+                                   *   不放進「資料異常檢查」。理由：這是設定當下
+                                   *   就看得見、也只有當下改得動的事，而資料異常
+                                   *   檢查講的是「匯進來的資料本身有問題」。
+                                   *   混在一起會讓異常清單長出一堆「其實是設定」
+                                   *   的項目，使用者按確認也消不掉。
+                                   */
+                                  warn={function (value) {
+                                    const clash = geometrySelected.approaches
+                                      .filter(function (other, otherIndex) {
+                                        return (
+                                          otherIndex !== index &&
+                                          ((Number(other.angle) % 360) + 360) % 360 ===
+                                            ((value % 360) + 360) % 360
+                                        );
+                                      })
+                                      .map(function (other) {
+                                        return other.name;
+                                      });
+                                    return clash.length
+                                      ? `與 ${clash.join("、")} 的角度相同，轉向圖上這幾條會完全疊在一起，請確認是不是還沒改。`
+                                      : null;
+                                  }}
+                                  hint="畫面上方 -90、右方 0、下方 90、左方 180"
                                 />
-                                <small>
-                                  畫面上方 -90、右方 0、下方 90、左方 180
-                                </small>
                               </label>
                               <div className="card-position-field">
                                 <span>數據卡位置</span>
@@ -19183,22 +19993,14 @@ export default function TrafficApp() {
                             return (
                               <th key={"t-" + key}>
                                 {SCOPE_SHORT_LABELS[key]} 轉向總量（
-                                {scopeUnit(key)}）
+                                {scopeUnit(key, "pcu", peaksSummaryCoverage)}）
                               </th>
                             );
                           })}
                         </tr>
                       </thead>
                       <tbody>
-                        {records
-                          .filter(function (record) {
-                            return (
-                              record.projectId === activeProjectId &&
-                              record.quarter === quarter &&
-                              (peaksIntersectionValue === "ALL" ||
-                                record.station === peaksIntersectionValue)
-                            );
-                          })
+                        {peaksSummaryRecords
                           /*
                            * ⚠️ 這裡刻意**依站號排序，不依流量**。
                            * 使用者：「針對路段／路口做排名沒有意義，
@@ -19284,20 +20086,23 @@ export default function TrafficApp() {
                         <h3>各支線駛入／駛出尖峰流量</h3>
                       </div>
                       <p>
-                        「駛出路口X」為車流由支線 X 駛出、開進中央路口（以 X 為起點）；「駛入路口X」為車流穿越中央路口後駛入支線 X（以 X 為終點）。各支線駛出或駛入合計皆應等於路口尖峰轉向總量，單位均為
-                        PCU/hr。
+                        「駛出路口X」為車流由支線 X 駛出、開進中央路口（以 X 為起點）；「駛入路口X」為車流穿越中央路口後駛入支線 X（以 X 為終點）。各支線駛出或駛入合計皆應等於路口尖峰轉向總量，單位均為{" "}
+                        {/*
+                          * ⚠️ 這一區**只列上午尖峰與下午尖峰**兩欄（見下面的
+                          *   `branchPeakFlows(peaksView, "AM")`／`"PM"`），
+                          *   兩者都是「某一小時的流率」，所以單位與主工具列
+                          *   選到哪一個時段無關。
+                          * ⚠️ 2026-09-25 第六輪：這裡原本寫死 `PCU/hr`。
+                          *   第一版改成跟著主工具列的 `peak` 走——**那是錯的**：
+                          *   選「全調查時段」時這句話會寫「PCU/調查日」，
+                          *   而下面的卡片仍然是上午／下午的每小時流率。
+                          *   改成明確問「AM 的單位」，既不寫死、也不會跟錯。
+                          */}
+                        {scopeUnit("AM", "pcu", peaksSummaryCoverage)}。
                       </p>
                     </div>
                     <div className="compare-flow-grid">
-                      {records
-                        .filter(function (record) {
-                          return (
-                            record.projectId === activeProjectId &&
-                            record.quarter === quarter &&
-                            (peaksIntersectionValue === "ALL" ||
-                              record.station === peaksIntersectionValue)
-                          );
-                        })
+                      {peaksSummaryRecords
                         /*
                          * ⚠️ 2026-09-18 大檢查 F-17：卡片原本依「目前尖峰時段的總量」
                          *   由大到小排——主工具列切上午／下午／全調查時段，五張卡片
@@ -19607,7 +20412,7 @@ export default function TrafficApp() {
                     {/* ⚠️ 這一頁的時段可以脫離，單位要照 advancedPeak 寫。
                         寫主工具列的 peak 的話，同一個畫面上會出現兩種單位：
                         這一句寫 PCU/hr，下面每一塊的單位標籤寫 PCU/調查時段。 */}
-                    {scopeUnit(advancedPeak)}）。
+                    {scopeUnit(advancedPeak, "pcu", advancedCoverage)}）。
                   </p>
                 </div>
                 {selected && (
@@ -19848,7 +20653,7 @@ export default function TrafficApp() {
                             }
                           >
                             守恆差值 {conservation.difference.toLocaleString()}{" "}
-                            {scopeUnit(advancedPeak)} ·{" "}
+                            {scopeUnit(advancedPeak, "pcu", advancedCoverage)} ·{" "}
                             {conservation.valid ? "一致" : "需核對"}
                           </span>
                         </section>
@@ -19940,7 +20745,7 @@ export default function TrafficApp() {
                                 <span className="eyebrow">OD MATRIX</span>
                                 <h2>來源支線 → 目的支線</h2>
                               </div>
-                              <span className="status-dot">{scopeUnit(advancedPeak)}</span>
+                              <span className="status-dot">{scopeUnit(advancedPeak, "pcu", advancedCoverage)}</span>
                             </div>
                             <div className="table-scroll">
                               <table className="od-table">
@@ -20100,7 +20905,7 @@ export default function TrafficApp() {
                                 <span className="eyebrow">BRANCH BALANCE</span>
                                 <h2>各支線流量平衡</h2>
                               </div>
-                              <span className="status-dot">{scopeUnit(advancedPeak)}</span>
+                              <span className="status-dot">{scopeUnit(advancedPeak, "pcu", advancedCoverage)}</span>
                             </div>
                             <div className="table-scroll">
                               <table>
@@ -20587,10 +21392,19 @@ export default function TrafficApp() {
                           <span className="eyebrow">ISSUE LIST</span>
                           <h2>檢查結果（全部季度）</h2>
                         </div>
+                        {/*
+                         * ⚠️ 這裡的「共 N 項」是**清單的總筆數**（含已確認），
+                         *   不是「還有幾件要處理」——那一個在側欄與摘要卡。
+                         *   兩者不同時，一定要把已確認的筆數寫出來，
+                         *   否則使用者會以為自己按的確認沒有生效。
+                         */}
                         <span className="status-dot">
-                          {issueTypeFilter.length
+                          {(issueTypeFilter.length
                             ? `顯示 ${shownIssues.length} / 共 ${currentIssues.length} 項`
-                            : `${currentIssues.length} 項`}
+                            : `${currentIssues.length} 項`) +
+                            (ackedCount
+                              ? `（其中 ${ackedCount} 項已確認）`
+                              : "")}
                         </span>
                       </div>
                       {/*
@@ -21161,6 +21975,15 @@ export default function TrafficApp() {
           {view === "conclusion" && (
             <ConclusionStudio
               records={conclusionRecords}
+              /*
+               * ⚠️ 傳的是**取用函式**不是一份算好的資料：
+               *   「各方向各自認定」要逐時段各挑一次，草稿的四個時段各要
+               *   自己那一份。傳一份算好的等於四個時段共用同一個視窗——
+               *   那正是 X-51 在脫離的圖上踩過的同一個坑。
+               * ⚠️ 條件選「整個調查點同一時段」（預設）時回 null，
+               *   toConclusionRecords 就走原路，輸出逐字不變。
+               */
+              peakRuleRecordFor={conclusionPeakRuleRecordFor}
               projectName={activeProject?.name || "未命名計畫"}
               templates={conclusionTemplates}
               setTemplates={setConclusionTemplates}
@@ -22211,7 +23034,7 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./路口轉向程式手冊_v2.1.80.pdf"
+                    href="./路口轉向程式手冊_v2.1.83.pdf"
                     /*
                      * ⚠️ download 一定要**帶檔名**，不可以只寫 `download`。
                      *
@@ -22228,7 +23051,7 @@ export default function TrafficApp() {
                      *     真正的使用者拿到的就是那個名字。
                      *     把檔名明確寫進 download，兩種情況都正確。
                      */
-                    download="路口轉向程式手冊_v2.1.80.pdf"
+                    download="路口轉向程式手冊_v2.1.83.pdf"
                   >
                     下載新手手冊
                   </a>
@@ -22877,15 +23700,23 @@ function ConclusionStudio(props: {
    *   不可以默默改掉使用者設好的一整組條件。
    */
   applyMainFilters: () => string;
+  /** 見上面 JSX 的說明；undefined ＝「整個調查點同一時段」（預設）。 */
+  peakRuleRecordFor?: (
+    scope: ScopeKey,
+    record: TrafficRecord,
+  ) => {
+    record: TrafficRecord;
+    windows: Record<string, { start: number; end: number } | null>;
+  } | null;
 }) {
   const { condition, setCondition, draft, setDraft, edited, setEdited, templateName, setTemplateName } =
     props;
 
   const source = useMemo(
     function () {
-      return toConclusionRecords(props.records);
+      return toConclusionRecords(props.records, props.peakRuleRecordFor);
     },
-    [props.records],
+    [props.records, props.peakRuleRecordFor],
   );
 
   const quarters = useMemo(
@@ -23243,16 +24074,29 @@ function ConclusionStudio(props: {
                 */}
                 <span className="conclusion-sublabel">時段</span>
                 <div className="conclusion-checks">
+                  {/*
+                   * ⚠️⚠️ **四個核心統計範圍，一個都不能少。**
+                   *
+                   *   使用者 2026-09-21 定案：「上午尖峰、下午尖峰、全調查時段
+                   *   和全調查時段尖峰，各有各的意義」「這 4 個名詞是我們交通
+                   *   調查的 4 個核心」「正確做法應該是把全調查時段做為第 4 個
+                   *   可勾選選項」。
+                   *
+                   *   v2.1.80 以前這裡只有三顆（上午／下午／全調查時段尖峰），
+                   *   「全調查時段」是靠**四顆都不勾**這個看不見的狀態表達的。
+                   *   兩個後果：
+                   *     ・沒辦法同時要「上午尖峰」和「全調查時段」；
+                   *     ・畫面上得放一句說明去教使用者一個看不見的狀態。
+                   *   **不要把 FULL 這一顆拿掉，也不要把隱藏狀態加回來。**
+                   *
+                   *   順序照四個核心的講法排：上午 → 下午 → 全調查時段 →
+                   *   全調查時段尖峰（「整段的量」排在「其中最大那一小時」前面）。
+                   */}
                   {(
                     [
                       ["AM", "上午尖峰"],
                       ["PM", "下午尖峰"],
-                      /*
-                       * ⚠️ 「全調查時段尖峰」本來就在資料模型裡（PeakKey 含 DAY），
-                       *   而且「套用主工具列」那一顆早就會把它設進來——
-                       *   只有畫面上少了這一個核取方塊，使用者自己勾不到。
-                       *   設得進去卻選不到，比沒有更容易被當成壞掉。
-                       */
+                      ["FULL", "全調查時段"],
                       ["DAY", "全調查時段尖峰"],
                     ] as const
                   ).map(function (entry) {
@@ -23263,11 +24107,11 @@ function ConclusionStudio(props: {
                           checked={condition.peaks.includes(entry[0])}
                           onChange={function () {
                             /*
-                             * 兩個都不勾是有效的選擇 ＝「不敘述尖峰時段」，
-                             * 只寫全調查時段的數值（例如只要各路口的車種組成
-                             * 那一行）。舊寫法在取消最後一個時把它加回去，
-                             * 使用者永遠取消不掉，只能連同不想要的尖峰段落
-                             * 一起產生再自己刪。
+                             * 四個都不勾仍然是有效的選擇 ＝「不敘述任何時段」，
+                             * 只留下不分時段的項目（例如車種組成那一行）。
+                             * 舊寫法在取消最後一個時把它加回去，使用者永遠
+                             * 取消不掉。**但它不再代表「全調查時段」**——
+                             * 全調查時段現在是上面那一顆。
                              */
                             patch({ peaks: toggle(condition.peaks, entry[0]) });
                           }}
@@ -23277,6 +24121,13 @@ function ConclusionStudio(props: {
                     );
                   })}
                 </div>
+                <p className="conclusion-hint">
+                  四個時段各有各的意義：「全調查時段」是這份調查<b>實際涵蓋的整段時間</b>
+                  的累計量（滿 24 小時標示為輛／調查日、PCU／調查日；其餘標示為
+                  輛／調查時段、PCU／調查時段）；「全調查時段尖峰」是同一段
+                  涵蓋裡流率最高的<b>那一小時</b>（輛/hr、PCU/hr）。兩者單位不同，
+                  <b>不可以相加</b>。
+                </p>
                 <span className="conclusion-sublabel">資料別</span>
                 <div className="conclusion-checks">
                   {surveyTypes.map(function (type) {
@@ -23459,6 +24310,23 @@ function ConclusionStudio(props: {
                   })}
                 </div>
                 {/*
+                  * ⚠️ 2026-09-25 第六輪：上面那些勾選框的字原本把單位寫死
+                  *   （「（PCU/hr）」「（輛/調查時段）」）。可以勾「全調查時段」、
+                  *   也可以一次勾多個時段，所以那個寫死的單位一定有機會是錯的，
+                  *   而草稿本文寫的是對的——同一個畫面兩種答案。
+                  *   單位改成在這裡講一次規則，並由草稿本文逐句寫出實際單位。
+                  */}
+                <p className="conclusion-hint" data-testid="conclusion-unit-note">
+                  單位跟著您在上面選的<b>時段</b>走，草稿裡每一句都會自己寫出來：
+                  上午／下午／全調查時段尖峰是<b>某一小時的流率</b>（
+                  {scopeUnit("AM", "pcu", "unknown")}、
+                  {scopeUnit("AM", "vehicle", "unknown")}）；
+                  「全調查時段」是<b>整段調查的累計量</b>，滿 24 小時寫
+                  {scopeUnit("FULL", "pcu", "full")}，不足 24 小時或整批混合寫
+                  {scopeUnit("FULL", "pcu", "mixed")}。
+                  兩者<b>不可以相加</b>，也不可以互相比較。
+                </p>
+                {/*
                   * 「呈現方式」只有在駛入與駛出都要寫的時候才有意義——
                   * 雙向合計是把兩個方向加起來，只寫一個方向時那個數字
                   * 是錯的。所以只勾一邊時整區收起來，不讓使用者選一個
@@ -23466,7 +24334,17 @@ function ConclusionStudio(props: {
                   */}
                 {condition.metrics.includes("branchCompositionIn") &&
                 condition.metrics.includes("branchCompositionOut") ? (
-                  <div className="conclusion-submode">
+                  <div
+                    className="conclusion-submode"
+                    /*
+                     * ⚠️ 2026-09-23：這一頁現在有**兩個** .conclusion-submode
+                     *   區塊（這一個與「尖峰時段判定方式」）。守門原本是數
+                     *   `.conclusion-submode` 的個數＝0，新增之後那一條會永遠紅。
+                     *   加上專屬的 testid，守門才守得到「這一個」的顯示與否，
+                     *   而不是「這一頁有沒有任何子選項」。
+                     */
+                    data-testid="conclusion-branch-composition-mode"
+                  >
                     <span className="conclusion-sublabel">
                       各支線各車種要怎麼呈現
                     </span>
@@ -23496,6 +24374,56 @@ function ConclusionStudio(props: {
                     </p>
                   </div>
                 ) : null}
+                {/*
+                  * ── 尖峰時段判定方式（2026-09-23 新增）─────────────────
+                  *
+                  * ⚠️ 預設是「整個調查點同一時段」＝改版前的唯一行為，
+                  *   升級當天草稿輸出逐字不變。
+                  * ⚠️ 換成「各方向各自認定」不是換個標籤，是真的換一套數字
+                  *   （實測差距可以到 50 倍），而且**各支線的量不可以相加**。
+                  *   草稿會把這句警告寫進去，貼到報告裡也看得到。
+                  */}
+                <div
+                  className="conclusion-submode"
+                  data-testid="conclusion-peak-rule"
+                >
+                  <span className="conclusion-sublabel">尖峰時段判定方式</span>
+                  <div className="conclusion-radios">
+                    {(
+                      [
+                        [
+                          "point",
+                          "整個調查點同一時段（各支線可以相加）",
+                        ],
+                        [
+                          "direction",
+                          "各方向各自認定自己的尖峰（各支線不可相加）",
+                        ],
+                      ] as [NonNullable<ConclusionCondition["peakRule"]>, string][]
+                    ).map(function (item) {
+                      return (
+                        <label key={item[0]}>
+                          <input
+                            type="radio"
+                            name="conclusion-peak-rule"
+                            checked={(condition.peakRule || "point") === item[0]}
+                            onChange={function () {
+                              patch({ peakRule: item[0] });
+                            }}
+                          />
+                          {item[1]}
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <p className="conclusion-hint">
+                    「整個調查點同一時段」是整個路口一起挑一個最忙的小時，各支線的量加起來
+                    等於路口總量。「各方向各自認定」是逐時段替每一條支線挑它自己最忙的那一小時，
+                    每條支線底下會多寫自己的時段——那些數字不是同一時刻的量，
+                    請不要相加。「全調查時段」是整段涵蓋的累計量，不受這一項影響。
+                    這一頁不會自動跟著上方主工具列跑，要對齊請按「套用主工具列」。
+                  </p>
+                </div>
               </fieldset>
 
               <fieldset className="conclusion-field conclusion-field-wide">
@@ -23635,8 +24563,22 @@ function ConclusionStudio(props: {
                   className="secondary"
                   disabled={!draft}
                   onClick={function () {
+                    /*
+                     * ⚠️ 2026-09-25：可選鏈會短路**整條成員鏈**。
+                     *   `navigator.clipboard?.writeText(t).then(a).catch(b)`
+                     *   在 clipboard 為 undefined 時回 undefined，
+                     *   `then` 與 `catch` **都不會執行**（實測），
+                     *   於是按下去完全沒反應、也沒有任何提示，
+                     *   使用者以為複製成功了，去貼上得到舊的剪貼簿內容。
+                     *   非安全內容（http 的區網網址）與舊瀏覽器都會這樣。
+                     *   照 22010 那一顆的做法先明確判斷。
+                     */
+                    if (!navigator.clipboard?.writeText)
+                      return props.notify(
+                        "這個瀏覽器不允許程式複製，請手動全選草稿文字後複製。",
+                      );
                     navigator.clipboard
-                      ?.writeText(draft)
+                      .writeText(draft)
                       .then(function () {
                         props.notify("已複製到剪貼簿。");
                       })
@@ -24030,6 +24972,12 @@ function TrendView(props: {
       option,
       trendFlow,
       vehicleNameOf,
+      /*
+       * ⚠️ 這裡只取 `.points[0]`（一個數值），單位用不到——但涵蓋仍然要照實傳。
+       *   2026-09-25 第六輪把這個參數改成必填之後才看到這一處沒傳：
+       *   今天用不到不代表明天用不到，而「今天用不到」正是當初漏掉的理由。
+       */
+      coverageOf([record]),
     ).points[0];
   };
   const seriesLabel = metricLabel(metric, metricOption, vehicleNameOf);
@@ -25869,8 +26817,14 @@ function TrendView(props: {
                     );
                   })
                   .join("\n\n");
+                /* ⚠️ 2026-09-25：可選鏈短路整條鏈，連 .catch 都不會跑——
+                   按下去完全沒反應。理由詳見結論草稿那一顆的註解。 */
+                if (!navigator.clipboard?.writeText)
+                  return props.notify(
+                    "這個瀏覽器不允許程式複製，請手動選取說明文字後複製。",
+                  );
                 navigator.clipboard
-                  ?.writeText(text)
+                  .writeText(text)
                   .then(function () {
                     props.notify("說明文字已複製，可直接貼進簡報備忘稿。");
                   })

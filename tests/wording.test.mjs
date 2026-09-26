@@ -73,3 +73,100 @@ test("使用者看得到的字串不可以用右邊／左邊／上面的／下�
   }
   assert.deepEqual(bad, [], "這些句子用了位置代稱，請改寫成區塊或按鈕名稱：\n" + bad.map((b) => "  " + b).join("\n"));
 });
+
+/*
+ * ══════════════════════════════════════════════════════════════════
+ *  引用《2022 年臺灣公路容量手冊》4.5.1.3 時不可以寫成「要求／規定」
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * ⚠️ 2026-09-25 第六輪抓到：註解寫「公路容量手冊 4.5.1.3 還特別**要求**
+ *   『評估現況宜根據尖峰 15 分鐘之需求流率』」——被引用的那句話自己用的是
+ *   **「宜」**，那是建議，不是要求。而同一支程式給使用者看的那一段
+ *   （`調查格距異常` 的解決方式）寫的是「建議／鼓勵」：
+ *   **同一份程式對同一句話給了兩種力度**，而註解是下一個人改程式時看的那一份。
+ *
+ * ⚠️ 姊妹系統全日交通量同一段文字有三處，其中一處在**使用者看得到的字串裡**。
+ *   三支同一條規則。
+ *
+ * ⚠️ 樣式刻意只鎖 `4.5.1.3` 這一節：別的章節本來就有真正的「規定」
+ *   （容量、服務水準門檻），整本禁字會在正確的敘述上變紅
+ *   ——交通服務水準的手冊就有一段正確地寫著「手冊規範的是…、它沒有規定…」。
+ */
+test("引用公路容量手冊 4.5.1.3 時，力度必須是「建議／鼓勵」而不是「要求／規定」", () => {
+  /*
+   * ⚠️ 不可以有 `\n` 排除：正規化之後整段是一行，句子由「。」切開。
+   * ⚠️ 負向後查不可以省：正確的敘述裡會出現「那是建議，**不是規定**」
+   *   這種句子，少了 (?<!不是) 會把正解自己抓成違規——
+   *   這一組系統已經在別的守門上踩過同一個坑（`FULL 不要求完整調查日`）。
+   */
+  const OVERSTATED =
+    /4\.5\.1\.3[^。]{0,40}?(?<!不是)(?<!沒有)(?<!不)(要求|明文|規定)/;
+  const DOCS = [
+    "../app",
+    "../lib",
+    "../PROJECT_HANDOFF.md",
+    "../VALIDATION_REPORT.md",
+    "../README.md",
+    "../【更新說明】請先讀我.txt",
+    "../scripts/manual/manual.html",
+  ];
+  const bad = [];
+  /*
+   * ⚠️ **一定要先把換行正規化再掃**。第一版是逐行掃的，而那段註解長這樣：
+   *     *   …公路容量手冊 4.5.1.3
+   *     *   還特別要求「評估現況宜根據…」
+   *   「4.5.1.3」與「要求」分在兩行，逐行掃**永遠抓不到**——
+   *   我自己的反證就是這樣沒有變紅的（第六輪，同一個會話裡第三次）。
+   *   作法：把行首的註解符號與換行都換成一個空白，再依「。」切句。
+   */
+  const scan = (label, text) => {
+    const flat = text
+      .replace(/\r/g, "")
+      .replace(/\n[ \t]*\*[ \t]*/g, " ")
+      .replace(/\n[ \t]*/g, " ");
+    for (const sentence of flat.split("。")) {
+      /* 記錄「原本寫錯」的更正註記本身不算違規。 */
+      if (/更正|原本寫|不可以寫成|第六輪|樣式抓不到|被抓成違規/.test(sentence))
+        continue;
+      const hit = OVERSTATED.exec(sentence);
+      if (hit) bad.push(`${label}：…${hit[0]}…`);
+    }
+  };
+  for (const entry of DOCS) {
+    const path = fileURLToPath(new URL(entry, HERE));
+    if (statSync(path).isDirectory())
+      for (const file of walkAll(path)) scan(file.replace(path, ""), readFileSync(file, "utf8"));
+    else scan(entry.replace("../", ""), readFileSync(path, "utf8"));
+  }
+  assert.deepEqual(
+    bad,
+    [],
+    "被引用的那句話用的是「宜」（建議），這幾處把它講成要求／規定：\n  " +
+      bad.join("\n  "),
+  );
+  /* 前置檢查：樣式真的抓得到已知的舊寫法，否則這一支等於沒在守。 */
+  for (const sample of [
+    "公路容量手冊 4.5.1.3 還特別要求「評估現況宜根據尖峰 15 分鐘之需求流率」",
+    "2022 年臺灣公路容量手冊 4.5.1.3 明文要求「評估現況宜根據",
+  ])
+    assert.match(sample, OVERSTATED, "樣式抓不到已知的舊寫法");
+  /* 反面：正確的寫法不可以被抓。 */
+  for (const good of [
+    "公路容量手冊 4.5.1.3 還特別建議評估現況根據尖峰 15 分鐘的需求流率",
+    "公路容量手冊 4.5.1.3 建議用尖峰 15 分鐘的流率；那是建議，不是規定",
+    "公路容量手冊 4.5.1.3 不要求一定要拆到 15 分鐘",
+  ])
+    assert.doesNotMatch(good, OVERSTATED, `正確的寫法被抓成違規了：${good}`);
+});
+
+/** 遞迴列出目錄底下所有原始檔（含 .md／.html，供上面那一支使用）。 */
+function walkAll(dir) {
+  const out = [];
+  for (const name of readdirSync(dir)) {
+    if (name === "node_modules" || name.startsWith(".")) continue;
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) out.push(...walkAll(full));
+    else if (/\.(tsx?|mjs|js|md|txt|html)$/.test(full)) out.push(full);
+  }
+  return out;
+}

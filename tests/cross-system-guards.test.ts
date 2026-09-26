@@ -14,7 +14,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import * as XLSX from "xlsx";
 import {
   inspectWorkbook,
@@ -23,14 +23,107 @@ import {
 } from "../lib/traffic.ts";
 
 const REAL = new URL("../../realdata/", import.meta.url);
-const hasRealData = (() => {
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  真實檔的尋找方式（A9，2026-09-23 重寫）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 舊版把路徑寫死成 `batch2/11535T1502…xls`：只要使用者換一批資料、
+ * 或資料夾改個名字，下面三支就**永遠 skip**——在有真實檔的機器上也一樣。
+ * 使用者 2026-09-21 的原話：
+ *   「我不是提供了一堆真實調查資料檔給你了嗎，這一點要修正什麼??」
+ * 要修的是測試程式，不是他的資料。
+ *
+ * 改成：遞迴掃 `realdata/` 底下**實際存在**的試算表，再用檔名片段去找。
+ * ⚠️ 找不到那一份仍然 skip，而且 skip 的訊息要**說出找的是什麼**——
+ *   「沒有真實檔」與「有真實檔但不是這一份」是兩件不同的事，
+ *   訊息寫清楚才不會下次又有人以為這幾支跑過了。
+ */
+function walk(dir: URL): URL[] {
+  let entries: import("node:fs").Dirent[];
   try {
-    readFileSync(new URL("batch2/11535T1502左楠路  後昌路口.xls", REAL));
-    return true;
+    entries = readdirSync(dir, { withFileTypes: true });
   } catch {
-    return false;
+    return [];
   }
-})();
+  const out: URL[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith("~$")) continue;
+    const child = new URL(
+      entry.name + (entry.isDirectory() ? "/" : ""),
+      dir,
+    );
+    if (entry.isDirectory()) out.push(...walk(child));
+    else if (/\.xlsx?$/i.test(entry.name)) out.push(child);
+  }
+  return out;
+}
+
+const REAL_FILES = walk(REAL);
+const hasRealData = REAL_FILES.length > 0;
+
+/** 依檔名片段找一份真實檔；找不到回 null（呼叫端 skip 並說明）。 */
+function realFile(fragment: string): URL | null {
+  return (
+    REAL_FILES.find((url) =>
+      decodeURIComponent(url.pathname).includes(fragment),
+    ) ?? null
+  );
+}
+
+/** skip 的說明：分清楚「一份都沒有」與「有、但不是這一份」。 */
+function whySkipped(fragment: string) {
+  return hasRealData
+    ? `這台機器上有 ${REAL_FILES.length} 份真實檔，但沒有檔名含「${fragment}」的那一份`
+    : "這台機器上沒有真實調查檔";
+}
+
+/*
+ * ⚠️ 這一支**對所有找得到的真實檔都跑**，不挑檔案。
+ *
+ * 上面那三支驗的是特定檔案的黃金值（換一批資料就沒得驗），
+ * 這一支驗的是**性質**：一份檔案有幾張日別工作表，就要讀出幾筆，
+ * 平日與假日**絕對不可以被合併成一筆**。合併時總量守恆，
+ * 任何以總量為基礎的檢查都抓不到，畫面只會顯示匯入成功——
+ * 那正是這一區最嚴重的那個 bug。有真實檔就一定驗得到。
+ */
+test(
+  "⚠️ 所有真實檔：有幾張日別工作表就要讀出幾筆，平日與假日不可合併",
+  { skip: hasRealData ? false : "這台機器上沒有真實調查檔" },
+  async () => {
+    let checked = 0;
+    for (const url of REAL_FILES) {
+      const bytes = readFileSync(url);
+      const name = decodeURIComponent(url.pathname).split("/").pop() as string;
+      const workbook = XLSX.read(bytes, { type: "buffer" });
+      const daySheets = workbook.SheetNames.filter((sheet) =>
+        isDayTypeSheetName(sheet),
+      );
+      if (daySheets.length < 2) continue;
+      const previews = await inspectWorkbookVariants(new File([bytes], name));
+      assert.equal(
+        previews.length,
+        daySheets.length,
+        `「${name}」有 ${daySheets.length} 張日別工作表，卻只讀出 ${previews.length} 筆——` +
+          "兩天被加在一起時總量守恆，任何以總量為基礎的檢查都抓不到",
+      );
+      const days = previews.map((preview) => preview.surveyType);
+      assert.equal(
+        new Set(days).size,
+        days.length,
+        `「${name}」讀出重複的日別：${days.join("、")}`,
+      );
+      checked += 1;
+    }
+    /* ⚠️ 一份都沒驗到卻變綠，是這一類測試最常見的假通過。 */
+    assert.ok(
+      checked > 0,
+      `找到 ${REAL_FILES.length} 份真實檔，但沒有一份含兩張以上的日別工作表，這一支等於什麼都沒驗`,
+    );
+    console.log(`  ↳ 逐檔檢查了 ${checked} 份含平假日兩張工作表的真實檔`);
+  },
+);
 
 /** 只有機車一個車種、值放在第一個時距的最小轉向表。 */
 async function readOneCell(value: unknown) {
@@ -79,16 +172,18 @@ test("分頁名稱前後有空白時仍要判定為平日／假日資料頁", ()
     assert.equal(isDayTypeSheetName(name), false, `「${name}」不應判定為資料頁`);
 });
 
-test("前導空白不得讓平日與假日被合併成一筆", { skip: !hasRealData }, async () => {
+const LEAD_FILE = realFile("11535T1502");
+test(
+  "前導空白不得讓平日與假日被合併成一筆",
+  { skip: LEAD_FILE ? false : whySkipped("11535T1502") },
+  async () => {
   /*
    * 這是本輪最嚴重的一項：不是少讀一天，而是**兩天被加在一起**。
    * daySheets 數不到 2 就退回單一 inspectWorkbook，它把所有資料頁依時間
    * 疊加，平日的量因此被算進假日那一筆。總量守恆，所以任何以總量為基礎的
    * 檢查都抓不到，畫面只顯示匯入成功。
    */
-  const source = readFileSync(
-    new URL("batch2/11535T1502左楠路  後昌路口.xls", REAL),
-  );
+  const source = readFileSync(LEAD_FILE as URL);
   async function totals(rename: Record<string, string>) {
     const wb = XLSX.read(source, { type: "buffer" });
     wb.SheetNames = wb.SheetNames.map((n) => rename[n] ?? n);
@@ -121,7 +216,8 @@ test("前導空白不得讓平日與假日被合併成一筆", { skip: !hasRealD
     base.map((x) => x.sum).sort((a, b) => a - b),
     "前導空白不得改變任何一天的車輛數",
   );
-});
+  },
+);
 
 /* ── M6／M7：儲存格判讀要與全日交通量一致 ── */
 
@@ -158,9 +254,10 @@ test("橫線佔位符按 0 輛處理但不警告，其餘壞資料仍要警告",
 
 /* ── M9：非內建車種不得被依欄位位置強制歸類 ── */
 
+const M9_FILE = realFile("11535T1503");
 test(
   "表頭寫非內建車種時要保留原名，不可依欄位位置併入內建車種",
-  { skip: !hasRealData },
+  { skip: M9_FILE ? false : whySkipped("11535T1503") },
   async () => {
     /*
      * 11535T1503 的四個支線區塊裡，前兩塊寫「大型車／特種車」，
@@ -169,9 +266,7 @@ test(
      * 使用者定的規則是「不認得的車種維持自訂、由使用者自行歸類」，
      * 全日交通量一直是這樣做的（vehicleCounts 裡是 custom:大貨車）。
      */
-    const file = readFileSync(
-      new URL("batch2/11535T1503後昌路 宏毅二路、中油大門路口.xls", REAL),
-    );
+    const file = readFileSync(M9_FILE as URL);
     const previews = await inspectWorkbookVariants(
       new File([file], "11535T1503後昌路 宏毅二路、中油大門路口.xls"),
     );
@@ -199,9 +294,10 @@ test(
   },
 );
 
+const POS_FILE = realFile("11017T1501");
 test(
   "表頭殘留舊值、但車種名稱都是內建的四種時，仍要靠欄位位置救回來",
-  { skip: !hasRealData },
+  { skip: POS_FILE ? false : whySkipped("11017T1501") },
   async () => {
     /*
      * 反面確認：位置推定不能因為 M9 而被整組拿掉。
@@ -211,7 +307,7 @@ test(
      */
     const name = "11017T1501中山北路岡山路口七叉路口.xlsx";
     const preview = await inspectWorkbook(
-      new File([readFileSync(new URL("batch1/" + name, REAL))], name),
+      new File([readFileSync(POS_FILE as URL)], name),
     );
     const byVehicle: Record<string, number> = {};
     for (const column of preview.columns) {

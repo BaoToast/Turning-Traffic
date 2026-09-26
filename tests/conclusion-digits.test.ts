@@ -71,7 +71,19 @@ test("跨季度變動幅度的百分比也要跟著走", () => {
       },
       META,
     );
-    for (const value of percentages(text))
+    const values = percentages(text);
+    /*
+     * ⚠️ 2026-09-25 補上長度斷言。舊寫法直接 for…of，而 describeGrowth
+     *   在「基期讀不到／被 NaN 濾掉」時一句百分比都不產 → 迴圈跑 0 次
+     *   → 這一支**恆綠**。也就是真正壞掉的時候守門一定是綠的
+     *   （第一支測試有這道斷言，第二支漏了）。
+     */
+    assert.ok(
+      values.length > 0,
+      `digits=${digits} 的變動幅度應該要有百分比可以檢查；一個都沒有表示` +
+        `草稿沒寫出變動幅度（或指標被改名），這一支就失去保護力了`,
+    );
+    for (const value of values)
       assert.equal(
         decimalsOf(value),
         digits,

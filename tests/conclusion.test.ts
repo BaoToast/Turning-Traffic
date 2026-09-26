@@ -11,11 +11,13 @@ import {
   type ConclusionCondition,
   type ConclusionMetricKey,
   type ConclusionRecord,
+  type ConclusionScopeKey,
 } from "../lib/conclusion.ts";
 
 /* 樣本紀錄與 meta 抽到 helpers，跨系統守門測試共用同一份形狀。 */
 import {
   CONCLUSION_META as META,
+  CONCLUSION_META,
   makeRecord,
 } from "./helpers/conclusion-record.ts";
 
@@ -581,7 +583,19 @@ test("缺值寫成「—」，不會變成 0 或 NaN", () => {
   assert.match(text, /駛入 — PCU\/hr/);
   assert.doesNotMatch(text, /NaN/);
   assert.match(text, /沒有逐流向（OD）資料/);
-  assert.match(text, /全日數值需要完整 24 小時調查資料/);
+  /*
+   * ⚠️ 2026-09-23 改：這一句原本寫「全日數值需要完整 24 小時調查資料」，
+   *   而那是**錯的原因**——`inflowFullDayVehicles` 為 null 的唯一成因是
+   *   「這一筆沒有逐支線的駛入／駛出明細」（本案例正是 routeless），
+   *   涵蓋時數不足並不會讓它變成 null（24 小時門檻 2026-09-11 已移除）。
+   *   照原本那樣寫，使用者會去補調查時數，而那補不出東西來。
+   */
+  assert.match(text, /沒有逐支線的駛入／駛出明細，算不出全調查時段流量/);
+  assert.doesNotMatch(
+    text,
+    /需要完整 24 小時調查資料/,
+    "又把「要滿 24 小時」寫回去了——那不是這個欄位為 null 的原因",
+  );
 });
 
 test("條件挑不到資料時給的是可行動的說明，不是空白", () => {
@@ -834,15 +848,115 @@ test("舊範本缺 peaks 欄位時，仍然補上預設的上午＋下午", () =
   assert.deepEqual(normalized.peaks, DEFAULT_CONDITION.peaks);
 });
 
-test("不勾時段又只選了尖峰底下的項目時，明講產生不出東西", () => {
+test("四個時段都不勾又只選了時段底下的項目時，明講產生不出東西", () => {
   const record = makeRecord({ station: "T15-01", quarter: "115Q2" });
   const text = buildConclusion([record], {
     ...DEFAULT_CONDITION,
     peaks: [],
     metrics: ["total", "inflowPcu"],
   }, META);
-  assert.match(text, /沒有勾選任何時段/);
+  assert.match(text, /一個都沒有勾/);
+  /*
+   * ⚠️ 這句話要把**四個**時段的名字都寫出來。
+   *   v2.1.80 的版本只叫使用者「去勾一個尖峰時段」，而使用者要的
+   *   「全調查時段」當時根本不是一顆可以勾的東西。
+   */
+  for (const label of [
+    "上午尖峰",
+    "下午尖峰",
+    "全調查時段",
+    "全調查時段尖峰",
+  ])
+    assert.ok(text.includes(label), `提示沒有寫出「${label}」：${text}`);
   assert.match(text, /車種組成/);
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  A14／A17：「全調查時段」是第四個可以勾的選項，而且真的接得上數字
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-21：「正確做法應該是把全調查時段做為第 4 個可勾選選項吧?」
+ */
+test("⚠️ 勾「全調查時段」要寫得出數字，而且單位不可以是 /hr", () => {
+  const record = makeRecord({ station: "T15-01", quarter: "115Q2" });
+  record.peaks.FULL = {
+    window: "實測 4 小時（非 24 小時）",
+    totalPcu: 12345,
+    totalVehicles: 20000,
+    branches: [
+      {
+        code: "A",
+        name: "路口A",
+        outboundByVehicleSafe: null,
+        inflowByVehicleSafe: null,
+        twoWayByVehicleSafe: null,
+        directionDisplay: "split",
+        inflowPcu: 3000,
+        outflowPcu: 3000,
+        inflowVehicles: 5000,
+        outflowVehicles: 5000,
+        inflowFullDayVehicles: null,
+        outflowFullDayVehicles: null,
+      },
+    ],
+  };
+  const text = buildConclusion(
+    [record],
+    { ...DEFAULT_CONDITION, peaks: ["FULL"], metrics: ["total", "inflowPcu"] },
+    META,
+  );
+  assert.match(text, /全調查時段/);
+  assert.match(text, /12,345\.0 PCU\/調查時段/);
+  assert.doesNotMatch(
+    text,
+    /12,345\.0 PCU\/hr/,
+    "把整段的累計量寫成一小時的流率——這句話會被抄進報告",
+  );
+  assert.match(text, /20,000 輛\/調查時段/);
+});
+
+test("⚠️ 上午尖峰與全調查時段可以同時勾（舊版做不到）", () => {
+  const record = makeRecord({ station: "T15-01", quarter: "115Q2" });
+  record.peaks.FULL = {
+    window: "實測 4 小時（非 24 小時）",
+    totalPcu: 12345,
+    totalVehicles: 20000,
+    branches: [],
+  };
+  const text = buildConclusion(
+    [record],
+    { ...DEFAULT_CONDITION, peaks: ["AM", "FULL"], metrics: ["total"] },
+    META,
+  );
+  assert.match(text, /上午尖峰/);
+  assert.match(text, /全調查時段/);
+  assert.match(
+    text,
+    /不可以相加/,
+    "同時出現兩種單位卻沒有提醒不可相加",
+  );
+});
+
+test("⚠️ 混合 24 小時與部分時段紀錄時，單位說明要列出正文實際使用的兩種分母", () => {
+  const full = makeRecord({ station: "T15-01", quarter: "115Q2" });
+  const partial = makeRecord({ station: "T15-02", quarter: "115Q2" });
+  full.surveyCoverage = "full";
+  partial.surveyCoverage = "partial";
+  for (const record of [full, partial])
+    record.peaks.FULL = {
+      window: "全調查時段",
+      totalPcu: 1000,
+      totalVehicles: 1500,
+      branches: [],
+    };
+  const text = buildConclusion(
+    [full, partial],
+    { ...DEFAULT_CONDITION, peaks: ["FULL"], metrics: ["total"] },
+    META,
+  );
+  for (const unit of ["PCU／調查日", "PCU／調查時段", "輛／調查日", "輛／調查時段"])
+    assert.match(text, new RegExp(unit), `單位說明漏掉 ${unit}`);
 });
 
 test("有勾時段時，行為與原本完全相同", () => {
@@ -1024,4 +1138,404 @@ test("大小寫算不同的名稱（排版差異吸收，內容差異不吸收�
   /* 不同的名字當然還是不同 */
   assert.notEqual(typedNameKey("路口A"), typedNameKey("路口B"));
   assert.notEqual(typedNameKey("神農路口"), typedNameKey("路口A"));
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  A15：支線篩選必須真的對「車種組成」生效
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-21 回報：「勾選路口A或B或全選，文字結果都一樣」，
+ * 而草稿抬頭同時印著「只敘述指定支線：路口 B」。
+ * 抬頭說有篩、內容沒篩，整個路口的數字會被當成該支線的數字抄進報告。
+ */
+test("⚠️ 勾了支線，車種組成要跟著換數字，不可以照印路口合計", () => {
+  const record = makeRecord({ station: "T15-01", quarter: "115Q2" });
+  record.compositionByBranch = [
+    {
+      code: "A",
+      name: "路口A",
+      items: [
+        { label: "機車", count: 1000 },
+        { label: "小型車", count: 400 },
+      ],
+    },
+    {
+      code: "B",
+      name: "路口B",
+      items: [
+        { label: "機車", count: 3131 },
+        { label: "小型車", count: 1366 },
+      ],
+    },
+  ];
+  const base = { ...DEFAULT_CONDITION, peaks: [], metrics: ["composition"] as const };
+  const all = buildConclusion([record], { ...base, metrics: ["composition"] }, META);
+  const onlyA = buildConclusion(
+    [record],
+    { ...base, metrics: ["composition"], branchNames: ["路口A"] },
+    META,
+  );
+  const onlyB = buildConclusion(
+    [record],
+    { ...base, metrics: ["composition"], branchNames: ["路口B"] },
+    META,
+  );
+  assert.notEqual(onlyA, onlyB, "勾不同支線寫出一模一樣的字");
+  assert.notEqual(onlyA, all, "勾了支線和全選寫出一模一樣的字");
+  assert.match(onlyA, /1,000/);
+  assert.doesNotMatch(onlyA, /3,131/, "路口A 的段落裡出現了路口B 的數量");
+  assert.match(onlyB, /3,131/);
+  assert.doesNotMatch(onlyB, /1,000 /, "路口B 的段落裡出現了路口A 的數量");
+});
+
+test("⚠️ 篩不了的時候要講出來，不可以靜靜地印路口合計", () => {
+  const record = makeRecord({ station: "T15-01", quarter: "115Q2" });
+  record.compositionByBranch = null; /* 雙向合計呈現，沒有可安全相加的逐支線值 */
+  const text = buildConclusion(
+    [record],
+    {
+      ...DEFAULT_CONDITION,
+      peaks: [],
+      metrics: ["composition"],
+      branchNames: ["路口A"],
+    },
+    META,
+  );
+  assert.match(
+    text,
+    /沒有依指定支線篩選/,
+    "抬頭寫著只敘述指定支線，內容卻是路口合計，而且沒有任何說明",
+  );
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  A18：混合勾選的組合測試（測試盲區）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 2026-09-21 的盤點結果：這支檔案原本有 54 項測試，
+ * 其中「一次勾 3 項以上」的組合**只有 1 項**，而且時段只勾過
+ * ["AM"] 與 ["AM","PM"]，**沒有一支勾過第三個**。
+ *
+ * 三個真實缺陷（A14、A15、A17）全部躲在同一個盲區裡：
+ *   ・A17：`peaks` 只建了 AM 與 PM，勾「全調查時段尖峰」永遠沒數字
+ *   ・A15：支線篩選對「車種組成」無效（測試只用會吃篩選的 inflowPcu）
+ *   ・A14：「不勾時段」的測試用的 metrics 全是時段底下的，
+ *          從來沒測過「一個不依附時段的＋幾個依附時段的」混合
+ *
+ * ⚠️ **只斷言「草稿不是空的」不算數**——出事的那幾份草稿本來就不是空的。
+ *   這裡逐一斷言**每一個勾起來的項目都真的寫出來了**。
+ */
+
+/** 造一筆四個時段都有資料、而且逐支線車種也有的紀錄。 */
+function fullRecord() {
+  const record = makeRecord({ station: "T15-09", quarter: "115Q2" });
+  const branch = (code: string, name: string, base: number) => ({
+    code,
+    name,
+    outboundByVehicleSafe: [
+      { label: "機車", count: base * 2 },
+      { label: "小型車", count: base },
+    ],
+    inflowByVehicleSafe: [
+      { label: "機車", count: base * 3 },
+      { label: "小型車", count: base },
+    ],
+    twoWayByVehicleSafe: null,
+    directionDisplay: "split" as const,
+    inflowPcu: base,
+    outflowPcu: base + 10,
+    inflowVehicles: base * 4,
+    outflowVehicles: base * 4 + 10,
+    inflowFullDayVehicles: base * 20,
+    outflowFullDayVehicles: base * 20,
+  });
+  for (const [key, label] of [
+    ["AM", "07:00–08:00"],
+    ["PM", "17:00–18:00"],
+    ["DAY", "17:15–18:15"],
+    ["FULL", "實測 12 小時（非 24 小時）"],
+  ] as const) {
+    record.peaks[key] = {
+      window: label,
+      totalPcu: 1000,
+      totalVehicles: 4000,
+      branches: [branch("A", "路口A", 100), branch("B", "路口B", 300)],
+    };
+  }
+  record.compositionByBranch = [
+    { code: "A", name: "路口A", items: [{ label: "機車", count: 1000 }] },
+    { code: "B", name: "路口B", items: [{ label: "小型車", count: 2222 }] },
+  ];
+  return record;
+}
+
+test("⚠️ 四個時段全勾：每一個都要寫出來，而且單位各自正確", () => {
+  const text = buildConclusion(
+    [fullRecord()],
+    {
+      ...DEFAULT_CONDITION,
+      peaks: ["AM", "PM", "FULL", "DAY"],
+      metrics: ["total", "peakHour"],
+    },
+    META,
+  );
+  for (const label of ["上午尖峰", "下午尖峰", "全調查時段", "全調查時段尖峰"])
+    assert.ok(text.includes(label), `草稿裡沒有「${label}」`);
+  assert.match(text, /PCU\/調查時段/, "全調查時段寫成了 /hr");
+  assert.match(text, /PCU\/hr/, "尖峰的單位不見了");
+  assert.doesNotMatch(
+    text,
+    /這一筆沒有(上午尖峰|下午尖峰|全調查時段|全調查時段尖峰)的資料/,
+    "有時段接在空的地方——勾了卻永遠得不到數字",
+  );
+});
+
+test("⚠️ 混合勾選：依附時段的與不依附時段的一起勾，兩邊都要寫出來", () => {
+  /*
+   * 使用者實際踩到的組合：時段＋車種組成＋各支線各車種駛入／駛出＋支線篩選。
+   */
+  const text = buildConclusion(
+    [fullRecord()],
+    {
+      ...DEFAULT_CONDITION,
+      peaks: ["AM", "FULL"],
+      branchNames: ["路口B"],
+      metrics: [
+        /* 不依附時段 */
+        "composition",
+        /* 依附時段 */
+        "total",
+        "inflowPcu",
+        "branchCompositionIn",
+        "branchCompositionOut",
+      ],
+    },
+    META,
+  );
+  /* 每一個勾起來的項目都要真的出現。 */
+  assert.match(text, /車種組成/, "勾了車種組成卻沒有寫");
+  assert.match(text, /總流量/, "勾了路口總流量卻沒有寫");
+  assert.match(text, /駛入 /, "勾了各支線駛入流量卻沒有寫");
+  assert.match(text, /上午尖峰/);
+  assert.match(text, /全調查時段/);
+  /* 支線篩選要真的生效（A15）：路口B 的 2,222 要在、路口A 的 1,000 不可以在。 */
+  assert.match(text, /2,222/, "支線篩選沒有套到車種組成上");
+  assert.doesNotMatch(
+    text,
+    /1,000 輛/,
+    "勾了路口B，草稿裡卻出現路口A 的車種數量",
+  );
+  /* 同時寫駛入與駛出時要提醒不可相加（A20）。 */
+  assert.match(text, /不可以相加/, "同時寫兩個方向卻沒有提醒");
+});
+
+test("⚠️ 只勾不依附時段的項目、時段一個都不勾：仍要產得出內容", () => {
+  /*
+   * 這是 A14 之前那個隱藏狀態的替代路徑：時段都不勾是允許的，
+   * 但「要寫哪些數字」裡得有不依附時段的項目。
+   * 舊測試用的 metrics 全是時段底下的，從來沒測過這一條真的走得通。
+   */
+  const text = buildConclusion(
+    [fullRecord()],
+    { ...DEFAULT_CONDITION, peaks: [], metrics: ["composition"] },
+    META,
+  );
+  assert.match(text, /車種組成/);
+  assert.doesNotMatch(
+    text,
+    /一個都沒有勾/,
+    "勾了不依附時段的項目，卻還是說產不出東西",
+  );
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  尖峰時段判定方式：各方向各自認定（使用者 2026-09-23 核准新增）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 舊版的結論草稿一律以「整個調查點同一時段」計算，並在草稿裡明講做不到
+ * 另一種，理由寫著「一筆紀錄裝不下三份」。那個理由是錯的——`peaks` 本來
+ * 就按時段分開存，每一個時段可以各自吃自己那一份重挑過的紀錄。
+ *
+ * 這一組守三件事：
+ *   ① 預設（point）時輸出與改版前**逐字相同**——一個字都不可以多。
+ *   ② 選 direction 時每一條支線要寫出自己的視窗，而且要印出不可相加的警告。
+ *   ③ 算不出自己視窗的支線要**明講算不出來**，不可以靜靜地沿用路口的視窗。
+ */
+function withPeakWindows(
+  windows: Record<string, string | null | undefined>,
+): ConclusionRecord {
+  const record = makeRecord({ station: "A00T00-01", quarter: "115Q2" });
+  for (const scope of ["AM", "PM"] as const)
+    for (const branch of record.peaks[scope]!.branches)
+      branch.peakWindow = windows[branch.code];
+  return record;
+}
+
+const PEAK_RULE_CONDITION = {
+  ...DEFAULT_CONDITION,
+  scope: { kind: "project" as const },
+  peaks: ["AM"] as ConclusionScopeKey[],
+  metrics: ["total", "inflowPcu", "peakHour"] as ConclusionMetricKey[],
+  grouping: "byIntersection" as const,
+};
+
+test("⚠️ 預設「整個調查點同一時段」時，輸出與改版前逐字相同", () => {
+  const text = buildConclusion(
+    [makeRecord({ station: "A00T00-01", quarter: "115Q2" })],
+    { ...PEAK_RULE_CONDITION, peakRule: "point" },
+    CONCLUSION_META,
+  );
+  assert.match(text, /07:15–08:15/, "路口層級的尖峰視窗不見了");
+  assert.doesNotMatch(text, /自己最忙/, "沒選各方向各自認定卻寫了支線視窗");
+  assert.doesNotMatch(text, /算不出這條支線/, "沒選各方向各自認定卻寫了算不出來");
+  assert.match(
+    text,
+    /尖峰時段判定方式：整個調查點同一時段/,
+    "草稿沒有寫出用的是哪一種判定方式",
+  );
+  assert.doesNotMatch(text, /不適用「相加」/, "可以相加的那一種不該印不可相加的警告");
+});
+
+test("⚠️ 選「各方向各自認定」時，每一條支線要寫出自己最忙的時段", () => {
+  const text = buildConclusion(
+    [withPeakWindows({ A: "07:15–08:15", B: "17:30–18:30" })],
+    { ...PEAK_RULE_CONDITION, peakRule: "direction" },
+    CONCLUSION_META,
+  );
+  assert.match(text, /路口A（自己最忙 07:15–08:15）/, text);
+  assert.match(text, /路口B（自己最忙 17:30–18:30）/, text);
+});
+
+test("⚠️ 選「各方向各自認定」時，一定要印出「不可以相加」", () => {
+  const text = buildConclusion(
+    [withPeakWindows({ A: "07:15–08:15", B: "17:30–18:30" })],
+    { ...PEAK_RULE_CONDITION, peakRule: "direction" },
+    CONCLUSION_META,
+  );
+  /*
+   * 這是這個判定方式最容易被誤讀的地方：各支線的尖峰不在同一小時，
+   * 加起來不是任何一個時刻的量。畫面與報告文字草稿都印著同一句警告，
+   * 結論草稿不可以是唯一沒印的那一個。
+   */
+  assert.match(text, /本數值不適用「相加」/, text);
+  assert.match(text, /各方向各自認定自己的尖峰/, text);
+});
+
+test("⚠️ 算不出自己視窗的支線要明講，不可以靜靜沿用整個路口的視窗", () => {
+  const text = buildConclusion(
+    [withPeakWindows({ A: "07:15–08:15", B: null })],
+    { ...PEAK_RULE_CONDITION, peakRule: "direction" },
+    CONCLUSION_META,
+  );
+  assert.match(text, /路口A（自己最忙 07:15–08:15）/, text);
+  assert.match(
+    text,
+    /路口B（這一筆算不出這條支線自己的尖峰，改用整個路口的時段）/,
+    "算不出來卻沒說——讀者會以為它和路口A 走同一個視窗\n" + text,
+  );
+});
+
+test("⚠️ 舊範本沒有 peakRule 欄位時，回「整個調查點同一時段」", () => {
+  const withoutRule: Record<string, unknown> = {
+    ...(PEAK_RULE_CONDITION as Record<string, unknown>),
+  };
+  delete withoutRule.peakRule;
+  assert.equal(
+    normalizeCondition(withoutRule as never).peakRule,
+    "point",
+    "舊範本套用之後突然換了一套數字",
+  );
+  assert.equal(normalizeCondition({ peakRule: "亂寫" } as never).peakRule, "point");
+  assert.equal(
+    normalizeCondition({ peakRule: "direction" } as never).peakRule,
+    "direction",
+  );
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  支線佔比的車輛數版本（使用者 2026-09-23 核准新增）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 「各路口駛入／駛出流量」那張表在「顯示數值＝車輛數＋百分比」時，
+ * 百分比是拿**車輛數**算的；草稿的 shareIn／shareOut 永遠拿 PCU 算。
+ * 同一個支線、同一個時段，兩種分母算出來是不同的數字——
+ * 表格查得到，草稿寫不出來。
+ */
+test("⚠️ 支線佔比的車輛數版本，分母是總車輛數不是總 PCU", () => {
+  const record = makeRecord({ station: "A00T00-01", quarter: "115Q2" });
+  const text = buildConclusion(
+    [record],
+    {
+      ...PEAK_RULE_CONDITION,
+      metrics: ["shareInVehicles", "shareOutVehicles"] as ConclusionMetricKey[],
+    },
+    CONCLUSION_META,
+  );
+  /*
+   * 樣本：AM 的 totalVehicles = 6012；路口A 駛入 741、駛出 556。
+   *   741 / 6012 = 12.3%   556 / 6012 = 9.2%
+   * 若誤用 totalPcu（1000）當分母會得到 74.1%／55.6%——差很多，一看就分得出來。
+   */
+  assert.match(text, /路口A：佔駛入車輛數 12\.3%；佔駛出車輛數 9\.2%/, text);
+  assert.doesNotMatch(text, /74\.1%|55\.6%/, "分母用成 PCU 了");
+});
+
+test("⚠️ 車輛數版本與 PCU 版本要分得出來，不可以都寫「佔駛入」", () => {
+  const text = buildConclusion(
+    [makeRecord({ station: "A00T00-01", quarter: "115Q2" })],
+    {
+      ...PEAK_RULE_CONDITION,
+      metrics: [
+        "shareIn",
+        "shareInVehicles",
+      ] as ConclusionMetricKey[],
+    },
+    CONCLUSION_META,
+  );
+  /* 同一行裡兩個不同分母的百分比並排，名稱一定要不同。 */
+  assert.match(text, /佔駛入 40\.0%/, text);
+  assert.match(text, /佔駛入車輛數 12\.3%/, text);
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  分析範圍要寫「涵蓋 N 個調查日」（使用者 2026-09-23 核准新增）
+ * ══════════════════════════════════════════════════════════════════════
+ */
+test("⚠️ 同一天做的多個路口只算一個調查日", () => {
+  const text = buildConclusion(
+    [
+      makeRecord({ station: "A00T00-01", quarter: "115Q2", surveyDate: "2026-05-12" }),
+      makeRecord({ station: "A00T00-02", quarter: "115Q2", surveyDate: "2026-05-12", intersectionKey: "K2" }),
+      makeRecord({ station: "A00T00-03", quarter: "115Q2", surveyDate: "2026-05-19", intersectionKey: "K3" }),
+    ],
+    PEAK_RULE_CONDITION,
+    CONCLUSION_META,
+  );
+  assert.match(text, /共 3 筆調查紀錄（涵蓋 2 個調查日）/, text);
+});
+
+test("⚠️ 讀不到日期的紀錄不計入，而且要講出來", () => {
+  const text = buildConclusion(
+    [
+      makeRecord({ station: "A00T00-01", quarter: "115Q2", surveyDate: "2026-05-12" }),
+      makeRecord({ station: "A00T00-02", quarter: "115Q2", intersectionKey: "K2" }),
+    ],
+    PEAK_RULE_CONDITION,
+    CONCLUSION_META,
+  );
+  assert.match(text, /涵蓋 1 個調查日，另有 1 筆讀不到調查日期/, text);
+});
+
+test("⚠️ 一筆日期都讀不到時整段不寫，不可以寫「0 個調查日」", () => {
+  const text = buildConclusion(
+    [makeRecord({ station: "A00T00-01", quarter: "115Q2" })],
+    PEAK_RULE_CONDITION,
+    CONCLUSION_META,
+  );
+  assert.doesNotMatch(text, /調查日/, text);
 });

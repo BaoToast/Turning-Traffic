@@ -14,105 +14,8 @@ import {
   DRAFT_SECTION_ORDER,
   buildReportDraft,
   type DraftSectionKey,
-  type ReportDraftContext,
 } from "../lib/report-draft.ts";
-
-function context(overrides: Partial<ReportDraftContext> = {}): ReportDraftContext {
-  return {
-    projectName: "測試計畫",
-    quarterRange: "115Q1～115Q4",
-    quarterCount: 4,
-    intersectionCount: 2,
-    recordCount: 8,
-    focusLabel: "中正路口（115Q4、平日）",
-    peaks: { am: "07:30–08:30", pm: "17:15–18:15" },
-    siteOmitted: 0,
-    routelessRecords: 0,
-    siteSummaries: [
-      {
-        name: "中正路口 115Q4（平日）",
-        peaks: [
-          {
-            label: "上午尖峰",
-            hour: "07:30–08:30",
-            total: 2900.6,
-            arms: [
-              { name: "路口A", outbound: 1200.5, inbound: 1000.6 },
-              { name: "路口B", outbound: 900.1, inbound: 1100 },
-            ],
-            vehicles: [
-              { label: "機車", share: 52.1 },
-              { label: "小型車", share: 39.1 },
-            ],
-          },
-          {
-            label: "下午尖峰",
-            hour: "17:15–18:15",
-            total: 2720.9,
-            arms: [{ name: "路口A", outbound: 1100.2, inbound: 990.9 }],
-            vehicles: [],
-          },
-        ],
-      },
-    ],
-    outbound: [
-      { name: "路口A", am: 1200.5, pm: 1100.2 },
-      { name: "路口B", am: 900.1, pm: 880.4 },
-      { name: "路口C", am: 500, pm: 460.3 },
-      { name: "路口D", am: 300, pm: 280 },
-    ],
-    inbound: [
-      { name: "路口B", am: 1100, pm: 1050 },
-      { name: "路口A", am: 1000.6, pm: 990.9 },
-      { name: "路口C", am: 500, pm: 400 },
-      { name: "路口D", am: 300, pm: 280 },
-    ],
-    totals: { am: 2900.6, pm: 2720.9 },
-    flowTotals: {
-      outboundAm: 2900.6,
-      outboundPm: 2720.9,
-      inboundAm: 2900.6,
-      inboundPm: 2720.9,
-    },
-    vehicles: [
-      { label: "機車", count: 12000, share: 52.1 },
-      { label: "小型車", count: 9000, share: 39.1 },
-    ],
-    compositionScope: "全調查時段",
-    compositionUnit: "輛/調查時段",
-    trend: [
-      { quarter: "115Q3", am: 2500, pm: 2400 },
-      { quarter: "115Q4", am: 2900.6, pm: 2720.9 },
-    ],
-    trendLabel: "中正路口／平日",
-    compare: [
-      { name: "中正路口 115Q4（平日）", am: 2900.6, pm: 2720.9 },
-      { name: "民生路口 115Q4（平日）", am: 1800, pm: 1750 },
-    ],
-    compareIntersections: 2,
-    topFlow: {
-      station: "T-01 115Q4",
-      peak: "AM",
-      from: "路口A",
-      to: "路口C",
-      pcu: 640.5,
-    },
-    worstBalance: {
-      station: "T-01 115Q4",
-      peak: "AM",
-      name: "路口B",
-      difference: 0,
-    },
-    conservation: { checked: 16, passed: 16 },
-    quality: { total: 0, errors: 0, warnings: 0, topCategories: [] },
-    factors: [
-      { label: "機車", left: 0.5, through: 0.3, right: 0.4 },
-      { label: "小型車", left: 1.5, through: 1, right: 1.3 },
-    ],
-    factorMatrixCount: 1,
-    ...overrides,
-  };
-}
+import { context } from "./helpers/report-context.ts";
 
 const ALL: DraftSectionKey[] = DRAFT_SECTION_ORDER;
 
@@ -337,7 +240,14 @@ test("全部勾選時，每一個段落都會出現在草稿裡", () => {
   assert.match(text, /各支線駛出尖峰流量（駛出路口X＝以支線 X 為起點/);
   assert.match(text, /各支線駛入尖峰流量（駛入路口X＝以支線 X 為終點/);
   assert.match(text, /路口轉向總量：上午尖峰 2,900.6 PCU\/hr/);
-  assert.match(text, /OD 轉向矩陣中流量最高的一筆為 T-01 115Q4 AM 尖峰的 路口A → 路口C，640.5/);
+  /*
+   * ⚠️ 2026-09-23 改：`peak` 現在傳的是**顯示名稱**（「AM Peak」
+   *   「全調查時段尖峰」），不是內部鍵值。舊版傳 "DAY" 時草稿會印成
+   *   「DAY 尖峰」——那在這個系統裡不是任何一個名詞，而 Excel 的
+   *   「OD轉向矩陣」同一列寫的是「全調查時段尖峰」。
+   *   同時把後綴那兩個字拿掉並改用括號，否則會變成「全調查時段尖峰 尖峰」。
+   */
+  assert.match(text, /OD 轉向矩陣中流量最高的一筆為 T-01 115Q4（AM 尖峰）的 路口A → 路口C，640.5/);
   assert.match(text, /支線流量平衡檢核：全部支線的駛入與駛出差值皆為 0/);
   assert.match(text, /守恆檢核共檢查 16 組，通過 16 組。/);
   assert.match(text, /車種組成（中正路口（115Q4、平日），全調查時段）：機車 52.1%（12,000 輛\/調查時段）/);
@@ -351,7 +261,7 @@ test("全部勾選時，每一個段落都會出現在草稿裡", () => {
 
 test("各路口分項結果會逐個路口、逐個尖峰寫出", () => {
   const text = buildReportDraft(context(), ["sites"]);
-  assert.match(text, /各路口分項結果（每一筆路口季度資料各自的尖峰時段與流量/);
+  assert.match(text, /各路口分項結果（每一筆路口季度資料各自寫出四個統計範圍/);
   assert.match(text, /【中正路口 115Q4（平日）】/);
   assert.match(
     text,
@@ -444,14 +354,15 @@ test("支線平衡有差值時會指出是哪一個路口、哪一個時段的�
     context({
       worstBalance: {
         station: "T-02 115Q3",
-        peak: "PM",
+        /* ⚠️ 顯示名稱，不是內部鍵值（見 helpers/report-context.ts 的說明）。 */
+        peak: "PM 尖峰",
         name: "路口D",
         difference: -42.5,
       },
     }),
     ["branchBalance"],
   );
-  assert.match(text, /差值最大的是 T-02 115Q3 PM 尖峰的 路口D，駛入減駛出 -42.5 PCU\/hr/);
+  assert.match(text, /差值最大的是 T-02 115Q3（PM 尖峰）的 路口D，駛入減駛出 -42.5 PCU\/hr/);
 });
 
 test("多組當量矩陣時不會列出單一組係數", () => {
@@ -612,4 +523,195 @@ test("⚠️ 稽核表 I 對照組：正常情況下不可以出現那句警告"
     "沒有落到退路卻警告＝噪音",
   );
   assert.match(text, /支線與車種的敘述以 中正路口（115Q4、平日） 為代表/);
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  A23：報表文字草稿也要寫「全調查時段」與「全調查時段尖峰」
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-21：「這 4 個名詞是我們交通調查的 4 個核心」。
+ * v2.1.80 的 siteSummaries 走 PEAK_KEYS（三個），少了 FULL＝全調查時段，
+ * 於是報表草稿從頭到尾不會出現那一段，而結論草稿有——
+ * 同一份資料，兩份草稿講的東西不一樣。
+ */
+test("⚠️ 全調查時段那一段的單位不可以寫成 PCU/hr", () => {
+  const text = buildReportDraft(
+    context({
+    siteSummaries: [
+      {
+        name: "中正路口 115Q4（平日）",
+        peaks: [
+          {
+            label: "全調查時段",
+            hour: "實測 4 小時（非 24 小時）",
+            unit: "PCU/調查時段",
+            total: 24463.3,
+            arms: [{ name: "路口A", outbound: 12000, inbound: 12463.3 }],
+            vehicles: [],
+          },
+        ],
+      },
+    ],
+    }),
+    ["sites"],
+  );
+  assert.match(text, /全調查時段/);
+  assert.match(text, /24,463\.3 PCU／調查時段|24,463\.3 PCU\/調查時段/);
+  assert.doesNotMatch(
+    text,
+    /24,463\.3 PCU\/hr/,
+    "把整段的累計量寫成一小時的流率——這句話會被抄進報告",
+  );
+  assert.match(
+    text,
+    /不可以相加/,
+    "兩種單位並存卻沒有提醒不可相加",
+  );
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  宣告的單位必須就是這一份草稿真的印出來的單位
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 2026-09-23 的獨立複查抓到：`"scope"` 那一段有一句
+ *     「草稿裡每一句各自標明自己的單位（PCU/hr、輛、%）」
+ * 是**寫死的**。v2.1.82 把 `siteSummaries` 由 3 個尖峰擴成 4 個統計範圍
+ * 之後，草稿會印出 `PCU/調查時段`（甚至 `PCU/調查日`），
+ * 而這句話說那些單位不存在——**同一份草稿前一句宣告、下一句就打臉**。
+ *
+ * ⚠️ 既有的那幾支測試看不到，因為它們只渲染 `["sites"]` 一段，
+ *   碰不到 `"scope"` 段那句宣告。這裡兩段一起渲染。
+ * ⚠️ 結論草稿（lib/conclusion.ts 的 unitsInUse）2026-09-21 就改對了；
+ *   這是「同一件事有兩條路，只修了一條」的又一例。
+ */
+test("⚠️ scope 段宣告的單位，就是 sites 段真的印出來的那幾個", () => {
+  const ctx = context();
+  /* 前置：這份 context 至少要有一個不是 /hr 的單位，否則下面恆真。 */
+  const units = ctx.siteSummaries
+    .flatMap((site) => site.peaks)
+    .filter((peak) => peak.available !== false)
+    .map((peak) => peak.unit)
+    .filter(Boolean);
+  assert.ok(
+    units.some((unit) => !String(unit).endsWith("/hr")),
+    `測資裡每一個單位都是 /hr（${[...new Set(units)].join("、")}），` +
+      "這樣下面驗不到東西——請讓測資含一個「全調查時段」的單位",
+  );
+
+  const text = buildReportDraft(ctx, ["scope", "sites"]);
+  const declared = text.match(/各自標明自己的單位（([^）]+)）/)?.[1];
+  assert.ok(declared, `找不到那句單位宣告：\n${text}`);
+  const declaredSet = new Set(declared.split("、"));
+  const missing = [...new Set(units)].filter(
+    (unit) => !declaredSet.has(String(unit)),
+  );
+  assert.deepEqual(
+    missing,
+    [],
+    `草稿印出了這些單位，但開頭那句宣告沒有列到：${missing.join("、")}\n` +
+      `宣告的是：${declared}\n` +
+      "宣告與實際對不起來的話，抄進報告的人會以為系統算錯了。",
+  );
+});
+
+test("⚠️ sites 段的抬頭不可以把「全調查時段」的單位寫死", () => {
+  const text = buildReportDraft(context(), ["sites"]);
+  const head = text.split("\n").find((line) => line.includes("全調查時段"));
+  assert.ok(head, "找不到 sites 段的抬頭");
+  assert.ok(
+    !/累計量（PCU／調查時段）/.test(head),
+    "抬頭又把單位寫死了——「全調查時段」滿 24 小時的時候是 PCU／調查日，" +
+      "寫死會和下一行實際印出來的對不起來",
+  );
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  報表草稿補齊四個核心統計範圍（使用者 2026-09-23 核准新增）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 「這 4 個名詞是我們交通調查的 4 個核心」（使用者 2026-09-21）。
+ * 各支線流量表本來就四個範圍都列得出來，報表文字草稿卻只寫 AM 與 PM——
+ * 表格查得到，草稿寫不出來。
+ *
+ * ⚠️ 這一組同時守反方向：**缺值時輸出與改版前逐字相同**。
+ *   舊備份、舊測資與沒有逐條流向的紀錄都沒有這兩個欄位，
+ *   多寫一個 0 會被讀成「這個範圍沒有車」。
+ */
+test("⚠️ 四個統計範圍都有值時，各支線與合計都要寫出來，單位各自正確", () => {
+  const c = {
+    ...context(),
+    outbound: [
+      { name: "路口A", am: 400, pm: 500, day: 520, full: 8000 },
+      { name: "路口B", am: 600, pm: 700, day: 720, full: 9000 },
+    ],
+    inbound: [
+      { name: "路口A", am: 380, pm: 490, day: 510, full: 7900 },
+      { name: "路口B", am: 620, pm: 710, day: 730, full: 9100 },
+    ],
+    totals: { am: 1000, pm: 1200, day: 1240, full: 17000 },
+    scopeUnits: {
+      am: "PCU/hr",
+      pm: "PCU/hr",
+      day: "PCU/hr",
+      full: "PCU/調查時段",
+    },
+    flowTotals: {
+      outboundAm: 1000,
+      outboundPm: 1200,
+      inboundAm: 1000,
+      inboundPm: 1200,
+      outboundDay: 1240,
+      outboundFull: 17000,
+      inboundDay: 1240,
+      inboundFull: 17000,
+    },
+  };
+  const text = buildReportDraft(c, ALL);
+  assert.match(text, /全調查時段尖峰 520\.0 PCU\/hr/, text);
+  assert.match(text, /全調查時段 8,000\.0 PCU\/調查時段/, text);
+  assert.match(text, /全調查時段尖峰 1,240\.0 PCU\/hr/, text);
+  assert.match(text, /全調查時段 17,000\.0 PCU\/調查時段/, text);
+  /* 累計量不可以被標成一小時的流率。 */
+  assert.doesNotMatch(
+    text,
+    /全調查時段 (8,000|17,000)\.0 PCU\/hr/,
+    "把整段調查的累計量標成一小時的流率",
+  );
+});
+
+test("⚠️ 沒有那兩個範圍時，輸出與改版前逐字相同（不可以多寫 0）", () => {
+  const text = buildReportDraft(context(), ALL);
+  assert.doesNotMatch(text, /全調查時段尖峰 0/, text);
+  assert.doesNotMatch(
+    text,
+    /各支線駛出合計：[^。]*全調查時段/,
+    "沒有值卻寫了全調查時段合計",
+  );
+  /* 舊格式那一句要原封不動。 */
+  assert.match(text, /各支線駛出合計：上午 [\d,.]+、下午 [\d,.]+ PCU\/hr/, text);
+});
+
+test("⚠️ 任何一條支線算不出來時，整個合計要是 null（不可以當成 0 加進去）", () => {
+  /*
+   * 這是守恆檢查最危險的一種假訊號：兩邊各缺不同的支線時會得到假的
+   * 「不守恆」警報；剛好缺同幾條時會得到假的「守恆」保證。
+   * 所以 sumBy 在畫面端就回 null，草稿看到 null 整段不寫。
+   */
+  const c = {
+    ...context(),
+    outbound: [
+      { name: "路口A", am: 400, pm: 500, full: 8000 },
+      { name: "路口B", am: 600, pm: 700, full: null },
+    ],
+  };
+  const text = buildReportDraft(c, ALL);
+  assert.doesNotMatch(
+    text,
+    /路口B（[^）]*全調查時段/,
+    "算不出來的支線卻寫了全調查時段的值",
+  );
+  assert.match(text, /路口A（[^）]*全調查時段 8,000\.0/, text);
 });

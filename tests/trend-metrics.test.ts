@@ -296,7 +296,15 @@ test("講稿裡的數字必須逐字等於 series 算出來的值", () => {
       ],
     }),
   ];
-  const series = buildMetricSeries(rows, trendMetricById("total"), "AM", {}, "outbound");
+  const series = buildMetricSeries(
+    rows,
+    trendMetricById("total"),
+    "AM",
+    {},
+    "outbound",
+    undefined,
+    "unknown",
+  );
   const script = trendScript(series, {
     intersectionName: "示範一路－示範二路口",
     surveyType: "平日",
@@ -317,7 +325,15 @@ test("有季度算不出來時，講稿一定要主動講出來是哪一季、�
     makeRecord({ quarter: "114Q2", fullDay: false }),
     makeRecord({ quarter: "114Q3" }),
   ];
-  const series = buildMetricSeries(rows, trendMetricById("total"), "DAY", {}, "outbound");
+  const series = buildMetricSeries(
+    rows,
+    trendMetricById("total"),
+    "DAY",
+    {},
+    "outbound",
+    undefined,
+    "unknown",
+  );
   const script = trendScript(series, {
     intersectionName: "示範一路－示範二路口",
     surveyType: "平日",
@@ -333,7 +349,15 @@ test("有季度算不出來時，講稿一定要主動講出來是哪一季、�
 
 test("沒有問題時，注意事項不可以亂講一句", () => {
   const rows = ["114Q1", "114Q2", "114Q3", "114Q4"].map((q) => makeRecord({ quarter: q }));
-  const series = buildMetricSeries(rows, trendMetricById("total"), "AM", {}, "outbound");
+  const series = buildMetricSeries(
+    rows,
+    trendMetricById("total"),
+    "AM",
+    {},
+    "outbound",
+    undefined,
+    "unknown",
+  );
   const caveats = trendScript(series, {
     intersectionName: "示範一路－示範二路口",
     surveyType: "平日",
@@ -352,6 +376,8 @@ test("只有一季有值時，不可以講成「上升」或「下降」", () =>
     "AM",
     {},
     "outbound",
+    undefined,
+    "unknown",
   );
   const body = trendScript(series, {
     intersectionName: "示範一路－示範二路口",
@@ -365,7 +391,15 @@ test("只有一季有值時，不可以講成「上升」或「下降」", () =>
 
 test("駛出與駛入對不起來時，講稿要說在補齊之前兩種視角不可以混著講", () => {
   const rows = ["114Q1", "114Q2"].map((q) => makeRecord({ quarter: q }));
-  const series = buildMetricSeries(rows, trendMetricById("total"), "AM", {}, "outbound");
+  const series = buildMetricSeries(
+    rows,
+    trendMetricById("total"),
+    "AM",
+    {},
+    "outbound",
+    undefined,
+    "unknown",
+  );
   const text = trendScript(series, {
     intersectionName: "示範一路－示範二路口",
     surveyType: "平日",
@@ -445,7 +479,7 @@ test("趨勢圖的單位必須與全系統的 scopeUnit() 完全一致", () => {
    */
   for (const metric of TREND_METRICS) {
     for (const scope of [...SCOPE_KEYS, "FULL"] as ScopeKey[]) {
-      const actual = metricUnit(metric, scope);
+      const actual = metricUnit(metric, scope, "unknown");
       if (metric.unit === "%") {
         assert.equal(actual, "%", `${metric.id}／${scope}`);
         continue;
@@ -453,6 +487,7 @@ test("趨勢圖的單位必須與全系統的 scopeUnit() 完全一致", () => {
       const expected = scopeUnit(
         scope,
         metric.unit === "vehicle" ? "vehicle" : "pcu",
+        "unknown",
       );
       assert.equal(actual, expected, `${metric.id}／${scope}`);
     }
@@ -462,16 +497,16 @@ test("趨勢圖的單位必須與全系統的 scopeUnit() 完全一致", () => {
 test("尖峰的車輛數單位一定要是「輛/hr」，全調查時段才是累計量", () => {
   /* 把上一項的重點單獨釘一次，紅字訊息才看得懂是哪一種組合錯了。 */
   const vehicles = TREND_METRICS.find((metric) => metric.id === "vehicles")!;
-  assert.equal(metricUnit(vehicles, "AM"), "輛/hr");
-  assert.equal(metricUnit(vehicles, "PM"), "輛/hr");
-  assert.equal(metricUnit(vehicles, "DAY"), "輛/hr");
-  assert.notEqual(metricUnit(vehicles, "AM"), "輛");
+  assert.equal(metricUnit(vehicles, "AM", "unknown"), "輛/hr");
+  assert.equal(metricUnit(vehicles, "PM", "unknown"), "輛/hr");
+  assert.equal(metricUnit(vehicles, "DAY", "unknown"), "輛/hr");
+  assert.notEqual(metricUnit(vehicles, "AM", "unknown"), "輛");
   /*
    * ⚠️ 歷季趨勢天生是混合的：同一張圖上可能有 24 小時的季度，也有只做
    *   4 小時的季度。所以預設分母是「調查時段」——**寧可少講，不要多講**。
    *   整批都滿 24 小時時，呼叫端傳 "full" 才會寫「調查日」。
    */
-  assert.equal(metricUnit(vehicles, "FULL"), "輛/調查時段");
+  assert.equal(metricUnit(vehicles, "FULL", "unknown"), "輛/調查時段");
   assert.equal(metricUnit(vehicles, "FULL", "full"), "輛/調查日");
   assert.equal(metricUnit(vehicles, "FULL", "partial"), "輛/調查時段");
   assert.equal(metricUnit(vehicles, "FULL", "mixed"), "輛/調查時段");

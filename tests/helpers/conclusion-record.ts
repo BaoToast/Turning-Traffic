@@ -28,6 +28,8 @@ export function makeRecord(over: Partial<ConclusionRecord> = {}): ConclusionReco
     routeless: false,
     compositionScope: "全調查時段",
     compositionUnit: "輛/調查時段",
+    /* 逐支線車種（駛入）——支線篩選要靠它，沒有就是 null。 */
+    compositionByBranch: null,
     composition: [
       { label: "機車", count: 4131 },
       { label: "小型車", count: 1766 },

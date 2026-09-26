@@ -57,10 +57,18 @@ test("正式轉向圖的三個下載，檔名寫的是圖上那個時段", () =>
 test("轉向進階分析：頁首的單位、畫面與匯出，三者同一個時段", () => {
   const page = blockFrom('{view === "advanced"', '{view === "conclusion"');
   /* 註解已被剝掉，所以中間會多出空白行——用寬鬆一點的比對。 */
+  /*
+   * ⚠️ 2026-09-25 第六輪：這一條原本釘 `{scopeUnit(advancedPeak)}`，
+   *   也就是**沒有帶涵蓋**的寫法。守「時段對不對」是對的，但順手把
+   *   「不帶涵蓋」一起釘住了，於是補上涵蓋反而會紅。
+   *   現在只要求第一個參數是 `advancedPeak`，並另外要求第三個參數
+   *   是這一頁自己算的涵蓋。
+   */
   assert.match(
     page,
-    /流量單位隨所選時段變動（目前為[\s\S]{0,120}?\{scopeUnit\(advancedPeak\)\}）。/,
-    "頁首那一行還在讀主工具列的時段，會與下面每一塊的單位標籤不一致",
+    /流量單位隨所選時段變動（目前為[\s\S]{0,160}?\{scopeUnit\(advancedPeak,\s*"pcu",\s*advancedCoverage\)\}）。/,
+    "頁首那一行還在讀主工具列的時段、或沒有帶這一頁的調查涵蓋，" +
+      "都會與下面每一塊的單位標籤不一致",
   );
   /* 畫面與匯出要走同一支，兩邊各寫一份遲早分岔。 */
   assert.match(source, /const advancedRecordFor = useCallback\(/);
@@ -88,9 +96,11 @@ test("轉向進階分析：頁首的單位、畫面與匯出，三者同一個�
 test("歷季趨勢的講稿與圖，單位是同一個", () => {
   /*
    * buildMetricSeries 的 unit 走 metricUnit(metric, scope, coverage)。
-   * 不帶 coverage 時走安全預設「調查時段」，而圖與 Excel 是拿
-   * coverageOf(rows) 算的——整批都是 24 小時的調查時，
-   * 圖寫「PCU/調查日」、講稿寫「PCU/調查時段」，同一批數字兩種單位。
+   * 涵蓋要與圖、Excel 同一個來源（`coverageOf(rows)`），否則整批都是
+   * 24 小時的調查時，圖寫「PCU/調查日」、講稿寫「PCU/調查時段」，
+   * 同一批數字兩種單位。
+   * ⚠️ 2026-09-25 第六輪：`coverage` 已經改成**必填**（原本這裡寫「不帶時走
+   *   安全預設」——那個預設值就是這一類不一致的來源，已經拿掉）。
    */
   const block = blockFrom("const scriptSeries = buildMetricSeries(", "const scriptSections");
   assert.match(block, /coverageOf\(rows\),/, "講稿的 series 沒有帶調查涵蓋");

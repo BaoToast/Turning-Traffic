@@ -87,7 +87,20 @@ test("匯入頁不再展示「調查檔格式範本」與「已記住的實際�
    * 「有沒有照範圍產生欄位」與「單位有沒有跟著範圍走」。
    */
   assert.match(appSource, /\$\{label\} 駛入量（\$\{pcu\}）/);
-  assert.match(appSource, /const pcu = scopeUnit\(scope\);/);
+  /*
+   * ⚠️ 2026-09-25 第六輪：這一條原本釘的是 `scopeUnit(scope)`——**沒有涵蓋**的
+   *   那個寫法。等於用正面斷言把缺陷釘住：日後有人補上涵蓋，這一支會紅，
+   *   而它紅的時候是對的修正被擋下來。現在改成釘「一定要帶整批的涵蓋」。
+   */
+  assert.match(
+    appSource,
+    /const pcu = scopeUnit\(scope, "pcu", exportCoverage\);/,
+  );
+  assert.match(
+    appSource,
+    /const exportCoverage = coverageOf\(exportRecords\.map\(viewRecord\)\);/,
+    "匯出的欄名單位不是從整批資料算涵蓋——逐列算會讓同一張表長出兩組欄位",
+  );
   /*
    * 「這份調查有沒有滿 24 小時」全系統只有 coversFullDay 說了算。
    * 舊版是就地寫 `record.survey.minutes < 24 * 60`，同一個門檻散在好幾處，

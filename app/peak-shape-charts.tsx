@@ -56,8 +56,14 @@ function CopyNote(props: { title: string; lines: string[]; notify: (v: string) =
           className="ghost"
           onClick={function () {
             const text = props.title + "\n\n" + props.lines.join("\n");
+            /* ⚠️ 2026-09-25：可選鏈短路整條鏈（連 .catch 都不會跑），
+               按下去完全沒反應而使用者以為複製成功了。先明確判斷。 */
+            if (!navigator.clipboard?.writeText)
+              return props.notify(
+                "這個瀏覽器不允許程式複製，請手動選取說明文字後複製。",
+              );
             navigator.clipboard
-              ?.writeText(text)
+              .writeText(text)
               .then(function () {
                 props.notify("說明文字已複製，可直接貼進報告。");
               })
