@@ -444,7 +444,10 @@ GitHub 證據：
 - 最終 Pages 主資產為 `assets/index-CaAh6Y_H.js`，本機 SHA-256
   `AB62AF30F2FF97235C2135BBEE06851F2777BAD309172CE259D5B9521FF9E88C`；手冊本機 SHA-256
   `E51EE7731BD15974E37CF2F9F1AE921C87D57B0B244C80046C0A3B6E8AEC041C`。
-  正式提交、GitHub Actions、Pages 與線上雜湊以本節後續發布紀錄及當下遠端為準。
+  正式功能／發布 commit 為 `8950a43beaeeae3a95478d04e39a88be9ca58593`；GitHub「建置與測試」
+  run `36223858013` 與 `pages build and deployment` run `36223857611` 均成功。
+  帶版號首頁回應 200；首頁、五個正式資產與 v2.1.83 手冊的線上 SHA-256 均與本機一致，
+  主 JS 含 `v2.1.83`；舊 v2.1.80 主資產與手冊均為 404。
 
 ### 12.7 正式發布
 
