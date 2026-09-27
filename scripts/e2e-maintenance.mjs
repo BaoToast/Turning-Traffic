@@ -419,21 +419,60 @@ ok(
 const gotoRow = resolutions.findIndex((item) => item.goto);
 ok("④ 至少有一列給了「前往某分頁」的按鈕", gotoRow >= 0);
 if (gotoRow >= 0) {
-  const viewBefore = await page.evaluate(
-    () => document.querySelector("h1")?.textContent?.trim() ?? "",
-  );
-  await page
+  /*
+   * ⚠️ 2026-09-26 改成**每一顆都點**，不是只點第一顆。
+   *
+   *   舊寫法用 `.first()`，於是清單裡第二顆之後的按鈕從來沒被按過。
+   *   實際後果：`view: "params"`（正確的側欄 id 是 `parameters`）這個寫錯的
+   *   值從 v2.1.60 左右就在那裡，那顆按鈕按下去什麼都不會發生，
+   *   而這一支一直是綠的——因為它剛好不是第一顆。
+   *   寫錯的 view id **不會有任何錯誤訊息**，所以只能靠真的按下去才看得到。
+   * ⚠️ 每按一顆就要回到資料維護頁再按下一顆，否則第二次點擊時清單已經不在畫面上。
+   */
+  const gotoCount = await page
     .locator("#quality-reasons .issue-list > div .resolution-goto")
-    .first()
-    .click();
-  await page.waitForTimeout(900);
-  const viewAfter = await page.evaluate(
-    () => document.querySelector("h1")?.textContent?.trim() ?? "",
+    .count();
+  ok(
+    "前置：數得出有幾顆「前往…」按鈕（0 顆的話下面恆真）",
+    gotoCount > 0,
+    `${gotoCount} 顆`,
+  );
+  const landed = [];
+  for (let index = 0; index < gotoCount; index += 1) {
+    const viewBefore = await page.evaluate(
+      () => document.querySelector("h1")?.textContent?.trim() ?? "",
+    );
+    const button = page
+      .locator("#quality-reasons .issue-list > div .resolution-goto")
+      .nth(index);
+    const label = (await button.textContent())?.trim() ?? "";
+    await button.click();
+    await page.waitForTimeout(900);
+    const viewAfter = await page.evaluate(
+      () => document.querySelector("h1")?.textContent?.trim() ?? "",
+    );
+    landed.push({ index, label, viewBefore, viewAfter });
+    /* 回到資料維護頁，才點得到下一顆。 */
+    await gotoPage("資料維護");
+    await page.locator('[data-testid="quality-run"]').click();
+    await page.waitForTimeout(1400);
+  }
+  const dead = landed.filter(
+    (item) => item.viewAfter === item.viewBefore || item.viewAfter.length === 0,
   );
   ok(
-    "⚠️ ④ 按「前往…」真的換到那一頁（不是一顆裝飾用的按鈕）",
-    viewAfter !== viewBefore && viewAfter.length > 0,
-    `${viewBefore} → ${viewAfter}`,
+    "⚠️ ④ 每一顆「前往…」都真的換到那一頁（不是裝飾用的按鈕）",
+    dead.length === 0,
+    dead.length
+      ? dead
+          .map(
+            (item) =>
+              `第 ${item.index + 1} 顆「${item.label}」：${item.viewBefore} → ${item.viewAfter || "（沒有換頁）"}`,
+          )
+          .join("；")
+      : landed
+          .map((item) => `${item.label}→${item.viewAfter}`)
+          .join("、"),
   );
   /*
    * 回到資料維護頁，後面的檢查才接得下去。

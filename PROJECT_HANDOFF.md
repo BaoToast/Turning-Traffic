@@ -449,7 +449,37 @@ GitHub 證據：
   帶版號首頁回應 200；首頁、五個正式資產與 v2.1.83 手冊的線上 SHA-256 均與本機一致，
   主 JS 含 `v2.1.83`；舊 v2.1.80 主資產與手冊均為 404。
 
-### 12.7 正式發布
+### 12.7 v2.1.84 高風險複查與發布驗證
+
+2026-09-27 以 Claude 的 v2.1.84 完整專案 ZIP（SHA-256
+`2AD9006307E88D26BD5E2A499EB9AE886CDD04322A78F4C1F7123E119F94910E`）、說明包及使用者的
+本機資料庫逾時回報為輸入。因候選版涉及結論單位、格長追溯、UI、匯出、發布守門與持久化，
+依高風險規則複查完整專案及資料流；Claude 的 12 項修正全部另行驗證。
+
+- GPT 另修正 5 類缺口：資料尚未載入前可操作空主畫面；逾時誤報成權限封鎖且沒有重試；
+  UI 遺留的混合格長平均值；PM 草稿誤取 AM 單位；以及安全讀取閘門導致舊 SSR 守門失效。
+- IndexedDB 第一次逾時會自動重試一次；慢載入期間只顯示不可操作閘門；兩次逾時與真正的
+  權限封鎖分成兩個畫面。截圖只證明逾時，真正根因仍未知，不得宣稱一定是其他分頁或 Cookie。
+- `surveyIntervalDescription()` 成為 UI／Excel 的共用格長文字來源；固定格長維持原格式，
+  混用格長列實際值，沒有逐格資料時不猜。交通量、PCU、尖峰與流向計算未變，
+  `LAST_CALC_CHANGE_VERSION` 維持 v2.1.83。
+- 乾淨 `npm ci` 成功：509 packages added、510 audited。字面 `npm test` 全綠：`.mjs` 260／260；
+  TypeScript 382 項中 378 通過、4 項因缺特定真實附件條件式略過；0 失敗；lint、glyph guard、
+  TypeScript 與 production build 均通過。
+- `npm run e2e` 以不得並行的正式順序完成：83 支瀏覽器腳本＋2 個種子流程＝85 個步驟，
+  1,770 個成功檢查、0 失敗；真實附件別名情境 1 項明確略過。`npm run e2e:tryout` 另行通過。
+- 手冊 v2.1.84 共 20 頁，已重新產生並完整點陣化檢視；三份正式副本逐位元相同，SHA-256
+  `C920D91D4A613A459EEEE9C6EA16C6FCB2B8BADAA79BF55F65F7D079B4937FB4`。
+- 最新完整 `npm audit` 為 10 項開發／建置工具鏈警示（4 moderate、6 high、0 critical），
+  未執行破壞性的強制升級。
+- 本輪沒有取得 4 項 TypeScript 條件式測試與 1 項別名 E2E 所需的特定真實附件，也沒有重新用
+  桌面 Microsoft Excel／桌面 PDF 閱讀器開啟匯出成果；不得把條件式略過或 v2.1.79 的
+  Office／Foxit 歷史證據描述成本輪通過。E2E 已驗證 10 張工作表、OOXML／原生圖表結構。
+- 正式資產：`assets/index-BVpTE_5l.js` SHA-256
+  `4BEDEEAD7C80DA82A4A71B0BFD556D94E98F667D8DB8474CE25E2089189D4736`；其餘完整資產雜湊見
+  `【更新說明】請先讀我.txt`。正式 commit、Actions、Pages 與 live hash 待發布後回填。
+
+### 12.8 正式發布
 
 1. 先完成本節全部必要驗證。
 2. 若升版，依 `DEPLOYMENT.md` 同步：`VERSION`／`VERSION_HISTORY`、package/lock、手冊 HTML/產製檔名/頁尾、UI 連結、CHANGELOG、PDF；刪除所有舊版手冊。

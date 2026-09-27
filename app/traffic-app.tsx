@@ -87,6 +87,8 @@ import {
   round1,
   type NoonSide,
   displayIntersectionName,
+  cellMinutesOf,
+  surveyIntervalDescription,
 } from "../lib/traffic";
 import {
   ANY as SCOPE_ANY,
@@ -163,7 +165,13 @@ import {
   trendChartWidth,
   trendScript,
 } from "../lib/trend-metrics";
-import { loadState, readRawState, saveState } from "../lib/state-storage";
+import {
+  loadState,
+  readRawState,
+  saveState,
+  StorageBlockedError,
+  StorageTimeoutError,
+} from "../lib/state-storage";
 /*
  * ⚠️ 受控數字輸入框**一律**走這一支，不要在畫面上再寫
  *   `<input type="number" value={數字} onChange={…Number(e.target.value)}>`。
@@ -3872,7 +3880,20 @@ function recordFromPreview(
     });
     return {
       start: row.start,
-      end: row.start + Number(item.intervalMinutes || 15),
+      /*
+       * ⚠️ 這一格的長度要用**它自己的**，不是全表眾數（2026-09-26 改）。
+       *
+       *   原本寫 `row.start + Number(item.intervalMinutes || 15)`，
+       *   而 `intervalMinutes` 是整份檔案的**眾數**。格長混用時
+       *  （整點格接 15 分鐘格，正是 v2.1.83 要修的那種版型）
+       *   15 分鐘那幾格會被算成 60 分鐘寬。
+       *   這份 `sourceTrace.intervals` 是「轉向進階分析」兩張尖峰形狀圖的
+       *   資料來源，所以畫出來的格寬與時間範圍都會錯。
+       * ⚠️ `cellMinutesOf()` 就是為這件事存在的：先用匯入時存的長度，
+       *   沒有就從時間欄原始文字回推，都不行才退回眾數（不猜）。
+       *   尖峰挑選（rollingPeak）早就走它了，這裡是漏掉的第四個呼叫點。
+       */
+      end: row.start + cellMinutesOf(row, Number(item.intervalMinutes || 15)),
       pcu: roundedPcu(pcu),
       vehicles,
     };
@@ -6447,7 +6468,9 @@ export default function TrafficApp() {
    * 搶救畫面要講的話完全相反：前者原始資料還在、要先備份；
    * 後者根本沒有資料可備份，該做的是去改瀏覽器設定。
    */
-  const [storageBlocked, setStorageBlocked] = useState(false);
+  const [storageFailure, setStorageFailure] = useState<
+    "blocked" | "timeout" | null
+  >(null);
   const [mobileNav, setMobileNav] = useState(false);
   /*
    * 側欄小分頁的收合狀態（使用者 2026-09-13，三支同步）。
@@ -6682,7 +6705,13 @@ export default function TrafficApp() {
       },
       function (error) {
         if (cancelled) return;
-        setStorageBlocked(true);
+        setStorageFailure(
+          error instanceof StorageTimeoutError
+            ? "timeout"
+            : error instanceof StorageBlockedError
+              ? "blocked"
+              : null,
+        );
         setLoadError(
           error instanceof Error
             ? error.message
@@ -12509,12 +12538,7 @@ export default function TrafficApp() {
               分析範圍: compositionScopeLabel(record, scope),
               時段:
                 scope === "SURVEY"
-                  ? `${record.survey?.intervals || 0} 個 ${Math.round(
-                      (record.survey?.minutes || 0) /
-                        Math.max(1, record.survey?.intervals || 1),
-                    )} 分鐘區間（${((record.survey?.minutes || 0) / 60).toFixed(
-                      1,
-                    )} 小時）`
+                  ? surveyIntervalDescription(record)
                   : scopeWindowLabel(viewRecord(record), scope),
               車種: vehicleLabel(record, vehicleKey),
               單位: compositionScopeUnit(record, scope),
@@ -14247,7 +14271,43 @@ export default function TrafficApp() {
    * 「原始資料仍完整保留」不能保證，按下載鈕也只會再拋一次同樣的例外。
    * 所以這裡分成兩種畫面，講各自該講的話。
    */
-  if (loadError && storageBlocked)
+  if (loadError && storageFailure === "timeout")
+    return (
+      <div className="load-error" data-testid="storage-timeout">
+        <div className="load-error-card">
+          <h1>暫時無法開啟本機資料庫</h1>
+          <p>
+            系統已自動嘗試兩次，但這次仍未能在期限內讀取本機資料。
+            <b>這不代表資料已消失，也沒有刪除或覆蓋任何內容。</b>
+            為了避免您在空白狀態下誤做還原或匯入，這次不會進入主畫面。
+          </p>
+          <p className="load-error-reason">錯誤訊息：{loadError}</p>
+          <p>請依序嘗試：</p>
+          <ul className="load-error-list">
+            <li>先關閉同一網站的其他分頁或視窗，只保留這一個分頁。</li>
+            <li>按下方按鈕重新載入；若仍發生，再完整關閉瀏覽器後重開。</li>
+            <li>
+              若問題持續發生，再把這段錯誤訊息提供給維護人員；目前無法只靠逾時判定真正原因。
+            </li>
+          </ul>
+          <div className="load-error-actions">
+            <button
+              className="primary"
+              onClick={function () {
+                window.location.reload();
+              }}
+            >
+              關閉其他分頁後，重新載入
+            </button>
+          </div>
+          <p className="load-error-note">
+            在資料讀取完成前，請不要建立計畫、匯入資料或還原備份。
+          </p>
+        </div>
+      </div>
+    );
+
+  if (loadError && storageFailure === "blocked")
     return (
       <div className="load-error">
         <div className="load-error-card">
@@ -14342,6 +14402,26 @@ export default function TrafficApp() {
           </div>
           <p className="load-error-note">
             請勿在下載之前按「清除」或重新匯入——那會讓原始資料真的消失。
+          </p>
+        </div>
+      </div>
+    );
+
+  /*
+   * 本機資料尚未讀完時，不可以先畫出一個「空的主程式」。雖然存檔 effect
+   * 有 loaded 閘門，不會用空白覆蓋資料，但使用者會把空畫面理解成資料消失，
+   * 進而還原舊備份或重新匯入。這裡直接擋住整個主畫面與所有資料變更入口。
+   */
+  if (!loaded)
+    return (
+      <div className="load-error" data-testid="storage-loading">
+        <div className="load-error-card">
+          <h1>正在讀取這台電腦上的資料</h1>
+          <p>
+            請稍候，讀取完成前不會顯示空白的主畫面，也不能建立計畫、匯入資料或還原備份。
+          </p>
+          <p>
+            如果第一次開啟較慢，系統會自動再嘗試一次；請不要關閉這個分頁。
           </p>
         </div>
       </div>
@@ -17442,15 +17522,7 @@ export default function TrafficApp() {
                       {compositionScope === "SURVEY"
                         ? selected.survey
                           ? "調查時段合計：" +
-                            selected.survey.intervals +
-                            " 個 " +
-                            Math.round(
-                              selected.survey.minutes /
-                                Math.max(1, selected.survey.intervals),
-                            ) +
-                            " 分鐘區間（" +
-                            (selected.survey.minutes / 60).toFixed(1) +
-                            " 小時）"
+                            surveyIntervalDescription(selected)
                           : "此筆為舊版資料；重新匯入原始檔後可顯示全調查時段組成。"
                         : fullDayUnavailableReason(
                               selected,
@@ -23034,7 +23106,7 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./路口轉向程式手冊_v2.1.83.pdf"
+                    href="./路口轉向程式手冊_v2.1.84.pdf"
                     /*
                      * ⚠️ download 一定要**帶檔名**，不可以只寫 `download`。
                      *
@@ -23051,7 +23123,7 @@ export default function TrafficApp() {
                      *     真正的使用者拿到的就是那個名字。
                      *     把檔名明確寫進 download，兩種情況都正確。
                      */
-                    download="路口轉向程式手冊_v2.1.83.pdf"
+                    download="路口轉向程式手冊_v2.1.84.pdf"
                   >
                     下載新手手冊
                   </a>

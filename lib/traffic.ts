@@ -511,7 +511,15 @@ export function pceMatrixIssue(
         "⚠️ 系統刻意不自己把它改回預設值——當量是您設定的計算參數，" +
         "悄悄套一個「看起來合理的預設」會讓錯誤永遠不被發現。" +
         "確認那幾格本來就要空著的話，請把它們真的清成空白（而不是空格字元）。",
-      view: "params",
+      /*
+       * ⚠️ 側欄的 id 是 `parameters`，不是 `params`（2026-09-26 修）。
+       *   寫錯的 id 不會有任何錯誤訊息，那顆「前往車種轉向當量」按鈕
+       *   按下去**什麼都不會發生**——使用者看到的是「這個按鈕壞了」。
+       *   既有的 e2e 只點**第一顆** `.resolution-goto`，而這一顆一直不是第一顆，
+       *   所以它從來沒被按到（`tests/issue-resolution-view.test.ts` 現在
+       *   逐一比對每一個 view 值都必須是真的側欄 id，e2e 也改成每一顆都點）。
+       */
+      view: "parameters",
       viewLabel: "車種轉向當量",
     },
   };
@@ -1104,7 +1112,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.83";
+export const VERSION = "v2.1.84";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -1249,6 +1257,11 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.84",
+    date: "2026-09-26",
+    note: "Claude 對已發布 v2.1.83 的第二次獨立複查，12 件全部修正並各附反證；GPT 發布前再修正 5 個漏網。**沒有變更任何尖峰、PCU 或轉向計算**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.83，固定計算黃金值不變。會變的是**畫面與匯出上的字樣**，以及兩張尖峰形狀圖的格寬。**(1) 結論草稿同一份文件印兩種單位。** `scopeRateUnit(scope, coverage?)` 與 `scopeVehicleUnit()` 的 coverage 原本是可選的、預設落在「調查時段」，而趨勢句三處、極值句三處共 6 個呼叫點只傳 scope。實測滿 24 小時的資料：同一份草稿「PCU/調查日」2 次、「PCU/調查時段」7 次，而抬頭那一句還宣告「（PCU／調查日、輛／調查日）」——抬頭被自己的正文違反。兩支的 coverage 改必填，跨紀錄的句子新增 `batchCoverage()`（全部 full 才算 full，其餘含混合一律 partial，與 `coverageOf()` 對 mixed 的處置一致）。這是第六輪主線（把預設參數改必填）漏掉的同胞：當時改了 `scopeUnit`／`metricUnit`／`buildMetricSeries`，同一個檔案裡的這兩支沒改。**(2)「根目錄的建置產物不可以比原始碼舊」在交付包上兩半都不做事。** mtime 那一半因「剛解壓的樹」跳過，緊接著的 early return 又因為 `github-pages-dist/` 那一層被排除而直接結束，於是整支報 ok、一個字都沒驗，還印了一句不成立的保證。改成：有發布根目錄就必須有 `github-pages-dist/`（缺了紅），只有 Git checkout（有 `.git/`）才可以跳過。**(3) 手冊份數對不上。** 更新說明寫「三份」而包裡只有兩份；既有守門是遞迴掃全包、驗「找到的每一份都相同」，抓得到漏同步、抓不到少一份。新增「文件寫的份數＝實際檔數」守門（排除建置產物）。**(4)「全調查時段尖峰算不出來」的畫面文字與手冊相反。** 畫面寫「重新匯入原始檔即可」、kind 是重新匯入、view 指向季度批次匯入；手冊寫的是先按「用目前的設定重算」、不必重匯，並列三種成因。而這與本版主線 J2（舊紀錄的格長從時間欄回推）直接矛盾。message 與 resolution 改成與手冊一致（三種成因、先重算後重匯、指向「車種轉向當量」）。**(5) 逐格追溯的 end 用全表眾數。** `traceIntervals` 原本用整份檔案的眾數，格長混用時 15 分鐘的格子會被算成 60 分鐘寬，而它是「轉向進階分析」兩張尖峰形狀圖的資料來源。改走 `cellMinutesOf()`（那是它的第四個呼叫點，原本漏了）。**(6)** v2.1.83 新增的 `coverage-unit-call-sites` 反面斷言只抓全形斜線，而被修掉的字面值是半形；把單位抽成變數再用就完全繞得過去。補一條性質級守門：原始碼不可以出現寫死單位的字串字面值（半形全形都抓，切註解與 VERSION_HISTORY 並加「真的切掉了、沒切光」前置檢查）。**(7)** v2.1.83 新增的結論單位測試對整份文字斷言四種單位，而抬頭那一句自己就列出四種——正文只印一種也會綠。改成抬頭與正文分開驗，並要求抬頭列出的單位正文真的都出現過。**(8) 更新說明的發布 commit 改成了推託寫法**，對只拿到 zip（沒有 Git）的收件方不可用。改成寫出上一個正式版的實際雜湊，本版那一行由發布者回填；新增守門。**(9) `lib/report-draft.ts` 的 `scopeUnits` 仍是可選的**（四個欄位都可選、每個使用點都有退路預設值）。目前唯一的生產端四個都有傳，所以還沒出錯，但它是 (1) 的同一種結構。改成全部必填；並修掉一處用 am 欄位去標「下午」那個值的欄位引用（兩者現在都是 /hr 所以看不出來）。**(10)「N 個 M 分鐘區間」報一個不存在的平均格長。** `survey.minutes` 自 v2.1.83 起是逐格加總，於是「總分鐘數 ÷ 格數」變成平均值，混用 60＋15 分鐘格會印出「27 個 33 分鐘區間」——那個格長一格都不存在，而這一欄會被貼進正式報告。改成格長一致才報格長，混用時明講「格長混用」並列出實際的幾種。**(11) 三支條件式測試從來沒跑過。** `realFile()` 用不帶連字號的片段去比對，而使用者的檔名帶連字號，永遠對不上，而 skip 訊息看起來完全合理。改成比對前先去掉分隔符號；實測三支全部跑起來而且全部通過。⚠️ 使用者 2026-09-21 就抱怨過這件事，當時修掉的是寫死的路徑，檔名寫法沒有跟著修。**(12) 手冊字元數口徑**：交付說明寫的舊字元數是上一本手冊的殘值，正確值與算法一併寫明（pdftotext 預設輸出 ＋ NFKC ＋ 含空白）。**GPT 發布前補正**：本機資料仍在讀取時先畫空主畫面、8 秒逾時被誤稱權限封鎖且不重試，現已加載入閘門、獨立逾時畫面與一次自動重試；同時把畫面上漏網的平均格長改走共用 helper，並讓 PM 後綴讀取正確的 PM 單位欄位。",
+  },
   {
     version: "v2.1.83",
     date: "2026-09-24",
@@ -2561,13 +2574,37 @@ export function qualityIssues(records: TrafficRecord[]): QualityIssue[] {
             category: "尖峰時段異常",
             station: record.station,
             quarter: record.quarter,
+            /*
+             * ══════════════════════════════════════════════════════════
+             *  ⚠️ 2026-09-26：這兩段文字原本與手冊相反，而手冊是對的
+             * ══════════════════════════════════════════════════════════
+             *
+             * 原本的 message 寫「可能是舊版匯入的資料（重新匯入原始檔即可）」，
+             * resolution 更直接：`kind: "重新匯入"`、`view: "import"`、
+             * 「兩種成因都要回到原始檔」。
+             *
+             * 而手冊（v2.1.83 已更正過）寫的是：
+             *   先到「車種轉向當量」按一下「用目前的設定重算」，
+             *   補得上就是這一類、**不必重新匯入原始檔**；
+             *   按了還是算不出來，才需要重新匯入。
+             * 手冊還列了**三**種成因，畫面只列兩種。
+             *
+             * ⚠️ 更糟的是它與本版的主線修正**直接矛盾**：v2.1.83 的 J2
+             *   讓舊紀錄的格長改為從時間欄原始文字回推（`cellMinutesOf`），
+             *   整個意義就是「舊紀錄不必重新匯入」。畫面卻還把人送去
+             *   「季度批次匯入」——而重匯一個計畫的全部站號是真實的工作量。
+             *
+             * ⚠️ 成因三（時段是「全調查時段」而判定方式選了「各方向各自認定」）
+             *   不是資料的問題，所以 kind 不可以是「重新匯入」；
+             *   改成「人工確認」並把三種都寫出來，讓使用者自己判斷是哪一種。
+             */
             message:
-              "有逐時間格的調查資料，但沒有挑出全調查時段尖峰。可能是舊版匯入的資料（重新匯入原始檔即可），或原始檔的時間格距組不成整整一小時（例如 45 分鐘一格）。",
+              "有逐時間格的調查資料，但沒有挑出全調查時段尖峰。三種成因：（一）舊版匯入的資料（先按「用目前的設定重算」，不必重新匯入）；（二）原始檔的時間格距組不成整整一小時（例如 45 分鐘一格、或 2 小時一格）；（三）目前的時段是「全調查時段」而判定方式選了「各方向各自認定」（那個時段沒有尖峰視窗可挑，不是資料的問題）。",
             resolution: {
-              kind: "重新匯入",
-              text: "兩種成因都要回到原始檔：舊版匯入的直接重新匯入該筆即可；時間格距組不成整整一小時（例如 45 分鐘一格）的，要先把原始檔改成 15／20／30／60 分鐘一格再重新匯入。系統不會自行把不足一小時的量當成一小時的流率。",
-              view: "import",
-              viewLabel: "季度批次匯入",
+              kind: "人工確認",
+              text: "請先到「車種轉向當量」按一下「用目前的設定重算」：補得上就是（一），不必重新匯入原始檔。按了還是算不出來，再看是（二）還是（三）——（二）要先把原始檔改成 15／20／30／60 分鐘一格再重新匯入該筆（系統不會把不足一小時的量當成一小時的流率）；（三）把判定方式改回「整個調查點同一時段」，或改看上午／下午尖峰即可，資料本身沒有問題。",
+              view: "parameters",
+              viewLabel: "車種轉向當量",
             },
           });
         continue;
@@ -2876,6 +2913,36 @@ export function totalIntervalMinutes(
     const length = cellMinutesOf(row, fallback);
     return sum + (Number.isFinite(length) && length > 0 ? length : fallback);
   }, 0);
+}
+
+/**
+ * 以實際逐格長度說明調查區間。
+ *
+ * 格長混用時列出真正存在的格長，不能用「總分鐘數 ÷ 格數」產生一個
+ * 根本不存在的平均格長。舊紀錄若沒有逐格資料，只寫總格數與總時數，不猜格長。
+ */
+export function surveyIntervalDescription(
+  record: Pick<TrafficRecord, "survey" | "sourceIntervals">,
+): string {
+  const rows = record.sourceIntervals?.rows ?? [];
+  const count = record.survey?.intervals ?? rows.length;
+  const fallback = Math.max(
+    1,
+    Number(record.sourceIntervals?.intervalMinutes) || 15,
+  );
+  const statedMinutes = Number(record.survey?.minutes);
+  const total = Number.isFinite(statedMinutes)
+    ? statedMinutes
+    : totalIntervalMinutes(rows, fallback);
+  const hours = `${(total / 60).toFixed(1)} 小時`;
+  if (!rows.length) return `${count} 個時間區間（共 ${hours}）`;
+
+  const lengths = [
+    ...new Set(rows.map((row) => cellMinutesOf(row, fallback))),
+  ].sort((a, b) => a - b);
+  if (lengths.length === 1)
+    return `${count} 個 ${lengths[0]} 分鐘區間（${hours}）`;
+  return `${count} 個時間區間、格長混用（${lengths.join("／")} 分鐘，共 ${hours}）`;
 }
 
 export function rollingPeak(

@@ -45,6 +45,29 @@ export class StorageBlockedError extends Error {
   }
 }
 
+/**
+ * IndexedDB 有提供，但這次 open() 在期限內沒有完成。
+ *
+ * 這與「瀏覽器拒絕網站儲存資料」是兩件事：逾時可能只是機器忙、分頁被節流，
+ * 或資料庫要求正在等其他分頁釋放。畫面必須分開說明，不能叫使用者先去改
+ * Cookie／隱私設定。
+ */
+export class StorageTimeoutError extends Error {
+  /** open() 是否曾明確觸發 blocked；沒有觸發也不代表可以推定真正原因。 */
+  readonly blocked: boolean;
+
+  constructor(blocked: boolean) {
+    super(
+      "開啟本機資料庫逾時；系統已自動重試一次仍未完成" +
+        (blocked
+          ? "（瀏覽器回報資料庫正等候其他分頁釋放）"
+          : "（可能是瀏覽器或電腦暫時忙碌）"),
+    );
+    this.name = "StorageTimeoutError";
+    this.blocked = blocked;
+  }
+}
+
 /*
  * open() 有可能既不 success 也不 error：另一個分頁held 著舊版資料庫時會
  * 觸發 blocked，然後就這樣停著。停著等於畫面永遠卡在載入中，比報錯更糟，
@@ -52,7 +75,8 @@ export class StorageBlockedError extends Error {
  */
 const OPEN_TIMEOUT_MS = 8000;
 
-function openDatabase(): Promise<IDBDatabase> {
+/** 單次開啟；逾時後晚到的 success 只負責關閉連線，不會回頭改寫結果。 */
+function openDatabaseOnce(): Promise<IDBDatabase> {
   return new Promise(function (resolve, reject) {
     let factory: IDBFactory | undefined;
     try {
@@ -75,14 +99,11 @@ function openDatabase(): Promise<IDBDatabase> {
       return;
     }
     let settled = false;
+    let blocked = false;
     const timer = setTimeout(function () {
       if (settled) return;
       settled = true;
-      reject(
-        new StorageBlockedError(
-          "開啟本機資料庫逾時；如果同一個網站還有別的分頁開著，請先關掉再重新載入",
-        ),
-      );
+      reject(new StorageTimeoutError(blocked));
     }, OPEN_TIMEOUT_MS);
     let request: IDBOpenDBRequest;
     try {
@@ -126,9 +147,31 @@ function openDatabase(): Promise<IDBDatabase> {
       );
     };
     request.onblocked = function () {
-      /* 交給逾時處理，訊息裡已經寫了該怎麼辦。 */
+      /* 不立刻判死刑：使用者可能剛好關掉另一個分頁，open 仍可能隨後成功。 */
+      blocked = true;
     };
   });
+}
+
+/**
+ * 開啟資料庫；只有「逾時」會自動再試一次，明確的權限／API 錯誤不重試。
+ *
+ * 第一次逾時的 request 無法由 IndexedDB API 取消；它若稍後成功，
+ * openDatabaseOnce() 會立即 close，不會留下幽靈連線。第二次仍逾時才交給畫面處理。
+ */
+async function openDatabase(): Promise<IDBDatabase> {
+  try {
+    return await openDatabaseOnce();
+  } catch (error) {
+    if (!(error instanceof StorageTimeoutError)) throw error;
+    try {
+      return await openDatabaseOnce();
+    } catch (retryError) {
+      if (retryError instanceof StorageTimeoutError)
+        throw new StorageTimeoutError(error.blocked || retryError.blocked);
+      throw retryError;
+    }
+  }
 }
 
 function withStore<T>(
@@ -214,7 +257,8 @@ export type LoadResult = {
 /**
  * 讀取狀態，必要時把 localStorage 的舊資料搬進 IndexedDB。
  *
- * 儲存空間被封鎖時丟 StorageBlockedError。
+ * 儲存空間被封鎖時丟 StorageBlockedError；兩次開啟都逾時時丟
+ * StorageTimeoutError。
  */
 export async function loadState(): Promise<LoadResult> {
   const stored = await withStore<string | undefined>("readonly", function (

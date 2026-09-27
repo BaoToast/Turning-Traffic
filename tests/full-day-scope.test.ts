@@ -479,6 +479,42 @@ test("scopeUnit() 的三個參數不可以再有預設值", () => {
     assert.match(signature[1], new RegExp(name), `簽章裡沒有 ${name}`);
 });
 
+test("scopeRateUnit()／scopeVehicleUnit() 的 coverage 不可以再有預設值", () => {
+  /*
+   * ⚠️ 與上面那一支同一個理由，但守的是 `lib/conclusion.ts` 裡的**第二份實作**。
+   *   那個檔案刻意沒有任何 import（結論草稿要能單獨驗），所以單位規則在那裡
+   *   有自己的一份；第六輪把 `scopeUnit()` 的預設值拿掉時**漏了這兩支**，
+   *   於是同一個缺陷在同一個專案裡活了下來：6 個呼叫點只傳 scope，
+   *   趨勢句與極值句永遠寫「調查時段」（2026-09-26 抓到）。
+   * ⚠️ 一樣用原始碼比對：行為上「有預設值」與「呼叫端都明寫」看不出差別。
+   */
+  const source = readFileSync(
+    new URL("../lib/conclusion.ts", import.meta.url),
+    "utf8",
+  );
+  for (const name of ["scopeRateUnit", "scopeVehicleUnit"]) {
+    const signature = source.match(
+      new RegExp(`export function ${name}\\(([\\s\\S]*?)\\): string \\{`),
+    );
+    assert.ok(signature, `找不到 ${name} 的簽章——寫法改了就要跟著改這一支`);
+    /* 前置檢查：真的抓到兩個參數。 */
+    for (const parameter of ["scope", "coverage"])
+      assert.match(signature![1], new RegExp(parameter), `${name} 的簽章裡沒有 ${parameter}`);
+    assert.doesNotMatch(
+      signature![1],
+      /coverage\?:/,
+      `${name}() 的 coverage 又變成可選的了。必填是刻意的：` +
+        "可選時呼叫端漏傳不會有任何抱怨，而漏傳的後果是畫面寫錯分母。\n" +
+        `目前的簽章：${signature![1].trim()}`,
+    );
+    assert.doesNotMatch(
+      signature![1],
+      /=/,
+      `${name}() 的參數出現預設值了（理由同上）。\n目前的簽章：${signature![1].trim()}`,
+    );
+  }
+});
+
 test("分母：24 小時寫「調查日」，非 24 小時寫「調查時段」，混合一律「調查時段」", () => {
   /*
    * 使用者 2026-09-10 定案：

@@ -495,19 +495,51 @@ const PEAK_LABEL: Record<ConclusionScopeKey, string> = {
  */
 export function scopeRateUnit(
   scope: ConclusionScopeKey,
-  coverage?: ConclusionRecord["surveyCoverage"],
+  /*
+   * ⚠️ **必填，沒有預設值**（2026-09-26 改）。
+   *
+   *   原本是可選的，而預設分支落在「調查時段」。全專案有 6 個呼叫點
+   *   只傳 scope（趨勢句三處、極值句三處），於是同一份草稿裡：
+   *     逐筆那幾句（有傳涵蓋）寫「PCU/調查日」
+   *     趨勢句與極值句（沒傳）寫「PCU/調查時段」
+   *   實測滿 24 小時的資料：同一份草稿「調查日」2 次、「調查時段」7 次，
+   *   而抬頭那一句還宣告「（PCU／調查日、輛／調查日）」——抬頭被正文違反。
+   *
+   *   這與 `scopeUnit()` 是同一件事：**會讓呼叫端說錯話的參數不可以有預設值**。
+   *   拿掉預設值之後 TypeScript 會把每一個呼叫點列出來，漏傳就編譯不過。
+   */
+  coverage: ConclusionRecord["surveyCoverage"],
 ): string {
   if (scope !== "FULL") return "PCU/hr";
   return coverage === "full" ? "PCU/調查日" : "PCU/調查時段";
 }
 
-/** 這個統計範圍的車輛數單位。理由同 scopeRateUnit。 */
+/** 這個統計範圍的車輛數單位。理由（含 coverage 必填）同 scopeRateUnit。 */
 export function scopeVehicleUnit(
   scope: ConclusionScopeKey,
-  coverage?: ConclusionRecord["surveyCoverage"],
+  coverage: ConclusionRecord["surveyCoverage"],
 ): string {
   if (scope !== "FULL") return "輛/hr";
   return coverage === "full" ? "輛/調查日" : "輛/調查時段";
+}
+
+/**
+ * 一批紀錄**整批**的調查涵蓋（保守規則）。
+ *
+ * 全部滿 24 小時才算 `full`，其餘（含混合、含讀不到）一律 `partial`。
+ *
+ * ⚠️ 給「跨紀錄」的句子用：趨勢句（同一站跨季）與極值句（跨站跨季）
+ *   講的是一批紀錄，拿不到單一筆的涵蓋，只能用整批的。
+ * ⚠️ 保守的方向是刻意的，而且與 `coverageOf()` 對 `mixed` 的處置一致
+ *  （使用者 2026-09-10 定的規則）：少講不會錯，多講會把 4 小時說成一整天。
+ * ⚠️ 逐筆那幾句**不可以**改用這一支——那會把單筆的正確涵蓋蓋掉。
+ */
+export function batchCoverage(
+  records: readonly ConclusionRecord[],
+): ConclusionRecord["surveyCoverage"] {
+  return records.length && records.every((record) => record.surveyCoverage === "full")
+    ? "full"
+    : "partial";
 }
 
 function num(value: number | null | undefined, digits: number) {
@@ -1193,6 +1225,18 @@ function describeGrowth(
         );
       continue;
     }
+    /*
+     * 這幾句引用的單位，一律用**這一句真的引用到的那幾筆**算出來的整批涵蓋。
+     * ⚠️ 不可以拿整個 group／records 算：讀不到數值的那幾筆沒有被引用，
+     *   把它們算進去會讓單位比實際更保守（該寫「調查日」卻寫成「調查時段」）。
+     * ⚠️ 也不可以用單筆涵蓋：這一句講的是一批紀錄（跨季／跨路口），
+     *   沒有「單筆」可言。整批保守規則見 batchCoverage()。
+     */
+    const coverage = batchCoverage(
+      ordered.filter((record) =>
+        Number.isFinite(record.peaks[peak]?.totalPcu as number),
+      ),
+    );
     const first = points[0];
     const last = points.at(-1)!;
     /*
@@ -1204,12 +1248,12 @@ function describeGrowth(
       point.value > best.value ? point : best,
     );
     lines.push(
-      `　${PEAK_LABEL[peak]}總流量由 ${quarterText(first.quarter)} 的 ${num(first.value, digits)} ${scopeRateUnit(peak)} ` +
-        `變為 ${quarterText(last.quarter)} 的 ${num(last.value, digits)} ${scopeRateUnit(peak)}，` +
+      `　${PEAK_LABEL[peak]}總流量由 ${quarterText(first.quarter)} 的 ${num(first.value, digits)} ${scopeRateUnit(peak, coverage)} ` +
+        `變為 ${quarterText(last.quarter)} 的 ${num(last.value, digits)} ${scopeRateUnit(peak, coverage)}，` +
         (change === null
           ? "起始季為 0，變動幅度無法以百分比表示"
           : `${change >= 0 ? "增加" : "減少"} ${pct(Math.abs(change), digits)}`) +
-        `；期間最高為 ${quarterText(peakPoint.quarter)}（${num(peakPoint.value, digits)} ${scopeRateUnit(peak)}）。`,
+        `；期間最高為 ${quarterText(peakPoint.quarter)}（${num(peakPoint.value, digits)} ${scopeRateUnit(peak, coverage)}）。`,
     );
   }
   return lines;
@@ -1279,16 +1323,28 @@ function describeExtremes(
         );
       continue;
     }
+    /*
+     * 這幾句引用的單位，一律用**這一句真的引用到的那幾筆**算出來的整批涵蓋。
+     * ⚠️ 不可以拿整個 group／records 算：讀不到數值的那幾筆沒有被引用，
+     *   把它們算進去會讓單位比實際更保守（該寫「調查日」卻寫成「調查時段」）。
+     * ⚠️ 也不可以用單筆涵蓋：這一句講的是一批紀錄（跨季／跨路口），
+     *   沒有「單筆」可言。整批保守規則見 batchCoverage()。
+     */
+    const coverage = batchCoverage(
+      records.filter((record) =>
+        Number.isFinite(record.peaks[peak]?.totalPcu as number),
+      ),
+    );
     const sorted = points.slice().sort((a, b) => b.value - a.value);
     lines.push(
-      `　${PEAK_LABEL[peak]}：最高為 ${sorted[0].label} ${num(sorted[0].value, digits)} ${scopeRateUnit(peak)}，` +
-        `最低為 ${sorted.at(-1)!.label} ${num(sorted.at(-1)!.value, digits)} ${scopeRateUnit(peak)}。` +
+      `　${PEAK_LABEL[peak]}：最高為 ${sorted[0].label} ${num(sorted[0].value, digits)} ${scopeRateUnit(peak, coverage)}，` +
+        `最低為 ${sorted.at(-1)!.label} ${num(sorted.at(-1)!.value, digits)} ${scopeRateUnit(peak, coverage)}。` +
         `（各路口的尖峰小時不一定相同，此處僅比較大小，不做加總，也不取平均。）`,
     );
     if (sorted.length <= EXTREME_LINE_LIMIT)
       for (const point of sorted)
         lines.push(
-          `　　・${point.label}：${num(point.value, digits)} ${scopeRateUnit(peak)}`,
+          `　　・${point.label}：${num(point.value, digits)} ${scopeRateUnit(peak, coverage)}`,
         );
     else
       lines.push(

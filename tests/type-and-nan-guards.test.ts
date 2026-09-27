@@ -425,7 +425,16 @@ test("pceIssues() 必須被 app 真的用到（不可以只有測試在呼叫）
   /* 每一筆異常都必須有解決方式（X-49 的規則），這一筆也不例外。 */
   assert.match(wrapper[0], /resolution:\s*\{/, "這一筆異常沒有給解決方式");
   assert.match(wrapper[0], /kind:\s*"(人工確認|畫面修正|重新匯入)"/, "解決方式沒有寫 kind");
-  assert.match(wrapper[0], /view:\s*"params"/, "解決方式沒有指出要去哪一頁處理");
+  /*
+   * ⚠️ 側欄 id 是 `parameters`，不是 `params`（2026-09-26 一併修掉）。
+   *   這一支原本照著錯的值寫，等於把「按下去什麼都不會發生」那個缺陷釘住了：
+   *   把 view 修對反而會讓這一條變紅。
+   */
+  assert.match(
+    wrapper[0],
+    /view:\s*"parameters"/,
+    "解決方式沒有指出要去哪一頁處理（側欄 id 是 parameters）",
+  );
 
   /* 二、畫面要真的把它接進異常清單。 */
   const memo = /const issues = useMemo\([\s\S]*?\n {2}\);/.exec(appSource);

@@ -19,6 +19,17 @@ export function context(overrides: Partial<ReportDraftContext> = {}): ReportDraf
     peaks: { am: "07:30–08:30", pm: "17:15–18:15" },
     siteOmitted: 0,
     routelessRecords: 0,
+    /*
+     * ⚠️ 2026-09-26 起 `scopeUnits` 四個欄位都**必填**（原本可選、而且每個
+     *   使用點都有 `|| "PCU/hr"` 之類的退路）。這裡給的是「非 24 小時」那一組，
+     *   也就是保守的那一種；要驗滿 24 小時的寫法請在測試裡覆寫成「調查日」。
+     */
+    scopeUnits: {
+      am: "PCU/hr",
+      pm: "PCU/hr",
+      day: "PCU/hr",
+      full: "PCU/調查時段",
+    },
     siteSummaries: [
       {
         name: "中正路口 115Q4（平日）",

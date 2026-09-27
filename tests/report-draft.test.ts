@@ -694,6 +694,24 @@ test("⚠️ 沒有那兩個範圍時，輸出與改版前逐字相同（不可�
   assert.match(text, /各支線駛出合計：上午 [\d,.]+、下午 [\d,.]+ PCU\/hr/, text);
 });
 
+test("⚠️ 只寫在下午數值後面的單位後綴必須讀 PM 欄位", () => {
+  const text = buildReportDraft(
+    context({
+      scopeUnits: {
+        am: "AM-UNIT",
+        pm: "PM-UNIT",
+        day: "DAY-UNIT",
+        full: "FULL-UNIT",
+      },
+    }),
+    ["inboundOutbound", "outboundPeak"],
+  );
+  assert.match(text, /下午尖峰 [\d,.]+ PM-UNIT/);
+  assert.match(text, /PM [\d,.]+ PM-UNIT/);
+  assert.doesNotMatch(text, /下午(?:尖峰)? [\d,.]+ AM-UNIT/);
+  assert.doesNotMatch(text, /PM [\d,.]+ AM-UNIT/);
+});
+
 test("⚠️ 任何一條支線算不出來時，整個合計要是 null（不可以當成 0 加進去）", () => {
   /*
    * 這是守恆檢查最危險的一種假訊號：兩邊各缺不同的支線時會得到假的

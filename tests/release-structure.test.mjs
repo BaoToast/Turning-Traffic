@@ -783,7 +783,39 @@ test("根目錄的建置產物不可以比原始碼舊", () => {
 
   /* ── 不依賴 mtime：根目錄必須與最後一次建置的產出同步 ── */
   const distIndexPath = join(root, "github-pages-dist", "index.html");
-  if (!existsSync(distIndexPath)) return; /* 只有原始碼的包沒有這一層 */
+  /*
+   * ⚠️ 這個 early return 原本寫「只有原始碼的包沒有這一層」，而它變成了一個洞
+   *   （2026-09-26 抓到）：重新打包的人把 `github-pages-dist/` 整個排除掉之後，
+   *   上面那一半因為「剛解壓的樹」跳過、這一半因為「找不到那一層」直接 return，
+   *   於是整支報 ok 而**一個字都沒驗**——而且上面還印了一句
+   *   「（下面那一條不依賴 mtime 的同步檢查照樣會跑。）」這個不成立的保證。
+   *   實測：GPT 2026-09-26 交回的那一包就是這個狀態（ok 193，實際沒驗）。
+   *
+   * ⚠️ 判準改成「這一包有沒有發布根目錄」：
+   *     ・有 `index.html` ＋ `assets/`（發布根目錄）→ **必須**有
+   *       `github-pages-dist/`，缺了就紅。因為 mtime 那一半在剛解壓的樹上
+   *       必然跳過，這是唯一還會跑的同步檢查。
+   *     ・沒有發布根目錄（純原始碼的 checkout）→ 才可以跳過。
+   * ⚠️ 用 `.git/` 存不存在來分辨「Git checkout」與「交付 zip」：
+   *   乾淨的 Git checkout 本來就不會有被 .gitignore 排除的建置產物，
+   *   在那裡要求它存在會變成**在正確的環境上紅**——那比沒有守門更糟。
+   *   交付 zip 裡沒有 `.git/`，所以這個判準分得開，而且不依賴任何清單。
+   */
+  if (!existsSync(distIndexPath)) {
+    const isGitCheckout = existsSync(join(root, ".git"));
+    assert.ok(
+      isGitCheckout,
+      "這一包有發布根目錄（index.html 與 assets/）卻沒有 github-pages-dist/。\n" +
+        "mtime 那一半在剛解壓的樹上必然跳過，所以這是唯一還會跑的同步檢查；" +
+        "少了它，「根目錄是不是從較舊的一次建置同步過來的」就沒有任何人守。\n" +
+        "請把 github-pages-dist/ 一起放進交付包（它同時也是手冊的第三份副本）。",
+    );
+    console.log(
+      "  \u2139\ufe0f 這是 Git checkout（有 .git/），建置產物依 .gitignore 不在樹裡——" +
+        "跳過與最後一次建置的逐位元比對。交付 zip 裡缺這一層會紅。",
+    );
+    return;
+  }
   const distIndex = readFileSync(distIndexPath, "utf8");
   const wanted = [
     ...distIndex.matchAll(/\.\/assets\/([A-Za-z0-9_.-]+\.(?:js|css))/g),

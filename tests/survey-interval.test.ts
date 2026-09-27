@@ -17,8 +17,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  cellMinutesOf,
   rollingPeak,
   intervalLengthFromLabel,
+  surveyIntervalDescription,
   totalIntervalMinutes,
   type IntervalRow,
 } from "../lib/traffic.ts";
@@ -320,4 +322,99 @@ test("⚠️ J2 反證②：label 只寫起點時仍然退回眾數（不可以�
   assert.equal(intervalLengthFromLabel(rows[0].label), undefined, "前置：回推不出來");
   assert.equal(total(rows, 15), 350);
   assert.equal(totalIntervalMinutes(rows, 15), 12 * 15);
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  逐格追溯的 end 要用那一格自己的長度，不可以用全表眾數（2026-09-26）
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * `app/traffic-app.tsx` 的 `traceIntervals` 原本寫
+ *   `end: row.start + Number(item.intervalMinutes || 15)`
+ * 而 `intervalMinutes` 是整份檔案的**眾數**。格長混用時（整點格接 15 分鐘格，
+ * 正是 v2.1.83 要修的那種版型）15 分鐘那幾格會被算成 60 分鐘寬。
+ * 這份 `sourceTrace.intervals` 是「轉向進階分析」兩張尖峰形狀圖的資料來源，
+ * 所以圖上的格寬與時間範圍都會錯。
+ *
+ * ⚠️ 這一支驗的是 `cellMinutesOf()` 這個判準本身在混用資料上給的是逐格長度，
+ *   外加**原始碼比對**確認 traceIntervals 真的走它——行為測試在這裡到不了
+ *   （那段程式在 React 元件裡、要整個匯入流程才跑得到），而只驗行為
+ *   會讓「函式對、呼叫點沒改」照樣綠。
+ * ⚠️ 反證（2026-09-26 實測）：把 end 改回 `Number(item.intervalMinutes || 15)`，
+ *   第二個斷言就紅。
+ */
+test("⚠️ 逐格追溯：混用格長時每一格的 end 都要等於它自己的長度", async () => {
+  const rows = mixedHourlyWithQuarterPeak();
+  /* 前置：測資真的混用了兩種格長，否則下面恆真。 */
+  const lengths = new Set(
+    rows.map((row) => cellMinutesOf(row, 60)),
+  );
+  assert.ok(
+    lengths.size >= 2,
+    `測資沒有混用格長（只有 ${[...lengths].join("、")} 分鐘），這一支就守不到東西`,
+  );
+  for (const row of rows) {
+    const own = intervalLengthFromLabel(row.label);
+    assert.equal(
+      cellMinutesOf(row, 60),
+      own,
+      `「${row.label}」這一格算出來的長度不是它自己的起訖長度`,
+    );
+    assert.notEqual(
+      cellMinutesOf(row, 60) === 60 && own !== 60,
+      true,
+      "短格被當成 60 分鐘——那正是舊寫法（退回眾數）的症狀",
+    );
+  }
+
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(
+    new URL("../app/traffic-app.tsx", import.meta.url),
+    "utf8",
+  );
+  const trace = source.slice(
+    source.indexOf("const traceIntervals ="),
+    source.indexOf("const traceIntervals =") + 1800,
+  );
+  assert.ok(trace.length > 200, "抓不到 traceIntervals 那一段——寫法改了嗎？");
+  assert.match(
+    trace,
+    /end:\s*row\.start\s*\+\s*cellMinutesOf\(row,/,
+    "traceIntervals 的 end 沒有走 cellMinutesOf()——" +
+      "格長混用時尖峰形狀圖會把 15 分鐘的格子畫成 60 分鐘寬",
+  );
+  assert.doesNotMatch(
+    trace,
+    /end:\s*row\.start\s*\+\s*Number\(item\.intervalMinutes/,
+    "traceIntervals 的 end 又改回用全表眾數了",
+  );
+});
+
+test("⚠️ 格長混用的調查說明列出實際格長，不可以顯示平均格長", () => {
+  const rows = [row(7 * 60, 60, 100), row(8 * 60, 15, 50), row(8 * 60 + 15, 15, 50)];
+  const text = surveyIntervalDescription({
+    survey: { intervals: 3, minutes: 90, vehicle: {} },
+    sourceIntervals: { intervalMinutes: 15, columns: [], rows },
+  });
+  assert.equal(text, "3 個時間區間、格長混用（15／60 分鐘，共 1.5 小時）");
+  assert.doesNotMatch(text, /30 分鐘區間/, "把平均 30 分鐘冒充成每一格的長度");
+});
+
+test("⚠️ 固定格長維持既有格式；沒有逐格資料時不猜格長", () => {
+  const rows = Array.from({ length: 4 }, (_, index) =>
+    row(7 * 60 + index * 15, 15, 50),
+  );
+  assert.equal(
+    surveyIntervalDescription({
+      survey: { intervals: 4, minutes: 60, vehicle: {} },
+      sourceIntervals: { intervalMinutes: 15, columns: [], rows },
+    }),
+    "4 個 15 分鐘區間（1.0 小時）",
+  );
+  assert.equal(
+    surveyIntervalDescription({
+      survey: { intervals: 4, minutes: 60, vehicle: {} },
+    }),
+    "4 個時間區間（共 1.0 小時）",
+  );
 });

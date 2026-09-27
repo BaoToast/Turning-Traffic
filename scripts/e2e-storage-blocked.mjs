@@ -103,7 +103,219 @@ ok(
 );
 await blockedCtx.close();
 
-/* ── 二、儲存空間正常時，不可以誤跳這個畫面 ── */
+/* ── 二、資料還在讀時，只能顯示過場，不可以先畫空的主程式 ── */
+const slowCtx = await browser.newContext();
+const slow = await slowCtx.newPage();
+await slow.addInitScript(() => {
+  const data = new Map();
+  const db = {
+    objectStoreNames: { contains: () => true },
+    createObjectStore: () => ({}),
+    close: () => {},
+    transaction: () => {
+      const tx = { oncomplete: null, onerror: null, onabort: null, error: null };
+      tx.objectStore = () => ({
+        get(key) {
+          const request = { onsuccess: null, onerror: null, result: undefined, error: null };
+          queueMicrotask(() => {
+            request.result = data.get(key);
+            request.onsuccess?.();
+            queueMicrotask(() => tx.oncomplete?.());
+          });
+          return request;
+        },
+        put(value, key) {
+          const request = { onsuccess: null, onerror: null, result: key, error: null };
+          queueMicrotask(() => {
+            data.set(key, value);
+            request.onsuccess?.();
+            queueMicrotask(() => tx.oncomplete?.());
+          });
+          return request;
+        },
+        delete(key) {
+          const request = { onsuccess: null, onerror: null, result: undefined, error: null };
+          queueMicrotask(() => {
+            data.delete(key);
+            request.onsuccess?.();
+            queueMicrotask(() => tx.oncomplete?.());
+          });
+          return request;
+        },
+      });
+      return tx;
+    },
+  };
+  Object.defineProperty(window, "indexedDB", {
+    configurable: true,
+    value: {
+      open() {
+        const request = {
+          onsuccess: null,
+          onerror: null,
+          onupgradeneeded: null,
+          onblocked: null,
+          result: db,
+          error: null,
+        };
+        setTimeout(() => request.onsuccess?.(), 1500);
+        return request;
+      },
+    },
+  });
+});
+await slow.goto(base, { waitUntil: "domcontentloaded" });
+await slow.waitForTimeout(250);
+const whileLoading = await slow.evaluate(() => ({
+  text: document.body.innerText.replace(/\s+/g, " ").trim(),
+  loading: Boolean(document.querySelector('[data-testid="storage-loading"]')),
+  nav: document.querySelectorAll("nav button").length,
+  fileInputs: document.querySelectorAll('input[type="file"]').length,
+}));
+ok(
+  "本機資料還在讀取時顯示明確過場",
+  whileLoading.loading && /正在讀取這台電腦上的資料/.test(whileLoading.text),
+  whileLoading.text.slice(0, 100),
+);
+ok(
+  "讀取完成前不可以先畫空的主程式或留下匯入／還原入口",
+  whileLoading.nav === 0 && whileLoading.fileInputs === 0,
+  `導覽鈕 ${whileLoading.nav}、檔案輸入 ${whileLoading.fileInputs}`,
+);
+await slow.waitForTimeout(1800);
+const afterSlowLoad = await slow.evaluate(() => ({
+  loading: Boolean(document.querySelector('[data-testid="storage-loading"]')),
+  nav: document.querySelectorAll("nav button").length,
+}));
+ok(
+  "資料讀完後才進入正常主畫面",
+  !afterSlowLoad.loading && afterSlowLoad.nav > 3,
+  `導覽鈕 ${afterSlowLoad.nav}`,
+);
+await slowCtx.close();
+
+/* ── 三、第一次逾時要自動重試；兩次都逾時要顯示專用畫面 ── */
+const retryCtx = await browser.newContext();
+const retry = await retryCtx.newPage();
+await retry.clock.install();
+await retry.addInitScript(() => {
+  window.__storageOpenCount = 0;
+  const db = {
+    objectStoreNames: { contains: () => true },
+    createObjectStore: () => ({}),
+    close: () => {},
+    transaction: () => {
+      const tx = { oncomplete: null, onerror: null, onabort: null, error: null };
+      tx.objectStore = () => ({
+        get() {
+          const request = { onsuccess: null, onerror: null, result: undefined, error: null };
+          queueMicrotask(() => {
+            request.onsuccess?.();
+            queueMicrotask(() => tx.oncomplete?.());
+          });
+          return request;
+        },
+        put(_value, key) {
+          const request = { onsuccess: null, onerror: null, result: key, error: null };
+          queueMicrotask(() => {
+            request.onsuccess?.();
+            queueMicrotask(() => tx.oncomplete?.());
+          });
+          return request;
+        },
+      });
+      return tx;
+    },
+  };
+  Object.defineProperty(window, "indexedDB", {
+    configurable: true,
+    value: {
+      open() {
+        window.__storageOpenCount += 1;
+        const request = {
+          onsuccess: null,
+          onerror: null,
+          onupgradeneeded: null,
+          onblocked: null,
+          result: db,
+          error: null,
+        };
+        /* 第一次永遠不回；第二次立即成功。 */
+        if (window.__storageOpenCount >= 2)
+          queueMicrotask(() => request.onsuccess?.());
+        return request;
+      },
+    },
+  });
+});
+await retry.goto(base, { waitUntil: "domcontentloaded" });
+await retry.clock.runFor(8001);
+const retryView = await retry.evaluate(() => ({
+  opens: window.__storageOpenCount,
+  nav: document.querySelectorAll("nav button").length,
+  text: document.body.innerText.replace(/\s+/g, " ").trim(),
+}));
+ok(
+  "第一次逾時後真的再次呼叫 indexedDB.open，而且第二次成功就正常載入",
+  retryView.opens >= 2 && retryView.nav > 3,
+  `open ${retryView.opens} 次、導覽鈕 ${retryView.nav}`,
+);
+ok(
+  "自動重試成功時不可以誤顯示任何搶救畫面",
+  !/暫時無法開啟本機資料庫|瀏覽器不允許這個網站儲存資料/.test(retryView.text),
+);
+await retryCtx.close();
+
+const timeoutCtx = await browser.newContext();
+const timeout = await timeoutCtx.newPage();
+await timeout.clock.install();
+await timeout.addInitScript(() => {
+  window.__storageOpenCount = 0;
+  Object.defineProperty(window, "indexedDB", {
+    configurable: true,
+    value: {
+      open() {
+        window.__storageOpenCount += 1;
+        return {
+          onsuccess: null,
+          onerror: null,
+          onupgradeneeded: null,
+          onblocked: null,
+          result: { close() {} },
+          error: null,
+        };
+      },
+    },
+  });
+});
+await timeout.goto(base, { waitUntil: "domcontentloaded" });
+await timeout.clock.runFor(16001);
+const timeoutView = await timeout.evaluate(() => ({
+  opens: window.__storageOpenCount,
+  text: document.body.innerText.replace(/\s+/g, " ").trim(),
+  timeout: Boolean(document.querySelector('[data-testid="storage-timeout"]')),
+  nav: document.querySelectorAll("nav button").length,
+}));
+ok(
+  "兩次都逾時時顯示獨立的『暫時無法開啟』畫面",
+  timeoutView.opens === 2 && timeoutView.timeout && /暫時無法開啟本機資料庫/.test(timeoutView.text),
+  `open ${timeoutView.opens} 次`,
+);
+ok(
+  "逾時畫面先叫使用者關閉同站其他分頁，且不冒充 Cookie／無痕／擴充套件封鎖",
+  /先關閉同一網站的其他分頁/.test(timeoutView.text) &&
+    !/封鎖所有 Cookie|無痕或隱私模式|擴充套件/.test(timeoutView.text) &&
+    !/瀏覽器不允許這個網站儲存資料/.test(timeoutView.text),
+  timeoutView.text.slice(0, 180),
+);
+ok(
+  "逾時後仍不可以顯示可操作的空主畫面",
+  timeoutView.nav === 0 && /不要建立計畫、匯入資料或還原備份/.test(timeoutView.text),
+  `導覽鈕 ${timeoutView.nav}`,
+);
+await timeoutCtx.close();
+
+/* ── 四、儲存空間正常時，不可以誤跳這個畫面 ── */
 const normalCtx = await browser.newContext();
 const normal = await normalCtx.newPage();
 const normalErrors = [];
@@ -122,7 +334,7 @@ ok(
 ok("正常情境也不可以有未捕捉的例外", normalErrors.length === 0, normalErrors.slice(0, 2).join(" | "));
 await normalCtx.close();
 
-/* ── 三、只有 localStorage 被擋、IndexedDB 可用時，要正常運作 ── */
+/* ── 五、只有 localStorage 被擋、IndexedDB 可用時，要正常運作 ── */
 /*
  * v2.1.53 把資料搬到 IndexedDB 之後，localStorage 只剩「讀舊資料來搬家」
  * 這一個用途，讀不到就當作沒有舊資料。所以這種情況不可以再跳搶救畫面。

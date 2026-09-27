@@ -955,8 +955,137 @@ test("⚠️ 混合 24 小時與部分時段紀錄時，單位說明要列出正
     { ...DEFAULT_CONDITION, peaks: ["FULL"], metrics: ["total"] },
     META,
   );
+  /*
+   * ⚠️ 2026-09-26 收緊：原本是對**整份 text** 斷言四種單位都出現，
+   *   而抬頭那一句（「說明：『全調查時段』依每筆調查的實際涵蓋標示單位（…）」）
+   *   自己就把四種都列出來了——於是**正文只印一種也會綠**，
+   *   這一支等於在驗它自己剛剛寫下的那句話（假的綠）。
+   *   現在把抬頭那兩句排除掉，只對**正文**斷言；抬頭另外單獨驗一次，
+   *   而且要求它列出的單位**正文真的都出現過**（兩個方向都守）。
+   */
+  const lines = text.split("\n");
+  const isHeaderNote = (line: string) =>
+    line.startsWith("說明：") || line.includes("本數值不適用");
+  const bodyText = lines.filter((line) => !isHeaderNote(line)).join("\n");
+  const headerText = lines.filter(isHeaderNote).join("\n");
+
+  /* 前置檢查：抬頭與正文都真的抓到了，不然下面兩段會恆真。 */
+  assert.ok(headerText.length > 0, "抓不到抬頭那兩句——寫法改了就要跟著改這一支");
+  assert.match(bodyText, /全調查時段：/, "抓不到逐筆的正文行");
+
   for (const unit of ["PCU／調查日", "PCU／調查時段", "輛／調查日", "輛／調查時段"])
-    assert.match(text, new RegExp(unit), `單位說明漏掉 ${unit}`);
+    assert.match(
+      headerText,
+      new RegExp(unit),
+      `抬頭的單位說明漏掉 ${unit}——混合涵蓋時正文會出現它`,
+    );
+  /*
+   * 正文用的是半形斜線（`PCU/調查日`），抬頭刻意換成全形（`PCU／調查日`），
+   * 所以這裡比半形那一組。
+   */
+  for (const unit of ["PCU/調查日", "PCU/調查時段", "輛/調查日", "輛/調查時段"])
+    assert.match(
+      bodyText,
+      new RegExp(unit.replace("/", "\\/")),
+      `正文沒有出現 ${unit}——抬頭宣告了一個正文用不到的單位`,
+    );
+});
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  跨紀錄的句子也要帶涵蓋：全部滿 24 小時時不可以冒出「調查時段」
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 2026-09-26 抓到：`scopeRateUnit(scope, coverage?)` 的 coverage 原本是**可選**的，
+ * 預設分支落在「調查時段」，而趨勢句三處、極值句三處共 6 個呼叫點只傳 scope。
+ * 於是同一份草稿裡：
+ *   逐筆那幾句（有傳涵蓋）      → 「PCU/調查日」
+ *   趨勢句與極值句（沒傳涵蓋）  → 「PCU/調查時段」
+ * 實測滿 24 小時的資料：「調查日」2 次、「調查時段」**7 次**，
+ * 而抬頭那一句還宣告「（PCU／調查日、輛／調查日）」——**抬頭被自己的正文違反**。
+ * 這一段文字是要貼進正式報告的。
+ *
+ * ⚠️ 兩支要成對看：
+ *   ①全部 full → 整份草稿不可以出現「調查時段」
+ *   ②混合     → 逐筆行各自正確，而跨紀錄的句子用**保守**的「調查時段」
+ *   少了②，把跨紀錄句改成一律寫「調查日」也會讓①通過，而那會把 4 小時
+ *   的調查說成一整天。
+ * ⚠️ 反證（2026-09-26 實測）：把 coverage 改回可選、或把那 6 個呼叫點的
+ *   第二個參數拿掉，①就紅。
+ */
+const coveredRecord = (
+  quarter: string,
+  pcu: number,
+  coverage: "full" | "partial",
+) => {
+  const record = makeRecord({ station: "T15-01", quarter });
+  record.surveyCoverage = coverage;
+  record.peaks.FULL = {
+    window: "全調查時段",
+    totalPcu: pcu,
+    totalVehicles: pcu * 2,
+    branches: [],
+  };
+  return record;
+};
+const FULL_SCOPE_CONDITION = {
+  ...DEFAULT_CONDITION,
+  peaks: ["FULL"] as ConclusionScopeKey[],
+  metrics: ["total", "growth", "extremes"] as ConclusionMetricKey[],
+};
+
+test("⚠️ 全部滿 24 小時時，草稿裡不可以出現「調查時段」（趨勢句與極值句也算）", () => {
+  const text = buildConclusion(
+    [coveredRecord("115Q1", 1000, "full"), coveredRecord("115Q2", 1200, "full")],
+    FULL_SCOPE_CONDITION,
+    META,
+  );
+  /* 前置：趨勢句與極值句真的產生了，否則下面兩條恆真。 */
+  assert.match(text, /總流量由/, "趨勢句沒有產生——這一支就守不到它");
+  assert.match(text, /最高為/, "極值句沒有產生——這一支就守不到它");
+  /*
+   * ⚠️ 樣式一定要比到**單位的形狀**（「PCU/調查時段」「輛／調查時段」），
+   *   不可以只寫 /調查時段/——時段名稱本身就叫「全調查時段」，
+   *   那樣寫永遠會命中，整條變成恆假（這一支第一版就踩了，當場紅）。
+   *   半形與全形斜線都要抓。
+   */
+  assert.doesNotMatch(
+    text,
+    /(?:PCU|輛)[／/]調查時段/,
+    "全部滿 24 小時，草稿裡卻出現「／調查時段」這個分母——" +
+      "跨紀錄的句子沒有帶涵蓋，同一份草稿對同一批資料寫了兩種分母",
+  );
+  assert.match(text, /PCU\/調查日/, "滿 24 小時要寫「調查日」");
+});
+
+test("⚠️ 混合涵蓋時：逐筆行各自正確，跨紀錄的句子用保守的「調查時段」", () => {
+  const text = buildConclusion(
+    [
+      coveredRecord("115Q1", 1000, "full"),
+      coveredRecord("115Q2", 1200, "partial"),
+    ],
+    FULL_SCOPE_CONDITION,
+    META,
+  );
+  const growth = text.split("\n").find((line) => line.includes("總流量由"));
+  const extreme = text.split("\n").find((line) => line.includes("最高為"));
+  assert.ok(growth && extreme, "趨勢句或極值句沒有產生");
+  for (const [name, line] of [
+    ["趨勢句", growth!],
+    ["極值句", extreme!],
+  ])
+    assert.match(
+      line,
+      /(?:PCU|輛)[／/]調查時段/,
+      `${name}在混合涵蓋時寫成「調查日」——保守規則是混合一律寫「調查時段」` +
+        "（使用者 2026-09-10 定的規則），多講會把 4 小時說成一整天",
+    );
+  /* 逐筆那幾句仍然各自正確：full 那一筆要看得到「調查日」。 */
+  assert.match(
+    text,
+    /PCU\/調查日/,
+    "混合時把逐筆行也改成保守單位了——逐筆有單筆涵蓋可用，不可以用整批的蓋掉",
+  );
 });
 
 test("有勾時段時，行為與原本完全相同", () => {

@@ -63,11 +63,31 @@ function walk(dir: URL): URL[] {
 const REAL_FILES = walk(REAL);
 const hasRealData = REAL_FILES.length > 0;
 
-/** 依檔名片段找一份真實檔；找不到回 null（呼叫端 skip 並說明）。 */
+/**
+ * 依檔名片段找一份真實檔；找不到回 null（呼叫端 skip 並說明）。
+ *
+ * ⚠️ 比對前先把兩邊的**分隔符號全部去掉**（2026-09-26 補）。
+ *   使用者的檔名寫「11017T15-01」「11535T15-02」，而這裡的片段寫
+ *   「11017T1501」「11535T1502」——只差一個連字號，`includes()` 就永遠
+ *   對不上。後果是這三支條件式測試**在有真實檔的機器上照樣 skip**，
+ *   而 skip 的訊息（「有 N 份真實檔，但沒有檔名含「…」的那一份」）
+ *   看起來完全合理，所以沒有人發現它們從來沒跑過。
+ *
+ *   ⚠️ 使用者 2026-09-21 就抱怨過「我不是提供了一堆真實調查資料檔給你了嗎，
+ *   這一點要修正什麼??」。當時（A9）修掉的是**寫死的路徑**，
+ *   檔名寫法沒有跟著修，所以那一條抱怨其實沒有被解決。
+ *
+ *   實測：改成去符號比對之後，三支全部跑起來而且全部通過
+ *  （`11017T15-01` 七叉路口、`11535T15-02`、`11535T15-03`）。
+ * ⚠️ 中日文字要留著：路段名稱也可能是片段的一部分。
+ */
 function realFile(fragment: string): URL | null {
+  const squash = (text: string) =>
+    text.replace(/[^0-9A-Za-z\u4e00-\u9fff]/g, "").toLowerCase();
+  const want = squash(fragment);
   return (
     REAL_FILES.find((url) =>
-      decodeURIComponent(url.pathname).includes(fragment),
+      squash(decodeURIComponent(url.pathname)).includes(want),
     ) ?? null
   );
 }

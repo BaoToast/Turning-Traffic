@@ -873,3 +873,101 @@ test("手冊寫的轉向圖「顯示」模式數量要等於程式的 DisplayMod
   for (const word of ["交通量", "車輛數", "百分比"])
     assert.match(row[1], new RegExp(word), `手冊的「顯示」說明沒有提到「${word}」`);
 });
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  「全調查時段尖峰算不出來」這一顆異常：畫面與手冊必須講同一件事
+ * ══════════════════════════════════════════════════════════════════════
+ *
+ * 2026-09-26 抓到：手冊（v2.1.83 已更正過、而且是對的）寫
+ *   「請先到『車種轉向當量』按一下『用目前的設定重算』：補得上就是這一類，
+ *     不必重新匯入原始檔；按了還是算不出來，才需要重新匯入原始檔。」
+ * 並列出**三**種成因。
+ * 而 `lib/traffic.ts` 那一顆 issue 的 message 只列兩種，resolution 更是
+ *   `kind: "重新匯入"`、`view: "import"`、「兩種成因都要回到原始檔」——
+ * 直接把使用者送去「季度批次匯入」。
+ *
+ * ⚠️ 這與本版的主線修正**相反**：v2.1.83 的 J2 讓舊紀錄的格長從時間欄
+ *   原始文字回推，整個意義就是「舊紀錄不必重新匯入」。而重匯一個計畫的
+ *   全部站號是真實的工作量——畫面在叫使用者做一件本來不必做的事。
+ *
+ * ⚠️ 守法：三件都驗。
+ *   ①resolution 不可以把「重新匯入」當第一步（kind 與 view 都要看）
+ *   ②resolution 的文字裡「用目前的設定重算」必須出現在「重新匯入」之前
+ *   ③message 要列出三種成因，而且手冊也要列三種（兩邊同時對帳）
+ *   少了③，只把 resolution 改好、message 還寫兩種也會通過。
+ */
+test("「全調查時段尖峰算不出來」的畫面文字要與手冊一致（先重算、後重匯、三種成因）", async () => {
+  const source = await readFile(
+    new URL("../lib/traffic.ts", import.meta.url),
+    "utf8",
+  );
+  const manual = await readFile(
+    new URL("../scripts/manual/manual.html", import.meta.url),
+    "utf8",
+  );
+  /* 切出那一顆 issue 的區塊：從 id 到它的 resolution 結束。 */
+  const start = source.indexOf("`${record.id}-DAY-missing`");
+  assert.notEqual(start, -1, "找不到 DAY-missing 這一顆異常——id 改了就要跟著改這一支");
+  const block = source.slice(start, start + 2600);
+  const resolutionAt = block.indexOf("resolution:");
+  assert.notEqual(resolutionAt, -1, "切不到它的 resolution");
+  const message = block.slice(0, resolutionAt);
+  const resolution = block.slice(resolutionAt);
+
+  /* ① 不可以把「重新匯入」當成這一顆的處置方式。 */
+  assert.doesNotMatch(
+    resolution,
+    /kind:\s*"重新匯入"/,
+    "這一顆的 kind 是「重新匯入」——而三種成因裡有兩種不必重匯（①按重算就好、" +
+      "③根本不是資料問題）。手冊寫的是「先按重算」。",
+  );
+  assert.doesNotMatch(
+    resolution,
+    /view:\s*"import"/,
+    "這一顆把使用者送去「季度批次匯入」——正確的第一站是「車種轉向當量」",
+  );
+  /*
+   * ⚠️ 側欄的 id 是 `parameters`，不是 `params`（2026-09-26 一併修掉）。
+   *   `params` 是一個**不存在的 id**，那顆按鈕按下去什麼都不會發生。
+   *   這一支原本就是照著錯的值寫的——測試把缺陷釘住了。
+   *   `tests/issue-resolution-view.test.ts` 現在逐一比對每一個 view 值
+   *   都必須是真的側欄 id，`scripts/e2e-maintenance.mjs` 也改成每一顆都點。
+   */
+  assert.match(
+    resolution,
+    /view:\s*"parameters"/,
+    "resolution 沒有指向「車種轉向當量」那一頁（側欄 id 是 parameters）",
+  );
+
+  /* ② 文字順序：先重算、後重匯。 */
+  const recompute = resolution.indexOf("用目前的設定重算");
+  const reimport = resolution.indexOf("重新匯入");
+  assert.ok(recompute >= 0, "resolution 沒有叫使用者先按「用目前的設定重算」");
+  assert.ok(
+    reimport < 0 || recompute < reimport,
+    "resolution 把「重新匯入」寫在「用目前的設定重算」之前——順序反了，" +
+      "使用者會先去做那件本來不必做的事",
+  );
+
+  /* ③ 三種成因：畫面與手冊同時對帳。 */
+  const CAUSES = [
+    /舊版匯入/,
+    /(?:45\s*分鐘一格|2\s*小時一格)/,
+    /各方向各自認定/,
+  ];
+  for (const [index, pattern] of CAUSES.entries()) {
+    assert.match(
+      message,
+      pattern,
+      `畫面的訊息漏掉第 ${index + 1} 種成因（手冊列了三種）`,
+    );
+    assert.match(
+      manual,
+      pattern,
+      `手冊漏掉第 ${index + 1} 種成因——兩邊要一起對帳，不可以只改一邊`,
+    );
+  }
+  /* 前置檢查：真的切到有內容的 message，不是空字串讓上面恆真。 */
+  assert.ok(message.length > 120, `切到的 message 只有 ${message.length} 字`);
+});

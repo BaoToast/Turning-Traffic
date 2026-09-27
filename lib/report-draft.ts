@@ -145,9 +145,20 @@ export type ReportDraftContext = {
    *   「全調查時段」是整段涵蓋的累計量，滿 24 小時是 PCU／調查日、
    *   否則是 PCU／調查時段。同一段文字裡把累計量標成流率，
    *   一整天的量會被當成一小時的量抄進報告。
-   * ⚠️ 缺值時 AM／PM 退回 PCU/hr＝改版前的行為。
+   * ⚠️ **四個都必填，沒有可選、沒有退回預設值**（2026-09-26 改）。
+   *
+   *   原本是 `scopeUnits?: { am?: …, pm?: …, day?: …, full?: … }`，
+   *   而每一個使用點都寫成 `units.full`。
+   *   那是「預設值讓漏傳的呼叫端靜靜通過」那個結構——與 `scopeUnit()`、
+   *   `scopeRateUnit()` 同一件事。目前唯一的生產端
+   *  （`app/traffic-app.tsx` 的 `scopeUnits:`）四個都有傳，所以**現在沒有錯**；
+   *   但下一個新增的呼叫端漏傳時，滿 24 小時的資料會靜靜寫成「調查時段」，
+   *   而報告上看不出來。改成必填之後，漏傳是編譯錯誤。
+   * ⚠️ AM 與 PM 目前共用同一個「每小時」單位（兩者都是某一個小時的流率），
+   *   所以既有文字只在 PM 後面標一次；即使目前字串一樣，該後綴仍要讀 `pm`，
+   *   避免欄位接錯被相同值掩蓋。
    */
-  scopeUnits?: { am?: string; pm?: string; day?: string; full?: string };
+  scopeUnits: { am: string; pm: string; day: string; full: string };
   /**
    * 匯出範圍內有幾筆是「舊版匯入、沒有逐條 OD 流向」的紀錄。
    * 這種紀錄的駛入／守恆數字是由幾何推算出來的，不是實際流向，
@@ -261,24 +272,26 @@ const pct = (value: number, digits: number) =>
 const armList = (
   rows: ArmFlow[],
   digits: number,
-  limit = 3,
-  units?: ReportDraftContext["scopeUnits"],
+  limit: number,
+  /* ⚠️ 必填，理由見 ReportDraftContext.scopeUnits 的說明。 */
+  units: ReportDraftContext["scopeUnits"],
 ) =>
   rows
     .slice(0, limit)
     .map((row) => {
-      const hourUnit = units?.am || "PCU/hr";
+      /* 這個後綴緊跟在 PM 數值後面，所以必須讀 PM 欄位。 */
+      const hourUnit = units.pm;
       const parts = [
         `AM ${nf(row.am, digits)}`,
         `PM ${nf(row.pm, digits)} ${hourUnit}`,
       ];
       if (row.day !== undefined && row.day !== null)
         parts.push(
-          `全調查時段尖峰 ${nf(row.day, digits)} ${units?.day || hourUnit}`,
+          `全調查時段尖峰 ${nf(row.day, digits)} ${units.day}`,
         );
       if (row.full !== undefined && row.full !== null)
         parts.push(
-          `全調查時段 ${nf(row.full, digits)} ${units?.full || "PCU/調查時段"}`,
+          `全調查時段 ${nf(row.full, digits)} ${units.full}`,
         );
       return `${row.name}（${parts.join("、")}）`;
     })
@@ -464,16 +477,16 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
        *   一小時的量。沒有值時這一句與改版前逐字相同。
        */
       const totalParts = [
-        `上午尖峰 ${nf(c.totals.am, d)} ${c.scopeUnits?.am || "PCU/hr"}`,
-        `下午尖峰 ${nf(c.totals.pm, d)} ${c.scopeUnits?.pm || "PCU/hr"}`,
+        `上午尖峰 ${nf(c.totals.am, d)} ${c.scopeUnits.am}`,
+        `下午尖峰 ${nf(c.totals.pm, d)} ${c.scopeUnits.pm}`,
       ];
       if (c.totals.day !== undefined && c.totals.day !== null)
         totalParts.push(
-          `全調查時段尖峰 ${nf(c.totals.day, d)} ${c.scopeUnits?.day || "PCU/hr"}`,
+          `全調查時段尖峰 ${nf(c.totals.day, d)} ${c.scopeUnits.day}`,
         );
       if (c.totals.full !== undefined && c.totals.full !== null)
         totalParts.push(
-          `全調查時段 ${nf(c.totals.full, d)} ${c.scopeUnits?.full || "PCU/調查時段"}`,
+          `全調查時段 ${nf(c.totals.full, d)} ${c.scopeUnits.full}`,
         );
       const lines = [
         `${c.focusLabel} 路口轉向總量：${totalParts.join("、")}。`,
@@ -491,15 +504,12 @@ function sectionLines(key: DraftSectionKey, c: ReportDraftContext): string[] {
         day: number | null | undefined,
         full: number | null | undefined,
       ) {
-        const parts = [`上午 ${nf(am, d)}`, `下午 ${nf(pm, d)} ${c.scopeUnits?.am || "PCU/hr"}`];
+        /* AM 與 PM 目前同為每小時；共用後綴仍要取緊鄰的 PM 欄位。 */
+        const parts = [`上午 ${nf(am, d)}`, `下午 ${nf(pm, d)} ${c.scopeUnits.pm}`];
         if (day !== undefined && day !== null)
-          parts.push(
-            `全調查時段尖峰 ${nf(day, d)} ${c.scopeUnits?.day || "PCU/hr"}`,
-          );
+          parts.push(`全調查時段尖峰 ${nf(day, d)} ${c.scopeUnits.day}`);
         if (full !== undefined && full !== null)
-          parts.push(
-            `全調查時段 ${nf(full, d)} ${c.scopeUnits?.full || "PCU/調查時段"}`,
-          );
+          parts.push(`全調查時段 ${nf(full, d)} ${c.scopeUnits.full}`);
         return parts.join("、");
       };
       lines.push(
