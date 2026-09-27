@@ -44,7 +44,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -135,7 +135,10 @@ test("包裡不得殘留任何 Word 版手冊", () => {
  * 包裡只剩兩份手冊，而 `【更新說明】請先讀我.txt` 還寫著「三份」，
  * 這一支與那一支**都是綠的**。收件方照文件去核對第三份，會找不到。
  *
- * ⚠️ 數字從**實際檔數**算出來，不寫死。
+ * ⚠️ 數字從**實際檔數**算出來，不寫死。正式 Git checkout 不追蹤
+ *   `github-pages-dist/`；乾淨 checkout 尚未執行 `build:github` 時只會有
+ *   根目錄與 `public/` 兩份，不能把交付包的第三份要求錯套到 checkout。
+ *   沒有 `.git` 的交付包仍必須依文件具備三份，不能藉此放寬。
  * ⚠️ 排除 `dist/`：那是跑過 `npm run build` 才會出現的建置產物，不是交付內容。
  *   文件自己也是這樣分的（「三份」＋「跑過 build 會再多出一份」）。
  * ⚠️ 前置檢查：真的從文件裡抓到那個數字，抓不到就紅——
@@ -159,12 +162,18 @@ test("【更新說明】寫的手冊份數必須等於包裡實際的份數（�
     .map((f) => relative(ROOT, f))
     /* dist/ 是建置產物，文件把它算成「多出的那一份」，不列入宣告的份數。 */
     .filter((rel) => !rel.split(/[\\/]/)[0].startsWith("dist"));
+  const generatedPagesCopy = join(ROOT, "github-pages-dist", `${base}.pdf`);
+  const cleanCheckoutWithoutGeneratedCopy =
+    existsSync(join(ROOT, ".git")) && !existsSync(generatedPagesCopy);
+  const expected = cleanCheckoutWithoutGeneratedCopy ? stated - 1 : stated;
   assert.equal(
     shipped.length,
-    stated,
-    `【更新說明】寫「${claim[1]}份」，包裡實際有 ${shipped.length} 份：\n  ` +
+    expected,
+    `【更新說明】寫「${claim[1]}份」，目前環境應有 ${expected} 份、實際有 ${shipped.length} 份：\n  ` +
       shipped.join("\n  ") +
-      "\n（少一份＝收件方照文件去核對會找不到；多一份＝有位置漏了重新產生的風險）",
+      (cleanCheckoutWithoutGeneratedCopy
+        ? "\n（這是乾淨 Git checkout，尚未產生不受追蹤的 github-pages-dist/；根目錄與 public/ 仍缺一不可）"
+        : "\n（少一份＝收件方照文件去核對會找不到；多一份＝有位置漏了重新產生的風險）"),
   );
   /* 文件列出的位置也要真的存在，不可以只有數字對。 */
   for (const where of ["根目錄", "public/", "github-pages-dist/"])
