@@ -42,8 +42,21 @@ GPT 另確認並修正：
 證據界線：4 項需指定真實附件的 TypeScript 測試與 1 項真實附件別名 E2E 沒有本輪輸入，
 因此是條件式略過，不是通過；本輪沒有再以桌面 Microsoft Excel 或桌面 PDF 閱讀器開啟匯出成果，
 不得把 v2.1.79 的 Office／Foxit 歷史證據寫成本輪重新驗證。E2E 已獨立驗證 10 張 Excel 工作表、
-OOXML／原生圖表結構、PDF 產生與多尺寸版面。正式 GitHub commit、Actions、Pages 與 live hash
-待發布後回填。
+OOXML／原生圖表結構、PDF 產生與多尺寸版面。
+
+正式功能／發布 commit 為 `ec21f388ace9c576b74246e476ab761455498a3a`；發布後 CI 另抓出兩個
+只在乾淨 GitHub runner 出現的守門環境差異：`pdftotext` 含空白字元數／中文抽取受版本與平台影響，
+以及未追蹤的 `github-pages-dist/` 被誤當成乾淨 checkout 必備的第三份手冊。兩者均已改成保留實質
+強度且跨環境可重現的檢查，最終守門補正 commit 為
+`7a96ee228e3bf3ea82a273de49e09bc44f037d57`。
+
+最終 GitHub「建置與測試」run `36333679945` 與 `pages build and deployment` run
+`36333679496` 均成功。`https://baotoast.github.io/Turning-Traffic/?v=2.1.84` 回應 200；線上首頁、
+五個正式資產及手冊均與本機逐位元一致。首頁 SHA-256
+`13916F2F86F5B6285587B28F033EF8BAC2F687B9178836E58BF63AAB807AD13D`；主 JS
+`4BEDEEAD7C80DA82A4A71B0BFD556D94E98F667D8DB8474CE25E2089189D4736`；手冊
+`C920D91D4A613A459EEEE9C6EA16C6FCB2B8BADAA79BF55F65F7D079B4937FB4`。舊 v2.1.83
+主資產 `assets/index-CaAh6Y_H.js` 與舊手冊均回應 404。
 
 本輪的輸入是**GPT 已經發布上線的 v2.1.83 完整專案 ZIP**（SHA-256
 `32648881AD9383323853DD25D521340FF430C08D195FF424A771AB9014690758`），

@@ -475,9 +475,14 @@ GitHub 證據：
 - 本輪沒有取得 4 項 TypeScript 條件式測試與 1 項別名 E2E 所需的特定真實附件，也沒有重新用
   桌面 Microsoft Excel／桌面 PDF 閱讀器開啟匯出成果；不得把條件式略過或 v2.1.79 的
   Office／Foxit 歷史證據描述成本輪通過。E2E 已驗證 10 張工作表、OOXML／原生圖表結構。
-- 正式資產：`assets/index-BVpTE_5l.js` SHA-256
-  `4BEDEEAD7C80DA82A4A71B0BFD556D94E98F667D8DB8474CE25E2089189D4736`；其餘完整資產雜湊見
-  `【更新說明】請先讀我.txt`。正式 commit、Actions、Pages 與 live hash 待發布後回填。
+- 正式功能／發布 commit 為 `ec21f388ace9c576b74246e476ab761455498a3a`；發布守門的跨平台補正
+  最終 commit 為 `7a96ee228e3bf3ea82a273de49e09bc44f037d57`。中間 CI 實際抓出 PDF 文字抽取與
+  未追蹤 `github-pages-dist/` 被當成乾淨 checkout 必備檔的兩個環境相依守門，均修正並加入反證。
+- 最終 GitHub「建置與測試」run `36333679945` 與 `pages build and deployment` run
+  `36333679496` 均成功。帶版號首頁回應 200；首頁、五個正式資產與 v2.1.84 手冊的線上
+  SHA-256 均與本機一致。主資產 `assets/index-BVpTE_5l.js` SHA-256 為
+  `4BEDEEAD7C80DA82A4A71B0BFD556D94E98F667D8DB8474CE25E2089189D4736`；舊 v2.1.83
+  主資產 `assets/index-CaAh6Y_H.js` 與舊手冊均為 404。
 
 ### 12.8 正式發布
 
