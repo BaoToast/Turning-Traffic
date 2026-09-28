@@ -40,7 +40,7 @@ v2.1.84 把字元數守門整個拿掉，理由是「含空白字元數受 Poppl
 | 字元數的算法 | `pdftotext -enc UTF-8 <pdf> -` 的輸出，**先把換行統一成 LF**，再 NFKC 正規化、含空白 |
 | 網站資產 | 五個；只有主程式與跟著它變的兩個 chunk 換名，樣式表與 `purify.es` 與 v2.1.84 **逐位元相同** |
 
-### 2026-09-28 GPT 風險導向獨立複查與發布前補正
+### 2026-09-28 GPT 風險導向獨立複查、補正與正式發布
 
 本輪輸入為 Claude 的 v2.1.85 完整專案 ZIP（SHA-256
 `B7CAE4E7F38FB987D40D0EC926A606661AFF7921D08CB36FE746C90DC88E5E17`）與說明 ZIP
@@ -77,10 +77,23 @@ Poppler 執行檔」與「執行檔存在但 PDF 解析失敗」。後者會讓�
 - 最新完整 `npm audit`：10 項建置／開發相依警示（4 moderate、6 high、0 critical）；
   `npm audit --omit=dev` 為 0。未執行破壞性的 `npm audit fix --force`。
 
+正式發布與線上驗證：
+
+- 正式發布 commit：`82e4f3bd95f4f825073e0ba5fab355dc103a43aa`；push 後本機 `HEAD`、
+  `origin/main`、GitHub 遠端 `main` 一致。
+- GitHub Actions「建置與測試」run `36387255773` 成功；GitHub Pages run
+  `36387255393` 成功。
+- 帶版號首頁、首頁、五個正式資產與 v2.1.85 手冊均回應 200，逐檔 SHA-256 與本機一致；
+  首頁正確引用 `assets/index-D9NZA5qo.js`。
+- 線上主資產 SHA-256 為
+  `7231130EF55DA6F88B1E391CED9FA8FE51F1068BD398E02CEF6B6055BC59BB1C`；線上手冊
+  SHA-256 為 `85DCD76DBF383E0AD3B693A8ABAAACAA8375C3534818EE0B91C8B2F313585208`。
+- 舊 v2.1.84 主資產 `assets/index-BVpTE_5l.js` 與舊手冊均回應 404。
+
 ### 證據界線（照實寫）
 
-- **線上站台比不了**：這個容器的 egress proxy 擋掉 GitHub Pages（實測 `curl 403 CONNECT`）。
-  v2.1.84 的線上雜湊、CI／Pages run 是否成功，**本輪沒有驗**。
+- 指定 `pdftotext` 算法的 15,303 字元未在本機重算；本機缺該工具時，自動測試依規則
+  條件式略過。`pypdf` 的不同抽取結果不能冒充相同算法證據。
 - 真實調查檔不在交付包裡，4 支條件式測試會略過並印出原因——**略過不是通過**。
 - 沒有用桌面 Microsoft Excel 或桌面 PDF 閱讀器開過任何檔案。
 

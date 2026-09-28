@@ -510,8 +510,17 @@ GitHub 證據：
 - 最新完整 audit 為 10 項建置／開發相依警示（4 moderate、6 high、0 critical）；production
   dependencies 為 0。未執行破壞性的強制升級。
 
-正式 commit、GitHub Actions／Pages run、線上資產與舊版 404 證據須在發布完成後回填本節；
-未回填前不可只憑本機測試宣稱已正式發布。
+- 正式發布 commit 為 `82e4f3bd95f4f825073e0ba5fab355dc103a43aa`；push 後本機
+  `HEAD`、`origin/main` 與 GitHub 遠端 `main` 三者一致。
+- 該 commit 的 GitHub Actions「建置與測試」run `36387255773` 與 GitHub Pages run
+  `36387255393` 均成功。
+- `https://baotoast.github.io/Turning-Traffic/?v=2.1.85`、首頁、五個正式雜湊資產與
+  v2.1.85 手冊均回應 200，且逐檔 SHA-256 與本機一致；首頁引用本版主資產
+  `assets/index-D9NZA5qo.js`。主資產 SHA-256 為
+  `7231130EF55DA6F88B1E391CED9FA8FE51F1068BD398E02CEF6B6055BC59BB1C`。
+- 舊 v2.1.84 主資產 `assets/index-BVpTE_5l.js` 與舊手冊
+  `路口轉向程式手冊_v2.1.84.pdf` 均為 404。至此 v2.1.85 的本機、GitHub Actions、
+  GitHub Pages 與線上檔案證據完整。
 
 ### 12.9 正式發布
 
