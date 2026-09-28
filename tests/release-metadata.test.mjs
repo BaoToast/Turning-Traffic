@@ -93,18 +93,28 @@ test("更新說明的部署確認清單沒有殘留舊版號", async () => {
 
 /*
  * ══════════════════════════════════════════════════════════════════════
- *  驗證報告寫的手冊頁數與可擷取文字，在有 Poppler 的環境裡當場重算
+ *  驗證報告寫的手冊頁數與字元數，在有 Poppler 的環境裡當場重算
  * ══════════════════════════════════════════════════════════════════════
  *
- * ⚠️ `pdftotext` 的含空白字元數會受 Poppler 版本與 Windows／Linux 換行影響，
- *   不可拿環境相依的字元數當檔案身分。檔案身分由正式 SHA-256 守門負責；
- *   這裡只守頁數、文字可擷取性與關鍵標題，避免空白／損壞 PDF 混過去。
+ * ⚠️ 2026-09-28 使用者裁示：**三支統一成「換行正規化後保留字元數守門」**。
+ *
+ *   先前這一支把字元數整個拿掉，理由是「含空白字元數受 Poppler 版本與
+ *   作業系統換行影響，跨環境重現不了」。**那個理由的成因就是換行**：
+ *   Windows 的 poppler 輸出 CRLF，同一份 PDF 會多出「行數」那麼多個字元
+ *  （實測姊妹系統手冊：LF 26,330 / CRLF 28,186，差值剛好等於行數）。
+ *   先把換行統一成 LF 之後，兩邊完全相同，所以字元數是守得住的，
+ *   而且它抓得到「手冊沒有重新產生」這種 SHA-256 以外的情形。
+ *
+ * ⚠️ 只看**本版那一節**。VALIDATION_REPORT 是逐版累積的；本版那一節沒寫的話，
+ *   整檔第一個 match 會抓到歷史版本的數字去比對新的 PDF——
+ *   姊妹系統全日交通量 2026-09-27 就是這樣紅的（抓到上一版的 33 頁去比 34 頁的 PDF），
+ *   **紅得對，但訊息把人帶往「PDF 錯了」**。
  *
  * ⚠️ 這一條**不可以在沒有 pdftotext 的環境裡變紅**：複查者的機器不一定有
  *   poppler-utils，而「在正確的包上變紅」比沒有守門更糟。
  *   缺工具時跳過並**印出為什麼跳過**——不是安靜過去。
  */
-test("驗證報告寫的手冊頁數與 PDF 可擷取文字要相符（缺工具時跳過並說明）", async () => {
+test("驗證報告寫的手冊頁數與字元數要與 PDF 相符（缺工具時跳過並說明）", async () => {
   const { execFileSync } = await import("node:child_process");
   const { readdirSync } = await import("node:fs");
   const { fileURLToPath } = await import("node:url");
@@ -112,11 +122,22 @@ test("驗證報告寫的手冊頁數與 PDF 可擷取文字要相符（缺工具
     new URL("../VALIDATION_REPORT.md", import.meta.url),
     "utf8",
   );
-  const claim = report.match(/\*\*(\d+) 頁\*\*/);
+  const sectionStart = report.search(
+    new RegExp(`^##\\s*${VERSION.replace(/\./g, "\\.")}(?![\\d.])`, "m"),
+  );
+  assert.ok(
+    sectionStart >= 0,
+    `VALIDATION_REPORT.md 裡找不到「## ${VERSION}」這一節的標題`,
+  );
+  const rest = report.slice(sectionStart + 3);
+  const nextHeading = rest.search(/^##\s+/m);
+  const section = nextHeading >= 0 ? rest.slice(0, nextHeading) : rest;
+  const claim = section.match(/\*\*(\d+) 頁 \/ ([\d,]+) 字元\*\*/);
   assert.ok(
     claim,
-    "驗證報告裡找不到「**N 頁**」——寫法改了就要同步改這一支，" +
-      "不可以讓它安靜地變成恆真",
+    `VALIDATION_REPORT.md 的「## ${VERSION}」那一節裡找不到「**N 頁 / M 字元**」` +
+      "——本版的手冊數字一定要寫在本版那一節，寫在別節會被當成歷史紀錄，" +
+      "這一支就會拿舊數字去比對新 PDF",
   );
   const root = fileURLToPath(new URL("../", import.meta.url));
   const pdf = readdirSync(root).find(
@@ -127,6 +148,17 @@ test("驗證報告寫的手冊頁數與 PDF 可擷取文字要相符（缺工具
 
   let pages = null;
   let text = null;
+  const isMissingExecutable = (error) => error?.code === "ENOENT";
+  assert.equal(
+    isMissingExecutable({ code: "ENOENT" }),
+    true,
+    "找不到工具時才可以略過",
+  );
+  assert.equal(
+    isMissingExecutable({ code: "EIO" }),
+    false,
+    "PDF 解析／執行失敗不可以冒充成缺工具",
+  );
   try {
     pages = Number(
       execFileSync("pdfinfo", [path], { encoding: "utf8" }).match(
@@ -137,7 +169,8 @@ test("驗證報告寫的手冊頁數與 PDF 可擷取文字要相符（缺工具
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
     });
-  } catch {
+  } catch (error) {
+    if (!isMissingExecutable(error)) throw error;
     console.log(
       "  ℹ️ 這台機器沒有 pdfinfo／pdftotext（poppler-utils），" +
         "跳過手冊頁數與字元數的重算比對——這不是失敗，是這個環境算不了。",
@@ -145,9 +178,15 @@ test("驗證報告寫的手冊頁數與 PDF 可擷取文字要相符（缺工具
     return;
   }
   assert.equal(pages, Number(claim[1]), `報告寫 ${claim[1]} 頁，實際 ${pages} 頁`);
-  const normalized = text
-    .normalize("NFKC")
-    .replace(/\r\n?/g, "\n");
+  /* ⚠️ 先統一換行再 NFKC，順序不可顛倒：CRLF 要在計數前就消掉。 */
+  const normalized = text.replace(/\r\n?/g, "\n").normalize("NFKC");
+  const chars = [...normalized].length;
+  assert.equal(
+    chars,
+    Number(claim[2].replace(/,/g, "")),
+    `報告寫 ${claim[2]} 字元，實際 ${chars}` +
+      "（換行統一為 LF、NFKC 後、含空白）",
+  );
   assert.ok(
     [...normalized].length > 10_000,
     "手冊可擷取文字少於 10,000 字元，可能是空白、截斷或字型未嵌入",

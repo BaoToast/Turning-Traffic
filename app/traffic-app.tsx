@@ -23106,7 +23106,7 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./路口轉向程式手冊_v2.1.84.pdf"
+                    href="./路口轉向程式手冊_v2.1.85.pdf"
                     /*
                      * ⚠️ download 一定要**帶檔名**，不可以只寫 `download`。
                      *
@@ -23123,7 +23123,7 @@ export default function TrafficApp() {
                      *     真正的使用者拿到的就是那個名字。
                      *     把檔名明確寫進 download，兩種情況都正確。
                      */
-                    download="路口轉向程式手冊_v2.1.84.pdf"
+                    download="路口轉向程式手冊_v2.1.85.pdf"
                   >
                     下載新手手冊
                   </a>

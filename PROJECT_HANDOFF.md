@@ -484,7 +484,36 @@ GitHub 證據：
   `4BEDEEAD7C80DA82A4A71B0BFD556D94E98F667D8DB8474CE25E2089189D4736`；舊 v2.1.83
   主資產 `assets/index-CaAh6Y_H.js` 與舊手冊均為 404。
 
-### 12.8 正式發布
+### 12.8 v2.1.85 低風險複查、守門補正與發布驗證
+
+2026-09-28 以 Claude 的 v2.1.85 完整專案 ZIP（SHA-256
+`B7CAE4E7F38FB987D40D0EC926A606661AFF7921D08CB36FE746C90DC88E5E17`）與說明 ZIP
+（SHA-256 `00EF1C8657707D7CC7F8EBB9A38E4766288FF366887218286C5F2DE61E061750`）為輸入。
+逐檔比較 v2.1.84 後確認：執行期只有版本字串及手冊檔名變更，核心 Parser、資料結構、
+持久化、交通量、PCU、尖峰與轉向計算均未變，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.83；
+本版按低風險發布／測試守門調整複查，並執行所有風險等級共同必做的完整門檻。
+
+- Claude 新增「手冊字元數先統一換行再計數、且只讀本版驗證報告段落」守門。
+- GPT 另修正 1 項守門缺口：原本廣泛 `catch` 會把 PDF 解析失敗冒充成缺 Poppler 而略過；
+  現在只有錯誤碼 `ENOENT` 可略過，其餘執行／解析錯誤必須失敗。假工具回傳非零的反證通過。
+- 乾淨 `npm ci` 成功。第一次正式 `npm test` 正確抓到未追蹤 `github-pages-dist/` 尚為
+  v2.1.84；重新 `npm run build:github` 後，第二次字面 `npm test` 離開碼 0：`.mjs`
+  260／260；TypeScript 382 項中 378 通過、0 失敗、4 項因缺真實附件條件式略過；lint、
+  glyph guard、TypeScript 與 production build 均通過。
+- `npm run e2e` 串行走完 83 支瀏覽器測試＋2 個種子流程＝85 步，完整日誌有 1,770 個成功
+  檢查、0 失敗；真實附件別名情境 1 項明確略過。Codex 桌面工作階段在命令完成後重置，
+  因此保留日誌沒有最後另印的 exit marker；不得把它寫成「直接取得 exit 0」。
+- `npm run e2e:tryout` 另行通過，只作內部 smoke，不交付試用版 HTML。
+- 手冊 v2.1.85 為 20 頁，三份正式副本 SHA-256 均為
+  `85DCD76DBF383E0AD3B693A8ABAAACAA8375C3534818EE0B91C8B2F313585208`；20 頁完整點陣化
+  檢視無缺陷。本機沒有 `pdftotext`，15,303 字元未由 GPT 以指定算法重新計算，不得誤報。
+- 最新完整 audit 為 10 項建置／開發相依警示（4 moderate、6 high、0 critical）；production
+  dependencies 為 0。未執行破壞性的強制升級。
+
+正式 commit、GitHub Actions／Pages run、線上資產與舊版 404 證據須在發布完成後回填本節；
+未回填前不可只憑本機測試宣稱已正式發布。
+
+### 12.9 正式發布
 
 1. 先完成本節全部必要驗證。
 2. 若升版，依 `DEPLOYMENT.md` 同步：`VERSION`／`VERSION_HISTORY`、package/lock、手冊 HTML/產製檔名/頁尾、UI 連結、CHANGELOG、PDF；刪除所有舊版手冊。
