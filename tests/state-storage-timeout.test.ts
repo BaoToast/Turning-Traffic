@@ -104,6 +104,29 @@ test("⚠️ 第一次開啟逾時後會自動再試一次，第二次成功就�
     assert.equal(fake.openCount, 1, "前置：一開始只能有第一次 open");
     t.mock.timers.tick(8000);
     await flushMicrotasks();
+    /*
+     * ⚠️ 2026-09-29：第一次逾時之後**不可以立刻重試**（RETRY_DELAY_MS = 1500）。
+     *   使用者 2026-09-29 在線上遇到逾時，而手動重新整理一次就好了——
+     *   立刻重試等於用同一個忙碌瞬間再賭一次，自動重試形同虛設。
+     *   不驗這一步的話，把 RETRY_DELAY_MS 改回 0 也不會有人發現。
+     */
+    /*
+     * ⚠️ 只 tick(8000) 之後斷言「還是 1 次」**是恆真的**：假時鐘裡
+     *   setTimeout(…, 0) 也不會在同一個 tick 裡跑完。我第一版就是這樣寫的，
+     *   把 RETRY_DELAY_MS 改成 0 之後測試照樣綠——那是假的守門。
+     *   所以要**再往前推到 1499ms**：延遲是 0 的話這時早就重試了（會紅），
+     *   延遲是 1500 的話這時還沒到（維持 1 次），最後 tick(1) 才變 2 次。
+     */
+    assert.equal(fake.openCount, 1, "前置：8000ms 時還不該重試");
+    t.mock.timers.tick(1499);
+    await flushMicrotasks();
+    assert.equal(
+      fake.openCount,
+      1,
+      "第一次逾時之後太早重試了——中間應該要等滿 RETRY_DELAY_MS",
+    );
+    t.mock.timers.tick(1);
+    await flushMicrotasks();
     assert.equal(fake.openCount, 2, "第一次逾時後沒有真的再呼叫 indexedDB.open");
     assert.deepEqual(await loading, { text: null, source: "empty" });
   } finally {
@@ -125,12 +148,21 @@ test("⚠️ 兩次都逾時要丟獨立的 StorageTimeoutError，不可冒充�
     await flushMicrotasks();
     t.mock.timers.tick(8000);
     await flushMicrotasks();
+    /* 同上：1499ms 時還不可以重試，1500ms 才可以（見上面那段註解）。 */
+    assert.equal(fake.openCount, 1, "前置：8000ms 時還不該重試");
+    t.mock.timers.tick(1499);
+    await flushMicrotasks();
+    assert.equal(fake.openCount, 1, "第一次逾時之後太早重試了");
+    t.mock.timers.tick(1);
+    await flushMicrotasks();
     assert.equal(fake.openCount, 2);
     t.mock.timers.tick(8000);
     await assert.rejects(loading, (error: unknown) => {
       assert.ok(error instanceof StorageTimeoutError);
       assert.equal(error instanceof StorageBlockedError, false);
-      assert.match(error.message, /自動重試一次/);
+      /* 訊息要講「試了兩次」與「中間等了多久」——畫面與這裡的文案 2026-09-29 統一。 */
+      assert.match(error.message, /自動試了兩次/);
+      assert.match(error.message, /等 1\.5 秒再試一次/);
       return true;
     });
   } finally {

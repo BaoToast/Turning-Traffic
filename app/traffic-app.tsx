@@ -11,6 +11,7 @@ import { PeakShapeCharts } from "./peak-shape-charts.tsx";
 import { TurnPreview } from "./turn-preview.tsx";
 import { isNamedArm } from "./arm-name";
 
+import { findSurveyReplacement, plannedSurveyOverwrites } from "@/lib/import-overwrite";
 import {
   useCallback,
   useEffect,
@@ -82,7 +83,6 @@ import {
   VERSION,
   lockStatus,
   LockStatus,
-  isSameSurvey,
   stationFromFilename,
   round1,
   type NoonSide,
@@ -117,6 +117,7 @@ import {
   YEAR_STYLE_LABELS,
   type YearStyle,
   periodMismatchPrompt,
+  overwriteDateConflictPrompt,
   periodUnknownNotice,
   normalizeSurveyPeriod,
   checkSurveyPeriodInput,
@@ -6471,6 +6472,17 @@ export default function TrafficApp() {
   const [storageFailure, setStorageFailure] = useState<
     "blocked" | "timeout" | null
   >(null);
+  /*
+   * 逾時的時候，瀏覽器到底有沒有回報「資料庫正等候其他分頁釋放」（blocked）。
+   *
+   * ⚠️ 2026-09-29 使用者實際遇到：錯誤訊息結尾是「（可能是瀏覽器或電腦暫時忙碌）」
+   *   ——那就是 blocked === false，只知道瀏覽器沒有回報這個事件，
+   *   不能排除其他分頁，也不能推定是電腦忙碌。
+   *   可是建議清單第一條還是叫她「先關閉同一網站的其他分頁」，而她只開了一個分頁。
+   *   系統知道的事不可以跟畫面講的話互相矛盾——這和 v2.1.84 拿掉
+   *   「Cookie／無痕／擴充套件」那三條是同一個毛病，只是換了一條沒拿掉。
+   */
+  const [timeoutBlocked, setTimeoutBlocked] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   /*
    * 側欄小分頁的收合狀態（使用者 2026-09-13，三支同步）。
@@ -6711,6 +6723,9 @@ export default function TrafficApp() {
             : error instanceof StorageBlockedError
               ? "blocked"
               : null,
+        );
+        setTimeoutBlocked(
+          error instanceof StorageTimeoutError && error.blocked,
         );
         setLoadError(
           error instanceof Error
@@ -11231,17 +11246,13 @@ export default function TrafficApp() {
       );
     }
     /* 比對規則見 lib/traffic.ts 的 isSameSurvey（含「待設定」為何要特別處理）。 */
-    const sameSurvey = function (
-      record: TrafficRecord,
-      item: { station: string; surveyType: string },
-    ) {
-      return isSameSurvey(record, item, { projectId: activeProjectId, quarter: q });
+    const conflictModeOf = function (item: { file: string; station: string }) {
+      const stationWasFilled = !importRows.find((row) => row.file === item.file)?.station && Boolean(item.station);
+      return stationWasFilled ? "version" : importConflictModes[item.file] || "overwrite";
     };
-    const overwriteTargets = records.filter(function (record) {
-      return originals.some(function (item) {
-        return sameSurvey(record, item);
-      });
-    });
+    const overwritePlan = plannedSurveyOverwrites(records, originals,
+      { projectId: activeProjectId, quarter: q }, conflictModeOf);
+    const overwriteTargets = overwritePlan.map(({ record }) => record);
     /*
      * 同一批次裡撞號要先擋下來。
      * forEach 是對 next 做 findIndex，所以第二份同站號同資料別的檔案會找到
@@ -11290,6 +11301,67 @@ export default function TrafficApp() {
     });
     if (dateProblems.length && !confirm(periodMismatchPrompt(dateProblems)))
       return;
+    /*
+     * ── 覆蓋前的日期把關（使用者 2026-09-29 的擔心）─────────────────
+     *
+     * 「115Q1 檔案編號 T15-01，115Q4 檔案編號也是 T15-01，後者資料卻覆蓋掉了
+     *   前者，但明明檔案裡面顯示的是不同監測日期」。
+     *
+     * ⚠️ 擋在真的動 records 之前（下面 `const next = [...records]` 才開始寫）。
+     *   放在後面就不是把關，是事後通知。
+     * ⚠️ 判準與文案都在 lib/period-date.ts 的 overwriteDateConflictPrompt()，
+     *   三支共用同一套字，這裡只負責把「舊日期 vs 新日期」湊出來。
+     * ⚠️ 舊日期用 effectiveRecordDate()（畫面上顯示的那一個），
+     *   不是 record.date——使用者看到的日期和訊息裡的日期必須一致。
+     * ⚠️ 同一組（項目・舊日期・新日期）只列一次，最多列 8 組：
+     *   一次覆蓋幾十個路口時，逐筆列出來的視窗會長到看不完。
+     */
+    {
+      const rawConflicts = overwritePlan.map(function ({ record, incoming }) {
+        return {
+          label: [
+            quarterLabel(q),
+            record.name || record.station || "",
+            record.surveyType || "",
+          ]
+            .filter(Boolean)
+            .join("・"),
+          oldDate: effectiveRecordDate(record),
+          newDate: incoming ? incoming.date || "" : "",
+        };
+      });
+      const isConflict = (item: { oldDate?: string; newDate?: string }) => {
+        const oldDate = String(item.oldDate ?? "").trim();
+        const newDate = String(item.newDate ?? "").trim();
+        return Boolean(oldDate) && Boolean(newDate) && oldDate !== newDate;
+      };
+      const seenConflict = new Set<string>();
+      const unique: typeof rawConflicts = [];
+      for (const item of rawConflicts.filter(isConflict)) {
+        const key = [item.label, item.oldDate, item.newDate].join("\u0000");
+        if (seenConflict.has(key)) continue;
+        seenConflict.add(key);
+        unique.push(item);
+      }
+      if (unique.length) {
+        const shown = unique.slice(0, 8);
+        const hidden = unique.length - shown.length;
+        const message = overwriteDateConflictPrompt(
+          shown,
+          "（若仍要蓋掉：被蓋掉的舊資料會存成一個還原點，" +
+            "事後可以到「資料維護 → 還原點」復原。）",
+        );
+        if (
+          !confirm(
+            message +
+              (hidden > 0
+                ? "\n（另外還有 " + hidden + " 組同樣的情形沒有列出）"
+                : ""),
+          )
+        )
+          return;
+      }
+    }
     if (!authorizeLockedChange(overwriteTargets, "重新匯入")) return;
     const next = [...records];
     /* 有幾筆原本是「待設定」、這次被讀出的資料別補上了 */
@@ -11313,25 +11385,12 @@ export default function TrafficApp() {
     originals.forEach(function (item) {
       /*
        * 先找資料別完全相同的那一筆；找不到才退而找同站號的「待設定」，
-       * 讓這次讀出來的平日／假日去補上它（見上面 sameSurvey 的說明）。
-       * 兩段分開找而不是直接用 sameSurvey，是因為一個檔案同時有平日與假日
+       * 讓這次讀出來的平日／假日去補上它（findSurveyReplacement 共用此規則）。
+       * 兩段分開找而不是直接用 isSameSurvey，是因為一個檔案同時有平日與假日
        * 兩張工作表時會產生兩筆，必須讓各自「完全相同」的那筆優先對到，
        * 不能讓先跑到的那一筆把待設定搶走。
        */
-      const exact = next.findIndex(function (record) {
-        return (
-          record.projectId === activeProjectId &&
-          record.quarter === q &&
-          record.station === item.station &&
-          (record.surveyType || "待設定") === (item.surveyType || "待設定")
-        );
-      });
-      const found =
-        exact >= 0
-          ? exact
-          : next.findIndex(function (record) {
-              return sameSurvey(record, item);
-            });
+      const found = findSurveyReplacement(next, item, { projectId: activeProjectId, quarter: q });
       const configuredItem = configuredImportPreview(
         item,
         pce,
@@ -11343,13 +11402,7 @@ export default function TrafficApp() {
        * 這裡也會拿到預設的 overwrite——結果是沒問過就覆蓋掉既有資料。
        * 所以補填造成的新對應，一律改走建立新版本而不是覆蓋。
        */
-      const stationWasFilled =
-        !importRows.find(function (row) {
-          return row.file === item.file;
-        })?.station && Boolean(item.station);
-      const conflictMode = stationWasFilled
-        ? "version"
-        : importConflictModes[item.file] || "overwrite";
+      const conflictMode = conflictModeOf(item);
       if (found >= 0 && conflictMode === "skip") {
         skipped += 1;
         return;
@@ -11410,7 +11463,7 @@ export default function TrafficApp() {
       const geometrySource = found >= 0 ? next[found] : mergeTarget;
       if (geometrySource) inheritRecordGeometry(created, geometrySource);
       if (found >= 0) {
-        if ((next[found].surveyType || "待設定") === "待設定" && exact < 0)
+        if ((next[found].surveyType || "待設定") === "待設定" && (item.surveyType || "待設定") !== "待設定")
           upgraded += 1;
         overwritten.push(next[found]);
         if (conflictMode === "version")
@@ -14277,15 +14330,41 @@ export default function TrafficApp() {
         <div className="load-error-card">
           <h1>暫時無法開啟本機資料庫</h1>
           <p>
-            系統已自動嘗試兩次，但這次仍未能在期限內讀取本機資料。
+            系統已自動試了兩次（第一次逾時後等 1.5 秒再試一次），
+            但這次仍未能在期限內讀取本機資料。
             <b>這不代表資料已消失，也沒有刪除或覆蓋任何內容。</b>
             為了避免您在空白狀態下誤做還原或匯入，這次不會進入主畫面。
           </p>
           <p className="load-error-reason">錯誤訊息：{loadError}</p>
           <p>請依序嘗試：</p>
+          {/*
+           * ⚠️ 建議清單要跟著 blocked 走，不可以固定不變（2026-09-29）。
+           *   blocked === false 代表瀏覽器**沒有**回報「資料庫正等候其他分頁釋放」，
+           *   這時原因仍未知；先提供重新載入，再建議排除其他分頁。不能宣稱
+           *   系統已排除其他分頁——使用者 2026-09-29 的回報是
+           *   只開一個分頁而看到這一條。v2.1.84 拿掉「Cookie／無痕／擴充套件」
+           *   是同一個毛病，當時漏了這一條。
+           */}
           <ul className="load-error-list">
-            <li>先關閉同一網站的其他分頁或視窗，只保留這一個分頁。</li>
-            <li>按下方按鈕重新載入；若仍發生，再完整關閉瀏覽器後重開。</li>
+            {timeoutBlocked ? (
+              <li>
+                <b>瀏覽器回報資料庫正在等其他分頁釋放</b>
+                ——請先關閉同一網站的其他分頁或視窗，只保留這一個分頁。
+              </li>
+            ) : (
+              <li>
+                <b>先按下方按鈕重新載入。</b>
+                這次逾時瀏覽器並沒有回報「其他分頁佔著資料庫」，
+                目前無法判定真正原因，請先重新載入再確認。
+              </li>
+            )}
+            {timeoutBlocked ? (
+              <li>按下方按鈕重新載入；若仍發生，再完整關閉瀏覽器後重開。</li>
+            ) : (
+              <li>
+                若仍發生，再關閉同一網站的其他分頁或視窗，之後完整關閉瀏覽器後重開。
+              </li>
+            )}
             <li>
               若問題持續發生，再把這段錯誤訊息提供給維護人員；目前無法只靠逾時判定真正原因。
             </li>
@@ -14297,7 +14376,7 @@ export default function TrafficApp() {
                 window.location.reload();
               }}
             >
-              關閉其他分頁後，重新載入
+              {timeoutBlocked ? "關閉其他分頁後，重新載入" : "重新載入"}
             </button>
           </div>
           <p className="load-error-note">
@@ -17390,15 +17469,26 @@ export default function TrafficApp() {
                     }}
                   />
                   {/*
-                   * ⚠️ 主工具列選「上午＋下午並列」時，這一張畫不出並列
-                   *   （它是一個路口一個圓環，並列會變成兩倍的圓環擠在一起）。
-                   *   不可以默默只畫上午——使用者會以為那就是並列的結果。
+                   * ⚠️ 主工具列選「上午＋下午並列」時，這一頁呈現不出並列
+                   *   （compositionScope 會退回 "AM"，見上面那一段）。
+                   *   不可以默默只顯示上午——使用者會以為那就是並列的結果。
                    *   只在真的選了並列時才出現這一句。
+                   *
+                   * ⚠️ 2026-09-29 更正說明文字（使用者指名的一項）。
+                   *   原本的說法把這一頁描述成一種**環狀圖形**，還說並列會變成
+                   *   兩倍的圖形擠在一起——**這一頁從來沒有那種圖形**。
+                   *   它是一組 `.kpi-grid.composition-kpis` 的數字卡，加上
+                   *   「全調查時段道路方向車種數量」那張表。
+                   *   拿一個不存在的圖形去解釋為什麼不能並列，使用者照著描述
+                   *   在畫面上找不到那個東西，只會懷疑自己看錯頁。
+                   *   **理由換成真的**：兩個時段並列會變成兩組一樣的卡片，
+                   *   而各車種的百分比不能跨時段相加。
+                   *   ⚠️ 擋下並列這個**行為沒有改**，改的只有解釋。
                    */}
                   <InapplicableNote
                     show={compositionFilters.peak === "AMPM"}
                     text={inapplicableNote(
-                      "本圖一次只呈現得了一個時段：它是一個路口一個圓環，上午與下午並列會變成兩倍的圓環擠在一起。",
+                      "本頁是一組「每一種車各佔多少」的數字卡與一張數量表，一次只讀得出一個時段的組成：上午與下午並列會變成兩組一樣的卡片，而各車種的百分比不能跨時段相加。",
                       "上午尖峰",
                     )}
                   />
@@ -21007,10 +21097,35 @@ export default function TrafficApp() {
                                 </tbody>
                               </table>
                             </div>
-                            <p className="inline-note">
-                              差值是該支線駛入與駛出的方向不平衡，不代表資料錯誤；整個路口的
-                              OD 總量才應守恆。
-                            </p>
+                            {/*
+                              * #5：差值那一欄要把四件事都說出來，不是只說「不代表錯誤」。
+                              *
+                              * 使用者 2026-09-29：「目前程式不是已經有差值是什麼意思的
+                              * 文字了嗎? 如果沒有，就請你做」——查證結果是**只有一句**
+                              * （「不代表資料錯誤」），定案的四要點缺了三個：
+                              *   ① 正負值各代表哪一個方向
+                              *   ② 進出不平衡是正常現象（潮汐）
+                              *   ③ 差值大 ≠ 那一支線車最多
+                              *   ④ 要指回手冊
+                              *
+                              * ⚠️ 畫面上的字不可以用 Markdown 的 ** 粗體（純文字會原樣印出星號），
+                              *   要強調一律用「」或 <b>（tests/plaintext-markup.test.mjs 在守）。
+                              */}
+                            <div className="inline-note" data-testid="balance-difference-note">
+                              <p>
+                                差值 ＝ 駛入 扣掉
+                                駛出。<b>正值代表這一支線「進來的比出去的多」</b>，負值反過來，代表出去的比進來的多。
+                              </p>
+                              <p>
+                                單一支線進出不平衡是<b>正常現象</b>，不是資料錯誤：早上往市區、傍晚往郊區的潮汐流動，本來就會讓同一支線在不同時段一邊多一邊少。要守恆的是<b>整個路口的 OD 總量</b>（所有支線駛入的總和 ＝ 所有支線駛出的總和），不是某一支線自己。
+                              </p>
+                              <p>
+                                ⚠️ <b>差值大不等於那一支線車最多</b>：差值看的是「進出的落差」，車流量看的是「總量」。一條車很多但進出很平均的支線，差值會接近 0；一條車不多但幾乎只出不進的支線，差值反而很大。要比車量請看「駛入」「駛出」那兩欄本身。
+                              </p>
+                              <p>
+                                進出落差要判斷到什麼程度算異常，請依<b>公路容量手冊</b>該路口型式的規定判斷；本系統只把數字算出來並呈現，不代替手冊做判定。
+                              </p>
+                            </div>
                           </article>
                           <article className={focusClass("advanced-window-rank", "panel")} id="advanced-window-rank">
                             {/* peakSensitivity(record) 掃的是整段調查、固定 60 分鐘視窗。 */}
@@ -21262,10 +21377,28 @@ export default function TrafficApp() {
                       <div>
                         <span>資料清理</span>
                         <h3>刪除單一季度</h3>
+                        {/*
+                         * ⚠️ 2026-09-29 更正這一段說明（使用者要我確認定稿鎖
+                         *   有沒有異常時查到的）。原本寫的是「已定稿的季度會被
+                         *   擋下來，請先到本頁下方把狀態改回草稿」，兩句都不對：
+                         *   ① 這一支的鎖**不是擋死**。deleteQuarter() 走
+                         *     authorizeLockedChange()，那是一個確認框，按確定就
+                         *     **連帶解除鎖定**並刪除（姊妹系統全日交通量才是擋死，
+                         *     要先明確把狀態改回草稿）。
+                         *   ② 這一支的審核狀態根本**沒有「草稿」**這個值
+                         *     （只有待核對／已核對／已確認／需修正），
+                         *     所以那句指路指向一個不存在的選項。
+                         *   ⚠️ 只改說明，**行為完全沒有動**——軟鎖是刻意的設計
+                         *     （authorizeLockedChange 的訊息本身就寫「是否解除相關
+                         *     成果鎖定並繼續」），改成擋死是另一件事，不在這一輪。
+                         *   同一頁的「本筆成果鎖定狀態」那張卡片一直都寫對，
+                         *   這裡跟它對齊。
+                         */}
                         <small>
                           刪除的是<b>整個季度</b>的原始資料，不是畫面上篩出來的那一份；
-                          這一塊不受主工具列條件影響。已定稿的季度會被擋下來，
-                          請先到本頁下方把狀態改回草稿。
+                          這一塊不受主工具列條件影響。這一季有<b>已鎖定成果</b>時，
+                          系統會先跳出確認、並在你按確定時一併解除那些鎖定才刪；
+                          要保留鎖定就按取消。
                         </small>
                       </div>
                     </div>
@@ -23106,7 +23239,7 @@ export default function TrafficApp() {
                 <div className="help-downloads">
                   <a
                     className="primary help-download"
-                    href="./路口轉向程式手冊_v2.1.85.pdf"
+                    href="./路口轉向程式手冊_v2.1.89.pdf"
                     /*
                      * ⚠️ download 一定要**帶檔名**，不可以只寫 `download`。
                      *
@@ -23123,7 +23256,7 @@ export default function TrafficApp() {
                      *     真正的使用者拿到的就是那個名字。
                      *     把檔名明確寫進 download，兩種情況都正確。
                      */
-                    download="路口轉向程式手冊_v2.1.85.pdf"
+                    download="路口轉向程式手冊_v2.1.89.pdf"
                   >
                     下載新手手冊
                   </a>
@@ -24788,8 +24921,13 @@ function TrendView(props: {
    *   累計量（24 小時的檔案大約是尖峰的二十幾倍），畫在同一條軸上會把
    *   三條尖峰線壓成貼著零的直線——那正是我們先前討論過、並且已經否決
    *   的「副 Y 軸／不同單位混在一張圖」問題。
-   *   使用者要的「四個同時展現」要用**兩張上下排列的圖**呈現，
-   *   那需要把圖的 JSX 抽成可重複使用的元件，列在待修正事項裡另做。
+   *   使用者要的「四個同時展現」用**兩張上下排列的圖**呈現。
+   *
+   * ⚠️ 2026-09-30 更正：這一段原本寫「那需要把圖的 JSX 抽成可重複使用的
+   *   元件，**列在待修正事項裡另做**」——但那件事**早就做完了**
+   *   （見本檔約第 1009 行：「整體」在畫面上是上下兩張圖，
+   *   尖峰流率／全調查時段累計量）。註解說它還沒做，是在說謊。
+   *   註解說謊比沒有註解更糟：下一個人會照著它去做一件已經做好的事。
    */
   /*
    * ══════════════════════════════════════════════════════════════
@@ -26260,6 +26398,18 @@ function TrendView(props: {
           </p>
         )}
       </section>
+      {/*
+        * #54：這一層只為了當 container query 的容器而存在。
+        *
+        * ⚠️ 不可以把 container-type 下在 .trend-layout 自己身上——
+        *   元素查詢不到自己的寬度（.peak-shape 那一次已經踩過，
+        *   見 globals.css 的 @container (min-width: 1076px) 上面的警語）。
+        * ⚠️ 也不可以包在 .trend-layout **裡面**：
+        *   `.trend-layout > .trend-chart` 這個直接子選擇器有四支
+        *   端對端腳本在用（e2e-chart-layout／e2e-sticky-offset／
+        *   e2e-trend-order／e2e-trend-split），包在裡面會一次打斷四支。
+        */}
+      <div className="trend-layout-container">
       <section className="trend-layout">
         {/*
           * data-charts 讓 CSS 知道釘住區裡有幾張圖：兩張時每張要壓到 24vh，
@@ -26949,6 +27099,7 @@ function TrendView(props: {
         </section>
       )}
       </section>
+      </div>
     </>
   );
 }

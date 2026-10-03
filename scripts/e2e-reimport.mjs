@@ -113,7 +113,15 @@ const page = await (
 ).newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e.message)));
-page.on("dialog", (d) => d.accept());
+let cancelDateOverwrite = false;
+const dateOverwriteMessages = [];
+page.on("dialog", async (d) => {
+  if (/這一批會蓋掉/.test(d.message())) {
+    dateOverwriteMessages.push(d.message());
+    if (cancelDateOverwrite) return d.dismiss();
+  }
+  await d.accept();
+});
 /* v2.1.53：資料改存 IndexedDB，端對端腳本要用 __readState／__writeState 才讀得到。 */
 await installStateHelpers(page);
 await page.goto("http://localhost:8176/");
@@ -309,6 +317,54 @@ ok(
   afterSecond.stations <= afterFirst.stations,
   `第一次 ${afterFirst.stations} 個 → 第二次 ${afterSecond.stations} 個`,
 );
+
+/* 不同調查日期重匯：取消確認必須保留舊紀錄，確定後才可替換。 */
+const readRecords = () => page.evaluate(async () =>
+  JSON.parse(await window.__readState()).records,
+);
+const beforeDateChange = await readRecords();
+for (let i = 0; i < payload.length; i += 1) {
+  payload[i].base64 = makeWorkbook({
+    sheetName: "平日",
+    dateText: "日期：115年04月16日",
+    station: `12507T5-${String(i + 1).padStart(2, "0")}`,
+    name: `重匯測試路口${i + 1}`,
+  }).toString("base64");
+}
+await go("季度批次匯入");
+await startDrop();
+await finishDrop();
+cancelDateOverwrite = true;
+await page.locator('button:has-text("確認寫入"), button:has-text("寫入")').first().click();
+await page.waitForTimeout(1500);
+ok("不同日期覆蓋前列出新舊日期", dateOverwriteMessages.some((message) =>
+  /2026-04-15/.test(message) && /2026-04-16/.test(message)));
+ok("取消日期覆蓋確認後舊紀錄逐字保留",
+  JSON.stringify(await readRecords()) === JSON.stringify(beforeDateChange));
+/* 略過既有紀錄不能再顯示「會蓋掉」日期提示。 */
+const beforeSkipPrompts = dateOverwriteMessages.length;
+const previewDetails = page.locator('details.preview-details');
+if (!(await previewDetails.evaluate(node => node.open)))
+  await previewDetails.locator('summary').click();
+const skipSelectors = page.locator('.content select').filter({ has: page.locator('option[value="version"]') });
+const skipCount = await skipSelectors.count();
+ok("前置：每一筆既有紀錄都有衝突模式選單", skipCount === TOTAL);
+for (let i = 0; i < skipCount; i += 1) await skipSelectors.nth(i).selectOption("skip");
+await page.locator('button:has-text("確認寫入"), button:has-text("寫入")').first().click();
+await page.waitForTimeout(1500);
+ok("全部略過不顯示日期覆蓋確認且舊紀錄不變",
+  dateOverwriteMessages.length === beforeSkipPrompts &&
+  JSON.stringify(await readRecords()) === JSON.stringify(beforeDateChange));
+await go("季度批次匯入");
+await startDrop();
+await finishDrop();
+cancelDateOverwrite = false;
+await page.locator('button:has-text("確認寫入"), button:has-text("寫入")').first().click();
+await page.waitForTimeout(2500);
+const afterDateChange = await readRecords();
+ok("確認後才更新調查日期且紀錄數維持不變",
+  afterDateChange.length === beforeDateChange.length &&
+  afterDateChange.every((record) => record.date === "2026-04-16"));
 
 ok("沒有 JS 例外", errors.length === 0, errors.slice(0, 2).join(" | "));
 

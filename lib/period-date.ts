@@ -588,3 +588,78 @@ export const PERIOD_DISPLAY_LABELS: Record<PeriodDisplayMode, string> = {
   quarter: "季別",
   month: "調查月份",
 };
+
+/* ══════════════════════════════════════════════════════════════════
+ *  覆蓋前的日期把關：要被蓋掉的舊資料，調查日期和這一批不一樣
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 使用者 2026-09-29：
+ *   「我比較擔心程式會因為檔案編號一樣，例如 115Q1 檔案編號 T15-01，
+ *     115Q4 檔案編號也是 T15-01，後者資料卻覆蓋掉了前者，但明明檔案裡面
+ *     顯示的是不同監測日期，只要裡面資料是不同監測日期，那麼檔案就是
+ *     不一樣的，這也是為什麼我說檔案編號對使用者來說不重要的原因。」
+ *
+ * ⚠️ 先講清楚三支現在都不會因為「檔名編號一樣」而互相覆蓋：
+ *   身分鍵一律含期別（交通服務水準 row.id 含 year＋Qquarter、
+ *   全日交通量 trafficIdentity() 含 quarter、路口轉向各處先濾 record.quarter），
+ *   而期別是使用者選的、再用檔案裡的調查日期核對，
+ *   完全沒有任何一處從檔名編號推期別。兩季同號 → 兩個鍵 → 不覆蓋。
+ *
+ * ⚠️ 真正還留著的縫是另一個：使用者把期別選錯（或沿用上一次的預設值），
+ *   於是 115Q4 那一批被寫進 115Q1 —— 這時候鍵真的撞上，舊資料真的被蓋掉。
+ *   原本的防線只說「日期和所選期別對不上」，沒有說出「而且會蓋掉既有資料」。
+ *   那兩件事的嚴重性差很多：前者常常是合法的（季末跨月、延後補測），
+ *   後者是把另一次調查的結果換掉。
+ *
+ * 判準：要覆蓋的那幾筆，舊資料的調查日期與這一批都讀得出來、而且不一樣。
+ *
+ * ⚠️ 刻意不看檔名、不看編號——依使用者裁示，編號是流水號，
+ *   判斷依據一律是檔案裡的調查日期。
+ * ⚠️ 只有一邊讀得出日期、或兩邊日期相同的，不算衝突：
+ *   讀不出日期就沒有證據，拿沒有證據的去擋就是假的紅；
+ *   日期相同代表這是同一次調查的重匯，那本來就該覆蓋。
+ *
+ * ⚠️ 文案與交通服務水準的 period-date.js 逐字相同（三支共用同一套字）。
+ */
+export type OverwriteDateConflict = {
+  /** 顯示給使用者的「這是哪一筆」（期別・路口或路段・資料別…）。 */
+  label: string;
+  /** 既有那一筆的調查日期。 */
+  oldDate?: string | null;
+  /** 這一批要寫進去的調查日期。 */
+  newDate?: string | null;
+};
+
+export function overwriteDateConflictPrompt(
+  conflicts: OverwriteDateConflict[],
+  undoNote?: string,
+): string {
+  const real = (Array.isArray(conflicts) ? conflicts : []).filter(function (item) {
+    if (!item) return false;
+    const oldDate = String(item.oldDate == null ? "" : item.oldDate).trim();
+    const newDate = String(item.newDate == null ? "" : item.newDate).trim();
+    return Boolean(oldDate) && Boolean(newDate) && oldDate !== newDate;
+  });
+  if (!real.length) return "";
+  const lines = real.map(function (item) {
+    return (
+      "　・" + (item.label || "（未命名）") +
+      "：原本是 " + String(item.oldDate).trim() +
+      "，這一批是 " + String(item.newDate).trim()
+    );
+  });
+  return (
+    "⚠️ 這一批會蓋掉 " + real.length +
+    " 筆已經存在的資料，而被蓋掉的那幾筆，調查日期和這一批不一樣。\n\n" +
+    lines.join("\n") +
+    "\n\n調查日期不一樣，就代表這是兩次不同的調查，" +
+    "不是同一份資料的新版本。\n" +
+    "最常見的原因是：調查廠商把不同期別的檔案編成同一個編號" +
+    "（例如兩季都叫 T15-01），而這裡選到的期別不是這一批資料真正的期別。\n" +
+    "檔案編號一樣不代表是同一份資料，判斷依據一律是檔案裡的調查日期。\n\n" +
+    "請按「取消」，回去把期別改成這一批資料自己的期別，" +
+    "上面那幾筆就不會被動到。\n" +
+    (undoNote ? undoNote + "\n" : "") +
+    "確定仍要蓋掉請按「確定」。"
+  );
+}

@@ -2241,9 +2241,11 @@ input:focus {
   .kpi-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+  /* ⚠️ .trend-layout 已改成 container query（見下方 .trend-layout-container），
+     不可以留在這個 viewport 區塊裡——兩套斷點依據同時作用，
+     側欄收合時一套跟著變、一套不變，版面會卡在中間那個狀態。 */
   .dashboard-grid,
   .diagram-layout,
-  .trend-layout,
   .geometry-layout {
     grid-template-columns: 1fr;
   }
@@ -3738,7 +3740,14 @@ button,.button,.help-download{white-space:nowrap}
 .review-panel{padding:20px 21px}
 .review-panel select,
 .review-panel input{margin-top:7px;padding:9px 11px;border:1px solid #cfdcdf;border-radius:8px;font:inherit;background:#fff}
-.review-panel select{max-width:220px}
+/*
+ * ⚠️ 2026-09-30（#55）：狀態下拉與「審核備註」輸入框原本**直接貼在一起**
+ *   （實測水平間距 0.0px）。兩個都是 inline-block，而 JSX 會把元素之間
+ *   只有換行的空白**整段移除**，所以連一個空白字元的縫都沒有。
+ *   兩個不同用途的控制項黏成一條，看起來像同一個控制項，也容易點錯。
+ *   這是新增的通用守門 scripts/e2e-layout-collisions.mjs 抓到的。
+ */
+.review-panel select{max-width:220px;margin-right:10px}
 .review-panel input{width:100%;max-width:420px}
 
 /* 車種組成分析：說明框的左右外距比面板內距還大，會頂出面板。 */
@@ -3747,7 +3756,30 @@ button,.button,.help-download{white-space:nowrap}
 /* 轉向進階分析與歷季趨勢：單欄化時忘了保留 minmax(0,…)，
    內容的 min-content 會把整個格線撐開，整頁跟著左右捲動。 */
 @media(max-width:900px){.advanced-grid{grid-template-columns:minmax(0,1fr)}}
-@media(max-width:1100px){.trend-layout{grid-template-columns:minmax(0,1fr)}}
+/* ── #54：歷季趨勢改用 container query ────────────────────────────
+ *
+ * 使用者要的是「版面跟著**可用寬度**變，不是跟著視窗變」。
+ * 同一頁的 .peak-shape 2026-09 已經改成 @container，歷季趨勢這一半
+ * 被漏掉了——於是同一頁兩套斷點依據：側欄收合時 .peak-shape 會重排、
+ * .trend-layout 不會，兩塊的欄數在同一個寬度下對不起來。
+ *
+ * ⚠️ 門檻要**換算**，不可以把 1100／1400 原封不動搬過來。
+ *   舊門檻量的是**視窗**寬，而容器寬 = min(視窗 − 248（側欄）, 1540) − 68（.content 左右內距）。
+ *     視窗 1100px → 容器 1100 − 248 − 68 = 784px
+ *     視窗 1400px → 容器 1400 − 248 − 68 = 1084px
+ *   照抄 1100／1400 的話，門檻會晚 316px 才觸發——那是「改了但沒真的改」，
+ *   而且畫面在那 316px 的區間裡是壞的。
+ *
+ * ⚠️ 區塊裡的 vh 單位**仍然是視窗**相對（釘住的圖要放得進視窗），
+ *   那是對的，不要一起換成容器單位。
+ */
+.trend-layout-container{container-type:inline-size}
+/*
+ * ⚠️ 真正的單欄界線在下面（原 `@media (max-width: 1399px)`），不是 1100px。
+ *   檔案上方那條 max-width:1100px 從 2026-09 起就被它蓋掉了，是死碼；
+ *   照著死碼換算門檻會得到一個「看起來改了、其實沒作用」的規則。
+ *   這裡不再另外寫一條 784px 的，全部由 1083px 那一條負責。
+ */
 
 /* ── 版面：把「兩個 media query 之間沒人管」的空窗補起來 ──────────
    下面三個格線的內容各自在 1229 / 1221 / 1249px 就撐不下了，
@@ -4821,17 +4853,17 @@ button,.button,.help-download{white-space:nowrap}
  * 右邊那一欄（趨勢摘要）下方是空的，講稿卻要往下捲才看得到。
  * 講稿移進 .trend-layout 之後，用 grid-template-areas 讓圖跨兩列、
  * 摘要與講稿疊在右欄，講稿就在圖的旁邊。
- * 窄螢幕時（見下方 1080px 的斷點）整個網格回到單欄，講稿自然落到圖下方。
+ * 窄螢幕時（容器 ≤1083px）整個網格回到單欄，講稿自然落到圖下方。
  *
  * 三支系統的行為刻意一致。
  */
 /*
- * ⚠️ 斷點取 1400px，不是 1080px。
+ * ⚠️ 斷點取容器 1084px（＝視窗 1400px），不是 1080px。
  * 講稿移到右欄之後，圖那一欄會少 320px；1280～1366 的筆電上
  * 8 季的圖（980px 寬）就開始需要橫向捲動，反而比放在下面難看。
  * 夠寬（≥1400px）才並排，其餘一律講稿在圖的下方。
  */
-@media (min-width: 1400px) {
+@container (min-width: 1084px) {
   .trend-layout {
     grid-template-areas:
       "chart side"
@@ -4848,8 +4880,8 @@ button,.button,.help-download{white-space:nowrap}
    * 右欄的摘要＋說明比圖高，捲動時圖會先離開畫面。改成圖「黏」在視窗上緣，
    * 右欄自己往上捲——一邊讀一邊對照，不必來回捲。
    *
-   * ⚠️ 這條規則**只能寫在這個 ≥1400px 的區塊裡**。
-   *    1399px 以下是單欄（說明就在圖的正下方），那時候黏住會把說明擠出畫面。
+   * ⚠️ 這條規則**只能寫在這個容器 ≥1084px 的區塊裡**。
+   *    容器 1083px 以下是單欄（說明就在圖的正下方），那時候黏住會把說明擠出畫面。
    * ⚠️ align-self 一定要 start：grid 項目預設 stretch，
    *    被拉滿整列高度的元素沒有可以黏的空間，sticky 完全不會生效。
    * ⚠️ max-height 用 100vh 減掉上下留白，圖本身比視窗高時才捲得動。
@@ -4932,7 +4964,12 @@ button,.button,.help-download{white-space:nowrap}
     height: auto;
   }
 }
-@media (max-width: 1399px) {
+/*
+ * ⚠️ 門檻換算：容器寬 = min(視窗 − 248（側欄）, 1540) − 68（.content 左右內距）。
+ *   視窗 1399px → 容器 1083px。照抄 1399 的話門檻會晚 316px 才觸發，
+ *   而且那 316px 的區間裡畫面是壞的、沒有任何症狀看得出來。
+ */
+@container (max-width: 1083px) {
   /* ⚠️ 一定要 minmax(0,1fr)，不能只寫 1fr。
      只寫 1fr 時，欄寬的下限是內容的 min-content——圖是一張比視窗還寬的
      SVG，整個格線就被撐開，整頁跟著左右捲動（實測 640px 溢出 197px、

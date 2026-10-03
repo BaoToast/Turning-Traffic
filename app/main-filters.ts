@@ -287,18 +287,14 @@ export const PEAK_RULE_LABELS: Record<PeakRule, string> = {
   direction: "各方向各自認定自己的尖峰",
 };
 
-/**
- * 尖峰數字旁邊一定要寫明用哪一種判定方式算的。
- *
- * ⚠️ 這不是排版，是可追溯性：兩種算法的數字本來就不同，
- *   「各方向各自認定」那一組**各方向不可以相加**。
- *   沒寫明的話，兩頁用不同算法時使用者無從察覺。
+/*
+ * ⚠️ 2026-09-30 移除 `peakRuleNote()`：它是**死碼**。
+ *   全專案只有這個定義，沒有任何呼叫點（`tests/plaintext-markup.test.mjs`
+ *   的註解提到它，那是註解不是使用）。
+ *   死碼留著的代價不是效能，是**誤導**：下一個人會以為畫面上某處在用它，
+ *   改它的時候會小心翼翼地維持一個沒有人看的行為。
  */
-export function peakRuleNote(rule: PeakRule): string {
-  return rule === "direction"
-    ? "尖峰時段判定：各方向各自認定自己的尖峰——各方向的尖峰不在同一小時，不可以相加。"
-    : "尖峰時段判定：整個調查點取同一時段，各方向可以相加。";
-}
+
 
 export const FLOW_VIEW_LABELS: Record<FlowView, string> = {
   outbound: "駛出路口（以該支線為起點）",

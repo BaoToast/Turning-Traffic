@@ -249,7 +249,21 @@ await retry.addInitScript(() => {
   });
 });
 await retry.goto(base, { waitUntil: "domcontentloaded" });
+/*
+ * ⚠️ 2026-09-29：第一次逾時之後**要先等 1.5 秒**才重試（RETRY_DELAY_MS）。
+ *   使用者 2026-09-29 在線上遇到逾時，而手動重新整理一次就好了——
+ *   立刻重試等於用同一個忙碌瞬間再賭一次，自動重試形同虛設。
+ *   這裡先只推進到 8001ms，確認**第二次還沒開始**，證明那段等待真的存在；
+ *   不驗這一步的話，把 RETRY_DELAY_MS 改回 0 也不會有人發現。
+ */
 await retry.clock.runFor(8001);
+const midRetry = await retry.evaluate(() => window.__storageOpenCount);
+ok(
+  "第一次逾時之後不可以立刻重試，要先等 RETRY_DELAY_MS",
+  midRetry === 1,
+  `8001ms 時已經 open ${midRetry} 次（應該還是 1 次）`,
+);
+await retry.clock.runFor(1600);
 const retryView = await retry.evaluate(() => ({
   opens: window.__storageOpenCount,
   nav: document.querySelectorAll("nav button").length,
@@ -289,7 +303,8 @@ await timeout.addInitScript(() => {
   });
 });
 await timeout.goto(base, { waitUntil: "domcontentloaded" });
-await timeout.clock.runFor(16001);
+/* 8000（第一次逾時）＋1500（等待）＋8000（第二次逾時）＝17500 */
+await timeout.clock.runFor(17501);
 const timeoutView = await timeout.evaluate(() => ({
   opens: window.__storageOpenCount,
   text: document.body.innerText.replace(/\s+/g, " ").trim(),
@@ -301,12 +316,32 @@ ok(
   timeoutView.opens === 2 && timeoutView.timeout && /暫時無法開啟本機資料庫/.test(timeoutView.text),
   `open ${timeoutView.opens} 次`,
 );
+/*
+ * ⚠️ 2026-09-29 改：建議清單要跟著 blocked 走。
+ *   這個 mock 的 onblocked **從來沒有被呼叫**，所以 blocked === false——
+ *   系統自己已經知道「不是其他分頁佔著資料庫」。
+ *   舊版在這種情況下仍然把「先關閉同一網站的其他分頁」排第一條，
+ *   而使用者 2026-09-29 就是只開一個分頁卻看到那一條。
+ *   那跟 v2.1.84 拿掉「Cookie／無痕／擴充套件」是同一個毛病，當時漏了這一條。
+ */
 ok(
-  "逾時畫面先叫使用者關閉同站其他分頁，且不冒充 Cookie／無痕／擴充套件封鎖",
-  /先關閉同一網站的其他分頁/.test(timeoutView.text) &&
-    !/封鎖所有 Cookie|無痕或隱私模式|擴充套件/.test(timeoutView.text) &&
+  "瀏覽器沒有回報 blocked 時，第一條不可以是「先關閉其他分頁」",
+  !/先關閉同一網站的其他分頁/.test(timeoutView.text) &&
+    /並沒有回報/.test(timeoutView.text) &&
+    /先按下方按鈕重新載入/.test(timeoutView.text),
+  timeoutView.text.slice(0, 220),
+);
+ok(
+  "逾時畫面不冒充 Cookie／無痕／擴充套件封鎖",
+  !/封鎖所有 Cookie|無痕或隱私模式|擴充套件/.test(timeoutView.text) &&
     !/瀏覽器不允許這個網站儲存資料/.test(timeoutView.text),
   timeoutView.text.slice(0, 180),
+);
+ok(
+  "逾時畫面要講明系統試了兩次、而且兩次之間有等",
+  /系統已自動試了兩次/.test(timeoutView.text) &&
+    /等 1.5 秒再試一次/.test(timeoutView.text),
+  timeoutView.text.slice(0, 160),
 );
 ok(
   "逾時後仍不可以顯示可操作的空主畫面",
@@ -314,6 +349,62 @@ ok(
   `導覽鈕 ${timeoutView.nav}`,
 );
 await timeoutCtx.close();
+
+/* ── 三之二、瀏覽器真的回報 blocked 時，建議清單要換成另一套 ──
+ *
+ * ⚠️ 這一段是上一條的另一半：只驗「沒有 blocked 的時候不要叫人關分頁」，
+ *   把整段文字寫死成一種也會通過。兩邊都要驗，這條守門才不是半條。
+ */
+const blockedTimeoutCtx = await browser.newContext();
+const blockedTimeout = await blockedTimeoutCtx.newPage();
+await blockedTimeout.clock.install();
+await blockedTimeout.addInitScript(() => {
+  window.__storageOpenCount = 0;
+  Object.defineProperty(window, "indexedDB", {
+    configurable: true,
+    value: {
+      open() {
+        window.__storageOpenCount += 1;
+        const request = {
+          onsuccess: null,
+          onerror: null,
+          onupgradeneeded: null,
+          onblocked: null,
+          result: { close() {} },
+          error: null,
+        };
+        /* 回報 blocked，然後就這樣停著——真實世界裡「其他分頁佔著舊版」的樣子。 */
+        queueMicrotask(() => request.onblocked?.());
+        return request;
+      },
+    },
+  });
+});
+await blockedTimeout.goto(base, { waitUntil: "domcontentloaded" });
+await blockedTimeout.clock.runFor(17501);
+const blockedTimeoutView = await blockedTimeout.evaluate(() => ({
+  opens: window.__storageOpenCount,
+  text: document.body.innerText.replace(/\s+/g, " ").trim(),
+  timeout: Boolean(document.querySelector('[data-testid="storage-timeout"]')),
+}));
+ok(
+  "前置：blocked 版本也真的走到逾時畫面、也真的開了兩次",
+  blockedTimeoutView.timeout && blockedTimeoutView.opens === 2,
+  `open ${blockedTimeoutView.opens} 次`,
+);
+ok(
+  "瀏覽器回報 blocked 時，第一條才可以是「先關閉其他分頁」",
+  /瀏覽器回報資料庫正在等其他分頁釋放/.test(blockedTimeoutView.text) &&
+    /先關閉同一網站的其他分頁/.test(blockedTimeoutView.text) &&
+    !/並沒有回報/.test(blockedTimeoutView.text),
+  blockedTimeoutView.text.slice(0, 220),
+);
+ok(
+  "blocked 版本的錯誤訊息要講出「正等候其他分頁釋放」",
+  /正等候其他分頁釋放/.test(blockedTimeoutView.text),
+  blockedTimeoutView.text.slice(0, 200),
+);
+await blockedTimeoutCtx.close();
 
 /* ── 四、儲存空間正常時，不可以誤跳這個畫面 ── */
 const normalCtx = await browser.newContext();

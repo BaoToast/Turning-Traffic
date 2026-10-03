@@ -58,7 +58,7 @@ export class StorageTimeoutError extends Error {
 
   constructor(blocked: boolean) {
     super(
-      "開啟本機資料庫逾時；系統已自動重試一次仍未完成" +
+      "開啟本機資料庫逾時；系統已自動試了兩次（第一次逾時後等 1.5 秒再試一次）仍未完成" +
         (blocked
           ? "（瀏覽器回報資料庫正等候其他分頁釋放）"
           : "（可能是瀏覽器或電腦暫時忙碌）"),
@@ -74,6 +74,11 @@ export class StorageTimeoutError extends Error {
  * 所以加逾時。
  */
 const OPEN_TIMEOUT_MS = 8000;
+/*
+ * 第一次逾時之後、再試之前要等多久（2026-09-29 加）。
+ * 立刻重試等於用同一個忙碌瞬間再賭一次；見 openDatabase() 的註解。
+ */
+const RETRY_DELAY_MS = 1500;
 
 /** 單次開啟；逾時後晚到的 success 只負責關閉連線，不會回頭改寫結果。 */
 function openDatabaseOnce(): Promise<IDBDatabase> {
@@ -164,6 +169,21 @@ async function openDatabase(): Promise<IDBDatabase> {
     return await openDatabaseOnce();
   } catch (error) {
     if (!(error instanceof StorageTimeoutError)) throw error;
+    /*
+     * ⚠️ 2026-09-29：重試前先等一下，不要立刻再試。
+     *
+     *   使用者 2026-09-29 在線上站台遇到這個畫面，而**手動重新整理一次就好了**
+     *   ——只能確認這次重新整理成功，不能據此判定真正原因。
+     *   舊版第一次逾時後立刻再試；短暫的環境問題可能仍未恢復，
+     *   因此增加有上限的等待，但不保證等待後一定成功。
+     *
+     *   1.5 秒是刻意壓在很短的範圍：提供短暫的恢復機會，
+     *   又不會讓最壞情況（8 + 1.5 + 8 ≈ 17.5 秒）長到使用者以為當掉了。
+     *   ⚠️ 這段等待只在**第一次逾時之後**發生，正常開啟一毫秒都不會多等。
+     */
+    await new Promise(function (done) {
+      setTimeout(done, RETRY_DELAY_MS);
+    });
     try {
       return await openDatabaseOnce();
     } catch (retryError) {

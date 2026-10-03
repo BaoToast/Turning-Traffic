@@ -139,6 +139,35 @@ test("驗證報告寫的手冊頁數與字元數要與 PDF 相符（缺工具時
       "——本版的手冊數字一定要寫在本版那一節，寫在別節會被當成歷史紀錄，" +
       "這一支就會拿舊數字去比對新 PDF",
   );
+  /*
+   * ⚠️ 2026-09-29 加：【更新說明】的「本版手冊」段落也要寫同一組數字。
+   *   姊妹系統全日交通量 2026-09-28 已經加過同一條，本支與交通服務水準當時沒跟上。
+   *   驗證報告是給複查者看的，【更新說明】才是使用者手上那一份；
+   *   兩邊只要有一邊沒跟著換，使用者就會拿舊數字去核對新手冊。
+   * ⚠️ 段落的**結束標記**抓不到時要直接紅，不可以讓 slice 一路吃到檔尾——
+   *   那會退化成「整檔找得到就算數」，正是 v2.1.85 在修的那種假的綠。
+   */
+  {
+    const notes = await readFile(
+      new URL("../【更新說明】請先讀我.txt", import.meta.url),
+      "utf8",
+    );
+    const start = notes.lastIndexOf("本版手冊：");
+    assert.ok(start >= 0, "更新說明裡找不到「本版手冊：」段落");
+    const end = notes.indexOf("舊版雜湊資產", start);
+    assert.ok(
+      end > start,
+      "更新說明的「本版手冊」段落找不到結束標記「舊版雜湊資產」——" +
+        "沒有結束標記就只能一路讀到檔尾，那等於整檔找得到就算數",
+    );
+    const manualSection = notes.slice(start, end);
+    assert.ok(
+      manualSection.includes(`${claim[1]} 頁 / ${claim[2]} 字元`),
+      `更新說明的「本版手冊」段落必須寫 ${claim[1]} 頁 / ${claim[2]} 字元，` +
+        "不可以沿用上一版的數字",
+    );
+  }
+
   const root = fileURLToPath(new URL("../", import.meta.url));
   const pdf = readdirSync(root).find(
     (name) => name.startsWith("路口轉向程式手冊") && name.endsWith(".pdf"),
