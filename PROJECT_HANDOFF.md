@@ -21,7 +21,7 @@
 - 正式 GitHub Pages：<https://baotoast.github.io/Turning-Traffic/>
 - 帶版號的正式驗證網址：以最新已發布版本及第 12 節的線上證據為準。
 - 正式 branch：`main`
-- 最新已發布基準：v2.1.85／`b5d9d432e7fc7c0c04dd57dfd4993bbb61c31f8e`。本輪 v2.1.89 為正在獨立複查的候選，只有完成第 12 節發布證據後才算正式上線。
+- 最新已發布版本：v2.1.89，功能提交 `53fc053662f0433dc9a0ce6fd64c9c458afa297c`，文件守門補正提交 `d2d643986db1b1a0c865f2dc89c4d813b868d91b`；2026-10-03 已完成 CI／Pages／線上雜湊驗證，證據見第 12.9 節。後續純交接證據提交以本檔所在 main 的實際 HEAD 為準，不把文件提交誤當新版交通計算。
 - 交接文件建立前的 `HEAD`／已發布文件基準：`a4f93f29c25242a0faddcdf562a38b16f1012ceb`（`Document v2.1.63 release verification`）
 - v2.1.63 功能發布 commit：`ef5e56e028dbbba87b4529b87b0ae40341dd66fe`
 - v2.1.79 功能／發布 commit：`3a401d03d5e6bc8832733bbb5a3d744087269fad`（`Release Turning Traffic v2.1.79`）。本文件可能另有後續驗證提交；新 GPT 必須以 `git log -1`、`git rev-parse HEAD` 與遠端 `main` 實際核對當下最新基準。
@@ -627,7 +627,17 @@ GPT 另補正：版面掃描換頁失敗必須拋錯，不可吞掉後重複掃�
 比對 package.json 完全相同。不是宣稱首輪字面完整命令一次 exit 0。
 兩段競用／缺 exit code／中途誤判結果不採計；所有原始失敗日誌保留在交付複查包。
 測試修正後 targeted lint 成功，發布結構 19 項與 metadata 8 項（含 Poppler 實算）通過。
-GitHub build／root 全部 5 資產、首頁與手冊 SHA 相同；目前待提交及線上驗證。
+GitHub build／root 全部 5 資產、首頁與手冊 SHA 相同。以下是完成後的正式發布結果，取代上方中間檢查點的待辦狀態。
+
+2026-10-03 正式發布證據：
+
+- 功能提交 `53fc053662f0433dc9a0ce6fd64c9c458afa297c` 的 CI `37114857018` 曾失敗：GPT 文件的否定數量句也被既有 inventory 守門匹配。僅改寫文件，沒有放寬測試；Pages `37114856698` 成功不能抵銷該次 CI 失敗。
+- 補正提交 `d2d643986db1b1a0c865f2dc89c4d813b868d91b` 的 CI `37115064881` 與 Pages `37115064041` 均成功；Linux 完整測試再次確認 673 pass／4 真實附件條件 skip／0 fail，lint／glyph／TypeScript／build 全部通過。
+- 18:04:39（Asia/Taipei）以 cache-busting 下載正式 Pages 首頁、全部 5 個資產、v2.1.89 手冊，逐檔 SHA-256 與本機相同。首頁 SHA `E08B9B53176AA2DFFC1C335609F48FC5C67CEEC21FF2EF01723C1F42AAF73FAF`；主 JS `index-BJzbtAQU.js` SHA `DC000DD4637F7B40C41258DF187165B367BE06344D8AD71D83339888F4AB8588`；手冊 SHA `3DD70FFD6A476283EDACA6BB635B0ACA6F0557A7EBF53456EC8A41F3B97387F7`。
+- 指定舊資產 `index-D9NZA5qo.js`、`index-CqyyYgkL.css`、`html2canvas-BqJs8e-L.js`、`index.es-BDBIt8Lb.js` 及 v2.1.85 手冊均為 404。完整逐檔雜湊、執行紀錄與截圖提供於 Claude 二次複查交付包，不以 Claude 原候選聲稱代替 GPT 證據。
+- 最新 audit 為 20 項（1 low／4 moderate／15 high），production-only 仍為 1 low；較早的 13 項只是歷史掃描。新增開發依賴鏈風險包含 braces `GHSA-vfj7-8cjw-p6xm`（公告目前無修補版本）；靜態 Pages 不執行 Node build server，但不能宣稱依賴零風險，列後續安全維護，不在本輪強制升依賴。
+- 尚未驗證的真實附件／真實別名案例、桌面 Excel 開啟匯出、業務匯出 PDF 逐頁閱讀仍未完成；手冊 PDF 全頁閱讀及合成種子測試不能代替這些證據。
+- 下一步僅是交付並等待 Claude Opus High 第二次獨立複查，不自行開始依賴更新或其他維護。正式工程資料留同一 Repository／GitHub；使用者副本另交 Downloads。
 
 ### 12.10 正式發布
 

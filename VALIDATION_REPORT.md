@@ -73,7 +73,30 @@ DOMPurify `GHSA-p98j-92pf-mc4p`，觸發條件為 IN_PLACE 加移除節點的 af
 該 CI 的 npm ci 在 Linux 報 20 項（1 low／4 moderate／15 high），與較早 Windows
 audit 的 13 項是不同環境／時間的結果，不可互相替代；最新 audit 另行核對。
 所有程式修改的完整 npm test 是 673 pass／4 真實附件條件 skip／0 fail；後續只改
-測試 harness／文件，相關守門已重驗，不重跑未受影響的確認前綴。線上發布尚待驗證。
+測試 harness／文件，相關守門已重驗，不重跑未受影響的確認前綴。正式發布結果如下。
+
+### 正式發布驗證（2026-10-03）
+
+文件補正提交 `d2d643986db1b1a0c865f2dc89c4d813b868d91b` 已推送 main；CI
+`37115064881` 與 Pages `37115064041` 均成功。CI 的完整測試為 291 個 mjs＋382 個 TS
+通過，合計 673 pass／4 真實附件條件 skip／0 fail，lint／glyph／TypeScript／build 通過。
+這是 d2d 提交的實際重驗，並非引用 Claude 的歷史結果；此前 53fc 的失敗仍保留上述原因。
+
+18:04:39（Asia/Taipei）下載正式 Pages 首頁、5 個資產與手冊，全部回應成功且 SHA-256
+與本機逐檔相同。首頁 SHA `E08B9B53176AA2DFFC1C335609F48FC5C67CEEC21FF2EF01723C1F42AAF73FAF`；
+主 JS `index-BJzbtAQU.js` SHA `DC000DD4637F7B40C41258DF187165B367BE06344D8AD71D83339888F4AB8588`；
+手冊 SHA `3DD70FFD6A476283EDACA6BB635B0ACA6F0557A7EBF53456EC8A41F3B97387F7`。
+指定舊版 4 個資產及 v2.1.85 手冊均為 404；機器可讀的全檔雜湊見交付包 release-evidence.json。
+
+最新 Windows audit 也為 20 項（1 low／4 moderate／15 high），production-only 為 1 low，
+取代較早 13 項作為目前結果。開發鏈新增 braces 遞迴樣式 DoS 公告
+`GHSA-vfj7-8cjw-p6xm`，涉及 7 個傳遞依賴名稱；公告目前無修補版本。
+production DOMPurify low 的觸發路徑分析仍如上，不能宣稱零風險。未強制改動鎖定依賴，
+保留新舊 audit 原始 JSON，列後續安全維護。公告來源：https://github.com/advisories/GHSA-vfj7-8cjw-p6xm
+
+本輪仍未在真正桌面 Excel 開啟匯出、未逐頁閱讀業務匯出 PDF、未補真實附件與別名案例。
+手冊的 20 頁點陣化閱讀及合成種子證據，不代表以上項目通過。交接證據後續純文件提交
+仍須在其實際 HEAD 確認 CI／Pages 及線上雜湊；程式版本保持 v2.1.89。
 
 ### Claude 原始候選證據（以下不是 GPT 本輪重驗結果）
 
