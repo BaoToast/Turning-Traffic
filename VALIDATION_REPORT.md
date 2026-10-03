@@ -58,7 +58,7 @@ DOMPurify `GHSA-p98j-92pf-mc4p`，觸發條件為 IN_PLACE 加移除節點的 af
 ### 最終本機門檻（2026-10-03）
 
 正式序列 84 支瀏覽器腳本已完整覆蓋：83 pass／1 整支條件 skip（e2e-alias 缺真實附件），
-另 2 支種子產生器成功；不是「86 支瀏覽器 E2E」，先行 GitHub build 另計。
+另 2 支種子產生器成功；種子產生器不得計為瀏覽器測試，先行 GitHub build 另計。
 首輪字面 npm run e2e 因測試 harness 問題失敗；保留前 10 支成功，由 shell && 鏈確認。
 受監控續跑 33 支、scanner 單支 exit 0、後 40 支各直接 exit 0，合計 84 支；33＋40
 的腳本順序與 package.json 正式序列逐項相同。不是宣稱整條字面命令一次 exit 0。
@@ -67,6 +67,11 @@ DOMPurify `GHSA-p98j-92pf-mc4p`，觸發條件為 IN_PLACE 加移除節點的 af
 最後 40 支 resume exit 0；黏住遮擋、八支線 viewBox／16 張圖卡／文字界線均通過。
 測試補正後 targeted lint 成功；發布結構 19 pass、metadata 8 pass（Poppler 實算成功）。
 根目錄首頁、5 個資產、手冊全部與 github-pages-dist 的 SHA 相同。
+第一次推送 `53fc053662f0433dc9a0ce6fd64c9c458afa297c` 的 CI `37114857018`
+被 E2E 數量文件守門擋下：它把報告的否定說明也匹配為數量宣稱。改寫文件，不放寬
+測試；這是 GPT 本輪文件造成的失敗，不是交通計算或瀏覽器測試失敗。
+該 CI 的 npm ci 在 Linux 報 20 項（1 low／4 moderate／15 high），與較早 Windows
+audit 的 13 項是不同環境／時間的結果，不可互相替代；最新 audit 另行核對。
 所有程式修改的完整 npm test 是 673 pass／4 真實附件條件 skip／0 fail；後續只改
 測試 harness／文件，相關守門已重驗，不重跑未受影響的確認前綴。線上發布尚待驗證。
 
