@@ -21,7 +21,7 @@
 - 正式 GitHub Pages：<https://baotoast.github.io/Turning-Traffic/>
 - 帶版號的正式驗證網址：以最新已發布版本及第 12 節的線上證據為準。
 - 正式 branch：`main`
-- **本包為 v2.1.91**（Claude 2026-10-03 第二次複查產出，**尚未發布**）。
+- **本包為 v2.1.91**（Claude 候選 2026-10-03，GPT 獨立複查修正並於 2026-10-04 正式發布）。
   v2.1.90：使用者回報的兩件版面問題（轉向進階分析的「車種」壓住「全調查時段」切換鈕、
   label 與自己的下拉間距 0px），根因都是「版面規則綁在特定容器上」，已改成通用規則並新增
   `scripts/e2e-control-gaps.mjs`。
@@ -33,7 +33,7 @@
   發布狀態及線上證據以第 12.9d 節為準，不把原候選聲明當作本輪結果。
   ⚠️ `braces`（GHSA-vfj7-8cjw-p6xm）**上游至今沒有修補版**（最新即受影響的 3.0.3），
   同時出現在 lint 與 vinext 建置工具鏈，不打包進靜態網站；不能宣稱完整依賴零風險。
-- 最新已發布版本：v2.1.89，功能提交 `53fc053662f0433dc9a0ce6fd64c9c458afa297c`，文件守門補正提交 `d2d643986db1b1a0c865f2dc89c4d813b868d91b`；2026-10-03 已完成 CI／Pages／線上雜湊驗證，證據見第 12.9 節。後續純交接證據提交以本檔所在 main 的實際 HEAD 為準，不把文件提交誤當新版交通計算。
+- 最新已發布版本：v2.1.91，功能提交 `142e82f002fda20b1fa1668dd1f3f00c2a3d5bb4`；2026-10-04 CI／Pages／線上雜湊驗證成功，見第 12.9d 節。後續純交接證據提交以本檔所在 main 的實際 HEAD 為準，不把文件提交誤當新版交通計算。
 - 交接文件建立前的 `HEAD`／已發布文件基準：`a4f93f29c25242a0faddcdf562a38b16f1012ceb`（`Document v2.1.63 release verification`）
 - v2.1.63 功能發布 commit：`ef5e56e028dbbba87b4529b87b0ae40341dd66fe`
 - v2.1.79 功能／發布 commit：`3a401d03d5e6bc8832733bbb5a3d744087269fad`（`Release Turning Traffic v2.1.79`）。本文件可能另有後續驗證提交；新 GPT 必須以 `git log -1`、`git rev-parse HEAD` 與遠端 `main` 實際核對當下最新基準。
@@ -653,7 +653,7 @@ GitHub build／root 全部 5 資產、首頁與手冊 SHA 相同。以下是完�
 - 尚未驗證的真實附件／真實別名案例、桌面 Excel 開啟匯出、業務匯出 PDF 逐頁閱讀仍未完成；手冊 PDF 全頁閱讀及合成種子測試不能代替這些證據。
 - 下一步僅是交付並等待 Claude Opus High 第二次獨立複查，不自行開始依賴更新或其他維護。正式工程資料留同一 Repository／GitHub；使用者副本另交 Downloads。
 
-### 12.9d v2.1.91 獨立複查檢查點（2026-10-04；尚未發布）
+### 12.9d v2.1.91 獨立複查與正式發布（2026-10-04）
 
 唯一基準 v2.1.89／`7c8f08c6a4e7f6207a86fd88dabef3a246d7240f`，本輪以中風險追蹤
 共用控制列 CSS／Segmented 全部使用點與 jsPDF／DOMPurify 匯出依賴；Parser、交通
@@ -682,7 +682,16 @@ audit 19 項（4 moderate／15 high），仍不宣稱零風險。候選「braces
 實際也在 vinext／vite-plugin-commonjs／vite-plugin-dynamic-import 建置鏈；目前官方
 公告仍無修補版本，不以降外掛兩個大版冒充上游修補。來源、依賴路徑與原始 JSON
 保存在二次複查交付證據。真實附件、桌面 Excel／業務 PDF 逐頁人工開啟仍未完成，
-合成資料、手冊閱讀及安全探針不能代替這些證據。線上發布完成後補記同一段。
+合成資料、手冊閱讀及安全探針不能代替這些證據。
+
+功能提交 `142e82f002fda20b1fa1668dd1f3f00c2a3d5bb4` 已推送 main；CI `37172405445`
+與 Pages `37172405101` 均 success，CI 實際日誌 296 mjs＋382 TS pass、4 條件 skip、
+0 fail。2026-10-04 10:54 Asia/Taipei 線上 cache-busted 首頁、v2.1.91 手冊及全部
+5 資產 SHA-256 與正式根目錄逐檔一致，舊 v2.1.89 的 5 資產及手冊網址全為 404。
+主 JS `index-BXYO8mCW.js` SHA-256：
+`fff4b339d52f345712713201e805be0404c14144a9d8821b7c003df2677bf823`。
+完整清單見更新說明與交付 release-evidence.json；後續純證據提交不改網站資產，
+仍必須核對該最終 HEAD 的 CI／Pages，不以較早功能提交成功冒充最終提交。
 
 ### 12.10 正式發布
 

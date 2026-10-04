@@ -2,7 +2,7 @@
 
 ## v2.1.91（候選日期 2026-10-03；GPT 獨立驗證 2026-10-04）相依套件安全告警：DOMPurify 升到已修補版
 
-### GPT 獨立複查檢查點（2026-10-04；尚未發布）
+### GPT 獨立複查修正與正式發布（2026-10-04）
 
 基準是正式 v2.1.89／`7c8f08c6a4e7f6207a86fd88dabef3a246d7240f`，本輪按中風險
 追蹤共用控制列 CSS、所有 Segmented 使用點與 DOMPurify／jsPDF 匯出依賴。
@@ -18,7 +18,7 @@ GPT 讀取實際交付檔後確認三項說明與程式差異，已修正：
 computed flexShrink／whiteSpace／rowGap，防止「換行讓幾何通過但共用保護未實作」。
 DOMPurify 增加 lock／安裝／正式網站資產版本一致及拒絕舊受影響版本守門。
 以下候選測試數、字距模擬及安全說明是 Claude 提供的歷史證據，不是本輪 GPT 通過結果；
-GPT 本輪實際門檻如下；線上證據完成後補記。
+GPT 本輪實際門檻如下，線上證據另列；下方 Claude 歷史聲明不能取代本段。
 
 2026-10-04 已獨立確認：乾淨 npm ci exit 0；字面 npm test exit 0，296 個 mjs＋382 個
 TypeScript 通過，合計 678 pass／4 特定真實附件條件 skip／0 fail，包含 lint、字形、
@@ -47,6 +47,16 @@ braces 仍為 3.0.3，官方 GHSA-vfj7-8cjw-p6xm 目前無修補版本；不使�
 說明 ZIP SHA-256：91A48197EECDB50574595253188A5F3C9565ED91D630E87AF134BF6F8D1A09F1。
 以下 Claude 原候選封關不冒充本輪結果；本輪未取得特定真實附件，亦未以桌面 Excel
 開啟本輪匯出或逐頁人工閱讀業務 PDF。合成資料、手冊閱讀及程式化匯出不是上述證據。
+
+發布功能 commit `142e82f002fda20b1fa1668dd1f3f00c2a3d5bb4` 已推送 main。
+GitHub CI `37172405445`／Pages `37172405101` 均 success；CI 日誌亦為 678 pass、
+4 條件 skip、0 fail。2026-10-04 10:54 Asia/Taipei，cache-busted 線上首頁、手冊、
+5 個正式資產的 SHA-256 逐檔與本機完全相同；舊版 v2.1.89 的 5 資產與手冊全為 404。
+主程式 `assets/index-BXYO8mCW.js` SHA-256：
+`fff4b339d52f345712713201e805be0404c14144a9d8821b7c003df2677bf823`。
+手冊 SHA-256：`664b32e892d7f2fb6fce26ec995ea8d7a04ebf6301d5a3ddbcf46572c309472b`。
+交付 release-evidence.json 記錄最終文件 HEAD 的 CI／Pages 與逐檔核對結果，不把
+較早提交證據冒充最後 HEAD。正式計算、核心結構、持久化以及計算口徑版本均未變。
 
 前一正式版：v2.1.89（GPT 2026-10-03 已發布上線）。本包同時含 v2.1.90 的版面修正。
 

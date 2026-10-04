@@ -10,7 +10,10 @@
   production audit 0；完整 audit 19（4 moderate／15 high），不宣稱完整依賴零風險。
   braces 也在 vinext 建置工具鏈，原候選「只在 lint」說法已更正。
   交通計算、Parser、核心資料及持久化未改，最後計算口徑版本仍 v2.1.83。
-  正式發布結果見 VALIDATION_REPORT.md／PROJECT_HANDOFF.md 的 GPT v2.1.91 區塊。
+  已正式發布：功能 commit 142e82f002fda20b1fa1668dd1f3f00c2a3d5bb4。
+  CI 37172405445／Pages 37172405101 成功，線上首頁、手冊及 5 資產 SHA 全同，舊檔全 404。
+  最終交接文件 HEAD 及線上複驗見交付 release-evidence.json；不以功能提交冒充最終 HEAD。
+  詳細發布結果見 VALIDATION_REPORT.md／PROJECT_HANDOFF.md 的 GPT v2.1.91 區塊。
   以下 v2.1.89 與更早各段是歷史紀錄，不是本輪重新驗證。
 
 ■ GPT 獨立複查補正（2026-10-03；前一正式版 v2.1.85）
