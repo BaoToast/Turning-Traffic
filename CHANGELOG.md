@@ -7,6 +7,68 @@
 > 兩個來源，就一定會漂移。`tests/release-structure.test.mjs` 現在會檢查本檔最新一則的版號
 > 等於程式版號，避免它再次靜靜落後。
 
+## v2.1.91（2026-10-03）把網站會用到的 DOMPurify 升到已修補版
+
+Claude v2.1.91 的套件修補不變更交通計算；本包同時包含 v2.1.90 版面修正。
+GPT 於 2026-10-04 獨立複查另補正候選漏加的共用 `.segmented { flex: none; }`、
+明確按鈕 nowrap、被 gap 簡寫覆蓋的 row-gap 順序及錯誤測試名稱。
+新增 CSS 契約／缺失規則反證與 DOMPurify 版本一致守門，未修改交通計算或持久化。
+
+`jspdf@4.2.1` 的選用相依 `dompurify` 原本是 **3.4.14**，落在安全公告
+**GHSA-p98j-92pf-mc4p**（low）的受影響範圍 3.4.13～3.4.15：
+`IN_PLACE` 模式 ＋ 會移除節點的 `afterSanitize` hook 時，
+被移除子樹上的事件處理器仍然活著，造成 DOM XSS。
+已升到 **3.4.16**（上游已修）。
+
+⚠️ **這個套件會被打包進網站資產**（`purify.es-*.js` 是五個資產之一），
+是真的會送到使用者瀏覽器的那一個。實測確認：新 bundle 裡是 `3.4.16`，
+v2.1.89 發布的那一份是 `3.4.14`。
+
+⚠️ 本系統正式應用沒有直接呼叫 DOMPurify／IN_PLACE／addHook；版本說明中的名稱
+不算呼叫，GPT 的外部安全探針也不是正式應用觸發路徑。**目前未找到觸發路徑**——
+但那靠的是 jspdf 怎麼用它，不是我們擋得住的。
+
+⚠️ **`package.json` 的依賴一個字都沒有動**：3.4.16 落在 jspdf 宣告的 `^3.3.1`
+範圍內，只更新了 `package-lock.json` 三行（version／resolved／integrity）。
+
+另一個告警 **braces（GHSA-vfj7-8cjw-p6xm，high）維持現狀**：
+上游至今沒有修補版（受影響範圍 `<=3.0.3`，而 npm 上最新就是 3.0.3），
+GPT 實際 `npm explain braces` 顯示 lint 鏈及 vinext → vite-plugin-commonjs →
+vite-plugin-dynamic-import 建置鏈；原候選「只在 lint」的說法不完整。
+它屬開發／建置工具，不打包進正式靜態網站資產。
+`npm audit` 說的「修復可用」是把 eslint 外掛往回降兩個大版，不是 braces 有新版。
+⚠️ 這是「**目前無法修**」，不是「評估後不做」——下一輪要回頭確認上游有沒有出新版。
+
+## v2.1.90（2026-10-03）使用者回報的兩件版面問題，根因都是「規則綁在特定容器上」
+
+**只動 CSS 與測試，交通量／PCU／尖峰／轉向的計算一行都沒有改**，
+`LAST_CALC_CHANGE_VERSION` 維持 v2.1.83。
+
+**① 轉向進階分析：「車種」壓在「全調查時段」切換鈕上面。**
+`.advanced-controls` 是 `flex-wrap: nowrap`，而 `.segmented` 是可壓縮的 flex 項目，
+`.segmented-wrap` 又有 `min-width: 0`。整列塞不下時外框被壓窄，切換器**整個撐出自己的外框**
+（實測溢出 76.3px），溢出去的那一截蓋在「車種」上面。
+⚠️ 既有 CSS 是 `.head-buttons .segmented, .diagram-toolbar .segmented{flex:none}`——
+同一個毛病之前出現過兩次，每次只補那一個容器，**第三個容器就沒有人守**。
+改成通用規則（`.segmented{flex:none}`、`.segmented button{white-space:nowrap}`），
+兩條特例刪掉；這一列改成 `flex-wrap: wrap`。
+
+**② 同一列的「車種」「顯示數值」與各自的下拉幾乎黏在一起（間距 0px）。**
+CSS 裡有 `.diagram-toolbar label, .trend-controls > label { gap: 7px }`，
+但 `.advanced-controls` 不在裡面。這是同一條規則被逐個容器補的**第四次**
+（前三次：`.diagram-toolbar`、`.trend-controls`、v2.1.89 的 `.review-panel`）。
+已把這一列併進去。
+
+**守門**：新增 `scripts/e2e-control-gaps.mjs`（掛進 `npm run e2e`，第 85 支）。
+兩組判準：①分段切換器不可被壓扁／撐出外框、同一列不可重疊
+②**label 的文字與它自己的控制項**水平間距 ≥ 4px（用 `Range` 量文字節點的實際矩形
+——既有的碰撞掃描只比「互動元素」，文字節點是它的盲區，這就是同一個毛病補四次還會再出現的原因）。
+情境刻意推到會出事的那一邊：**長路口名稱 ＋ 字距加寬**（模擬微軟正黑體比容器字型寬）。
+兩組判準各自有內建反證。
+
+⚠️ 既有的 `e2e-layout-collisions.mjs` 判準沒問題，是它用的種子資料路口名稱太短、
+那一列根本塞得下，所以一直是綠的——**守門釘在太溫和的資料上**也是一種假的綠。
+
 ## v2.1.89（2026-09-30）通用的版面碰撞掃描 ＋ 它當場抓到的一處
 
 GPT 2026-10-03 以正式 v2.1.85 為基準獨立複查累積差異：修正版面測試切頁失敗

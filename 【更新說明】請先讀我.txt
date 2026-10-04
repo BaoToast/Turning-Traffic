@@ -1,5 +1,17 @@
-路口轉向 — 完整專案 v2.1.89
+路口轉向 — 完整專案 v2.1.91
 =================================================
+
+■ GPT v2.1.91 獨立複查（2026-10-04；基準正式 v2.1.89）
+  補正候選漏加的共用 flex:none、明確按鈕 nowrap、row-gap 順序及測試檔名。
+  新增 CSS 契約／缺失規則反證與 DOMPurify lock／安裝／網站 chunk 版本一致守門。
+  678 pass／4 真實附件條件 skip／0 fail；lint、glyph、TypeScript、build 全過。
+  完整 npm run e2e exit 0：84 支瀏覽器 pass／1 真實附件別名條件 skip，另 2 支種子成功。
+  Windows 微軟正黑體 1366／1536／1890／900 寬度控制列及 20 頁手冊已實際檢視。
+  production audit 0；完整 audit 19（4 moderate／15 high），不宣稱完整依賴零風險。
+  braces 也在 vinext 建置工具鏈，原候選「只在 lint」說法已更正。
+  交通計算、Parser、核心資料及持久化未改，最後計算口徑版本仍 v2.1.83。
+  正式發布結果見 VALIDATION_REPORT.md／PROJECT_HANDOFF.md 的 GPT v2.1.91 區塊。
+  以下 v2.1.89 與更早各段是歷史紀錄，不是本輪重新驗證。
 
 ■ GPT 獨立複查補正（2026-10-03；前一正式版 v2.1.85）
   本輪包含 v2.1.86～89 的全部差異，不是只看一條 CSS。
@@ -281,26 +293,22 @@
   本包已使用內附且雜湊驗證通過的官方 SheetJS 0.20.3 重新建置，並把
   github-pages-dist/ 的 index.html 與 assets/ 同步到發布根目錄。
 本版網站資產：
-  html2canvas-WWiXhjKM.js
-    SHA-256 = d28b26754eb7e7a4991c834c6e5662ca3f7d370cf6445910acc7d6e0f47b0fc3
-  index-C69zBTzM.css
-    SHA-256 = 4ef6cc21ddaacde45aa3690687d17722ede528726717145b9bbc778d8b4493a5
-  index-BJzbtAQU.js
-    SHA-256 = dc000dd4637f7b40c41258df187165b367be06344d8ad71d83339888f4ab8588
-  index.es-CbgevHAQ.js
-    SHA-256 = aef34e6962a8a38e4a1ab91a91ec959984fc3e9e5a7d122352d95e03266e24d3
-  purify.es-ChwZkWde.js
-    SHA-256 = f6935c363d84a53b19c60e4f6801a653b5734c1e02f45c44547ef4804505e95a
-    （自 v2.1.85 起逐位元相同，檔名與雜湊都沒變）
-  ⚠️ 本版只改了**一條 CSS**（`.review-panel select` 補 margin-right:10px，
-    因為狀態下拉與「審核備註」輸入框水平間距是 0.0px）並新增一支 e2e 腳本。
-    **沒有動任何交通量、PCU、尖峰、轉向或涵蓋單位的計算。**
-    樣式表這一次有變，所以檔名與雜湊都換了；purify.es 仍逐位元相同。
-  ⚠️ html2canvas 與 index.es 這兩個 chunk **本身的程式碼沒有改**，
-    但它們參照主檔的雜湊，主檔一改它們的內容就跟著變，於是檔名雜湊也變。
+  html2canvas-DWeOSTQC.js
+    SHA-256 = 344483bfcf6132a50412dd3d21be186d2de59b284cac244d09b4a498fa88b1b3
+  index-BMxHnwvo.css
+    SHA-256 = 6cc6f2e20e509301d8732e99e57796cddcaad59d61274d478a229cb71992b9e4
+  index-BXYO8mCW.js
+    SHA-256 = fff4b339d52f345712713201e805be0404c14144a9d8821b7c003df2677bf823
+  index.es-njjM1LUH.js
+    SHA-256 = ff44532acee9dd444913b2acba3b36bbba8f12da6d1b7336205c2926543b1597
+  purify.es-Bvo9QlJ8.js
+    SHA-256 = aa9ba8b5e16bc0f8a0fdfc2f31e221edb21a1f469d02474a76557cf16bbc7f30
+  DOMPurify 已鎖定 3.4.16。GPT 補正共用防壓縮規則及 row-gap 順序後，
+  重新建置全部資產；上列為 GPT 本機正式發布清單，不沿用 Claude 原候選雜湊。
+  交通量、PCU、尖峰、轉向與涵蓋單位計算未變。
 本版手冊：
-  路口轉向程式手冊_v2.1.89.pdf
-    SHA-256 = 3dd70ffd6a476283edaca6bb635b0aca6f0557a7ebf53456ec8a41f3b97387f7
+  路口轉向程式手冊_v2.1.91.pdf
+    SHA-256 = 664b32e892d7f2fb6fce26ec995ea8d7a04ebf6301d5a3ddbcf46572c309472b
     20 頁 / 15,579 字元（`pdftotext -enc UTF-8` 的輸出，**換行統一為 LF** 後
     NFKC 正規化、含空白）
     ⚠️ 這個字元數是「在哪一台機器**產生**這份 PDF」決定的，不是內容的指紋：
@@ -2184,17 +2192,27 @@
   固定計算黃金值完全相同。
 
 
+⚠️ v2.1.91（2026-10-03）新增的確認項：
+  ・這一版只換了相依套件（DOMPurify 3.4.14 → 3.4.16）與版號，畫面行為與 v2.1.90 相同
+
+⚠️ v2.1.90（2026-10-03）新增的確認項：
+  ・到「轉向進階分析」：分段切換器（AM Peak／PM Peak／全調查時段尖峰／全調查時段）
+    **四顆字都看得完整**，右邊的「車種」沒有壓在最後一顆上面
+  ・同一列的「車種」「顯示數值」與各自的下拉之間**看得出縫隙**，不是黏在一起
+  ・把視窗拉窄（約 1366px）時，這一列會**換行**：路口名稱與守恆差值落到第二列，
+    而不是把左邊的切換器壓扁
+
 部署完成後請確認：
-  ・左側欄下方顯示「v2.1.89」
-  ・https://baotoast.github.io/Turning-Traffic/?v=2.1.89 開得起來
+  ・左側欄下方顯示「v2.1.91」
+  ・https://baotoast.github.io/Turning-Traffic/?v=2.1.91 開得起來
   ・包內每一個網站資產與手冊的 SHA-256，列在這份說明上面的
     「本版網站資產」那一段（五個資產 ＋ 手冊，全部列出）。
     ⚠️ 另外交付的 `SHA256SUMS.txt` 是**與三個 zip 放在一起**的
     （在同一個交付資料夾裡，不在任何一個 zip 內），它算的是
     **三個 zip 檔本身**的雜湊，用來確認「你手上這三包就是我交出去的那三包」。
     兩者的用途不同，不要互相代替。
-  ・路口轉向程式手冊_v2.1.89.pdf 可下載（不是 404）
-  ・手冊封面戳記與頁尾都是 v2.1.89 ｜ 2026-09-30
+  ・路口轉向程式手冊_v2.1.91.pdf 可下載（不是 404）
+  ・手冊封面戳記與頁尾都是 v2.1.91 ｜ 2026-10-03
   ・到「各路口車種組成」，主工具列的尖峰選「上午＋下午並列」：
     那一句不適用說明寫的是「一次只讀得出一個時段的組成…各車種的百分比
     不能跨時段相加」，**不再**提到任何環狀圖形

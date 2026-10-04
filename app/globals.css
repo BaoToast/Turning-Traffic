@@ -684,12 +684,15 @@ button {
 }
 .segmented {
   display: inline-flex;
+  /* 切換器維持自然寬度；容器不足時由控制列換行，不擠壓內容。 */
+  flex: none;
   padding: 3px;
   border: 1px solid #d5dfe0;
   border-radius: 8px;
   background: #f5f7f5;
 }
 .segmented button {
+  white-space: nowrap;
   border: 0;
   background: transparent;
   color: #6a787c;
@@ -1149,7 +1152,21 @@ button {
   align-items: center;
   margin-bottom: 16px;
 }
+/*
+ * ⚠️ 2026-10-03：**第三個容器**也需要這一條（使用者回報：轉向進階分析的
+ *   「車種」「顯示數值」與自己的下拉「幾乎黏在一起」）。
+ *
+ *   這是和 .segmented{flex:none} 一模一樣的毛病：同一條版面規則被寫成
+ *   「某某容器底下的 label」，於是每出現一個新容器就要再補一次，
+ *   而在補之前那一頁就是黏在一起的。
+ *   2026-09-30 的 #55（審核下拉與備註欄 0.0px）也是同一類。
+ *
+ *   這一次把 .advanced-controls 一起納入，並新增通用守門
+ *   scripts/e2e-control-gaps.mjs：在轉向進階分析量「label 的文字與它自己的控制項」
+ *   的水平間距，少於 4px 就紅——不再靠使用者看到才回報。
+ */
 .diagram-toolbar label,
+.advanced-controls > label,
 .trend-controls > label {
   display: flex;
   gap: 7px;
@@ -2056,8 +2073,9 @@ button {
   width: 100%;
 }
 .flow-summary-control .segmented button {
+  /* 這一條是這個容器**自己**的需求（幾顆平分整列寬），不是通用規則。
+     原本還寫了一次 white-space: nowrap，已併進 .segmented button。 */
   flex: 1;
-  white-space: nowrap;
 }
 
 .report-range {
@@ -3511,8 +3529,16 @@ input:focus {
 }
 .advanced-controls {
   display: flex;
+  /*
+   * ⚠️ 2026-10-03：原本是 nowrap。整列塞不下時會把每一塊往內壓，
+   *   於是「車種」壓到「全調查時段」那一顆切換鈕上面（使用者回報）。
+   *   改成可以換行：寬度不夠就讓後面的控制項落到下一列，
+   *   **不要把任何一塊壓到比它的內容還窄**。
+   */
+  flex-wrap: wrap;
   align-items: center;
   gap: 18px;
+  row-gap: 12px;
   padding: 14px 18px;
   margin-bottom: 16px;
 }
@@ -3728,9 +3754,10 @@ input:focus {
 .diagram-toolbar{flex-wrap:wrap}
 .head-buttons{flex-wrap:wrap}
 .head-buttons>button,
-.head-buttons .segmented,
-.diagram-toolbar>button,
-.diagram-toolbar .segmented{flex:none}
+.diagram-toolbar>button{flex:none}
+/* ⚠️ 2026-10-03：原本這兩條選擇器裡還各有一個 `.segmented`，
+   已併進 .segmented 的通用規則（flex:none）——
+   「規則綁在特定元素上」會讓第三個容器沒人守，這次就是這樣出事的。 */
 .page-head{flex-wrap:wrap}
 /* 只要按鈕在 flex/grid 裡，就不要讓字被拆行 */
 button,.button,.help-download{white-space:nowrap}

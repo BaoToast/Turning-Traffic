@@ -1112,7 +1112,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.89";
+export const VERSION = "v2.1.91";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -1257,6 +1257,16 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.91",
+    date: "2026-10-03",
+note: "把網站會用到的 DOMPurify 從 3.4.14 升到 3.4.16（GHSA-p98j-92pf-mc4p：IN_PLACE 模式下，會移除節點的 afterSanitize hook 會讓被移除子樹上的事件處理器仍然活著，造成 DOM XSS）。它是 jspdf 的選用相依，會被打包進網站資產，所以是真的會送到使用者瀏覽器的那一個；本系統的程式碼從來沒有直接使用 DOMPurify，目前沒有觸發路徑，但那靠的是 jspdf 怎麼用它，不是我們擋得住的。⚠️ 3.4.16 落在 jspdf 宣告的 ^3.3.1 範圍內，所以只更新 package-lock.json，**package.json 的依賴一個字都沒有動**。另一個告警 braces（GHSA-vfj7-8cjw-p6xm）上游至今沒有修補版（最新就是有漏洞的 3.0.3），而且它位於 lint 與 vinext 建置的開發鏈上、不會進到靜態網站資產，維持現狀等上游。**交通量、PCU、尖峰、轉向的計算一行都沒有改，LAST_CALC_CHANGE_VERSION 維持 v2.1.83。**",
+  },
+  {
+    version: "v2.1.90",
+    date: "2026-10-03",
+    note: "轉向進階分析那一列：「車種」壓在「全調查時段」切換鈕上面（使用者 2026-10-03 回報，實測重現並截圖）。成因是這一列不換行、而分段切換器是可壓縮的 flex 項目，塞不下時它整個撐出自己的外框。改成通用規則：分段切換器一律不可壓縮、按鈕文字不折行，這一列改成可以換行。⚠️ 原本這條規則只綁在 .head-buttons 與 .diagram-toolbar 兩個容器上，第三個容器就沒人守——已併成通用規則。新增守門 scripts/e2e-control-gaps.mjs（長路口名稱＋字距加寬的情境，含內建反證）。**交通量、PCU、尖峰、轉向的計算一行都沒有改，LAST_CALC_CHANGE_VERSION 維持 v2.1.83。**",
+  },
   {
     version: "v2.1.89",
     date: "2026-09-30",

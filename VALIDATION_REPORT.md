@@ -1,5 +1,158 @@
 # Turning Traffic 驗證報告（累積，最新一段在最前面）
 
+## v2.1.91（候選日期 2026-10-03；GPT 獨立驗證 2026-10-04）相依套件安全告警：DOMPurify 升到已修補版
+
+### GPT 獨立複查檢查點（2026-10-04；尚未發布）
+
+基準是正式 v2.1.89／`7c8f08c6a4e7f6207a86fd88dabef3a246d7240f`，本輪按中風險
+追蹤共用控制列 CSS、所有 Segmented 使用點與 DOMPurify／jsPDF 匯出依賴。
+核心交通計算、Parser、資料結構與持久化程式均無變更。
+
+GPT 讀取實際交付檔後確認三項說明與程式差異，已修正：
+
+1. 刪除了兩處容器 `.segmented` 特例，卻未加宣稱的共用 `flex:none`；補入實際共用規則。
+2. `row-gap:12px` 寫在 `gap:18px` 之前，實際被簡寫覆蓋；改到簡寫後。
+3. VERSION_HISTORY 指名不存在的 `e2e-segmented-squeeze.mjs`；修正為實際 `e2e-control-gaps.mjs`。
+
+共用按鈕加入明確 nowrap。新增 CSS 行為契約與缺失規則反證，瀏覽器守門另檢查
+computed flexShrink／whiteSpace／rowGap，防止「換行讓幾何通過但共用保護未實作」。
+DOMPurify 增加 lock／安裝／正式網站資產版本一致及拒絕舊受影響版本守門。
+以下候選測試數、字距模擬及安全說明是 Claude 提供的歷史證據，不是本輪 GPT 通過結果；
+GPT 本輪實際門檻如下；線上證據完成後補記。
+
+2026-10-04 已獨立確認：乾淨 npm ci exit 0；字面 npm test exit 0，296 個 mjs＋382 個
+TypeScript 通過，合計 678 pass／4 特定真實附件條件 skip／0 fail，包含 lint、字形、
+TypeScript 及 production build。發布結構／metadata 27 項全過，Poppler 當場重算
+20 頁／15,579 字元；三份 PDF SHA 相同，20 頁已點陣化檢視。
+1366／1536／1890px 控制列及兩種反證通過，computed shrink=0、nowrap、row-gap=12px。
+完整字面 npm run e2e exit 0：85 支瀏覽器腳本串行完整覆蓋，84 pass／1 真實附件
+別名條件 skip，另 2 支種子產生器成功（87 個 Node 流程步驟，不含 build）。
+第一次背景日誌編碼錯誤已中止並保留，不列通過；最終整串命令日誌及退出碼另存。
+Windows Chrome 的 CDP 實際字型確認為微軟正黑體，1366×768、1536×864、1890×1080、
+900×768 均無控制列重疊／水平溢出，8 張截圖已檢視，實算 row-gap=12px。
+直接載入本輪正式 purify.es chunk，以 IN_PLACE＋afterSanitizeElements 移除父節點
+探針確認被移除子樹的 on* 屬性已清除，版本 3.4.16；僅為功能探針，不是完整滲透測試。
+E2E 完成後僅更正 VERSION_HISTORY 的 braces 工具鏈說明，重建確認所有 Pages
+資產與 index 逐位元相同；保留上述測試證據，不把無行為變更當成必須重跑整串。
+
+本輪完整 audit 19 項（4 moderate／15 high／0 low），production-only audit 0。
+DOMPurify lock／實際安裝／Pages 資產均為 3.4.16，公告 GHSA-p98j-92pf-mc4p 的修補版本
+已由官方公告核對；不把「尚未發現觸發路徑」寫成原版本不受影響。
+npm explain braces 實際顯示兩條開發鏈：@next/eslint-plugin-next 及 vinext →
+vite-plugin-commonjs → vite-plugin-dynamic-import；因此候選所稱「只在 lint」不完整。
+braces 仍為 3.0.3，官方 GHSA-vfj7-8cjw-p6xm 目前無修補版本；不使用降大版的 audit fix。
+官方來源：https://github.com/advisories/GHSA-p98j-92pf-mc4p 、 https://github.com/advisories/GHSA-vfj7-8cjw-p6xm
+
+原始碼 ZIP SHA-256：2B3DC04BE9CE79A7BBA8E534C93E681A9F83A7414DCAB618D06584B674D9E975。
+說明 ZIP SHA-256：91A48197EECDB50574595253188A5F3C9565ED91D630E87AF134BF6F8D1A09F1。
+以下 Claude 原候選封關不冒充本輪結果；本輪未取得特定真實附件，亦未以桌面 Excel
+開啟本輪匯出或逐頁人工閱讀業務 PDF。合成資料、手冊閱讀及程式化匯出不是上述證據。
+
+前一正式版：v2.1.89（GPT 2026-10-03 已發布上線）。本包同時含 v2.1.90 的版面修正。
+
+### 使用者裁示
+
+「如果問題沒修復，那就請你修復，並提升版次，及寫入待修正清單，備註完成狀況。」
+⚠️ 她原本以為「可能已經修好、只差版次」。**不是**：有漏洞的程式碼是第三方套件本身，
+實體躺在 `node_modules/dompurify@3.4.14` 並被打包進網站資產，
+改我們的版號一個位元都不會變。
+
+### 查證（實測）
+
+| 套件 | 裝的版本 | 受影響範圍 | npm 上最新 | 結論 |
+| --- | --- | --- | --- | --- |
+| `dompurify` | **3.4.14** | 3.4.13～3.4.15 | **3.4.16** | **有修補版 → 升** |
+| `braces` | **3.0.3** | **<= 3.0.3**（所有已發布版本） | **3.0.3** | **上游沒有修補版 → 無法修** |
+
+- `dompurify` 來自 `jspdf@4.2.1` 的 **optionalDependency**，宣告範圍 `^3.3.1`
+- Claude 原查證只列 lint 鏈；GPT 實際另確認 vinext 建置鏈，以上方修正結果為準。
+
+### 四項證據
+
+| 項 | 內容 |
+| --- | --- |
+| ①**舊版會紅** | GPT v2.1.89 發布的 `assets/purify.es-ChwZkWde.js` 裡抓到 **`3.4.14`**；`npm audit` 列出 dompurify low |
+| ②**新版會綠** | 重新建置後 `assets/purify.es-Bvo9QlJ8.js` 裡是 **`3.4.16`**；`npm audit` 的 dompurify 條目**消失**，low 歸零 |
+| ③**驗的是交付出去的那一包** | 在完整專案解開的樹上做；`github-pages-dist/` 與根目錄 `assets/` 逐位元相同 |
+| ④**修正確實在包裡** | `package-lock.json` 三行（version／resolved／integrity）；`package.json` **逐位元相同** |
+
+### 禁令沒有被破
+
+「不可以修改交付檔 `package.json` 的依賴」這條**維持**：3.4.16 落在 jspdf 既有的
+`^3.3.1` 範圍內，所以只動 lockfile。`xlsx` 仍是 `file:./vendor/xlsx-0.20.3.tgz`。
+
+### 手冊
+
+**20 頁 / 15,579 字元**（`pdftotext -enc UTF-8`，換行統一為 LF、NFKC、含空白），
+SHA-256 `664b32e892d7f2fb6fce26ec995ea8d7a04ebf6301d5a3ddbcf46572c309472b`。
+
+### 證據界線
+
+- ⚠️ **沒有線上發布證據**（容器連不到 GitHub Pages）。
+- ⚠️ 本系統沒有直接呼叫 DOMPurify，**目前沒有觸發路徑**；這是「打不到」，不是「不受影響」——
+  jspdf 改寫法就可能變成打得到。不可以寫成「本系統不受此漏洞影響」。
+- ⚠️ 整棵依賴樹仍有 **4 moderate ／ 15 high**（wrangler／miniflare／undici／esbuild／
+  fast-glob／js-yaml／fast-uri 等），**全部在開發工具鏈上，不會進到網站**，多數要 major 升級。
+  本輪刻意不動，不宣稱「零風險」。
+
+---
+
+## v2.1.90（2026-10-03）Claude 第二次複查：使用者回報的兩件版面問題
+
+前一正式版：v2.1.89（GPT 2026-10-03 已發布上線，文件提交
+`7c8f08c6a4e7f6207a86fd88dabef3a246d7240f`）。
+
+### 改了什麼
+
+只改 CSS 與測試：①`.segmented{flex:none}`、`.segmented button{white-space:nowrap}`
+改成通用規則（刪掉 `.head-buttons`／`.diagram-toolbar` 兩條特例）
+②`.advanced-controls{flex-wrap:wrap;row-gap:12px}`
+③`.advanced-controls > label` 併進既有的 `gap:7px` 規則
+④新增 `scripts/e2e-control-gaps.mjs` 並掛進 `npm run e2e`。
+**交通量、PCU、尖峰、轉向、涵蓋單位的計算一行都沒有改**；
+`LAST_CALC_CHANGE_VERSION` 維持 v2.1.83。
+
+### 四項證據
+
+| 項 | 內容 |
+| --- | --- |
+| ①**舊版會紅** | 把 `app/globals.css` 換回 v2.1.89 發布的那一份、**重新建置**，新守門 **4 項紅**：1366px 切換器溢出外框 76.3px／與「車種」重疊 58.3px；1536px 溢出 26.3px／重疊 8.3px |
+| ②**新版會綠** | 換回修正、重新建置，同一支腳本、同一種驗法 → 全部通過 |
+| ③**驗的是交付出去的那一包** | 在 `路口轉向_完整專案` 解開的樹上做，`github-pages-dist/` 與根目錄 `assets/` 逐位元相同（5 個檔逐一比過） |
+| ④**修正確實在包裡** | `app/globals.css` 四處、`scripts/e2e-control-gaps.mjs`、`package.json` 的 e2e 鏈 |
+
+### 內建反證
+
+- 把這一列強制擠窄（限寬 620px ＋ 可壓縮 ＋ 文字不折行）→ 判準抓到重疊 2 組、壓扁 1 個
+- 注入 `.advanced-controls > label{gap:0}` → label 間距判準抓到 2 個（`車種`、`顯示數值`，間距 0px）
+- 三個寬度（1366／1536／1890）各驗一次
+
+⚠️ **寫守門時我自己踩到三個洞，都當場修掉並記在腳本註解裡**：
+①交疊算式對沒有重疊的兩塊也算出負數（**恆紅**）
+②只比直接子元素，而被壓的是外框、溢出的是裡面的切換器（要取「自己 ∪ 所有子孫」的聯集框）
+③「同一列」判準寫成「上緣差 ≤ 6px」，但這一列是 `align-items:center`、各塊高度不同，
+上緣本來就差三十幾 px，**該比的那一對永遠被跳過**——改成「垂直範圍有沒有交疊」。
+
+### 肉眼
+
+修正前後各截圖看過。修正前：「車種」兩個字壓在「全調查時段」上面。
+修正後：1890px 維持一列、1366px 整列換行（路口名稱與守恆差值落到第二列），
+三個寬度的水平間距都是 +18.0px；「車種」「顯示數值」與各自的下拉之間有明顯縫隙。
+
+### 手冊
+
+**20 頁 / 15,579 字元**（`pdftotext -enc UTF-8` 輸出，換行統一為 LF、NFKC 正規化、含空白），
+SHA-256 `1eaedc9cc2a59773d6f33dbd27195203fb7811048ffb84ba90539c23e7b2e93a`。
+
+### 證據界線（照實寫）
+
+- ⚠️ **沒有線上發布證據**：Claude 的容器連不到 `baotoast.github.io`（出口代理擋），要等 GPT 發布。
+- ⚠️ 建置產物是在 Claude 的容器建的，**檔名雜湊與 GPT 那一台不保證相同**。
+- ⚠️ 使用者的字型是微軟正黑體，比容器裡的字型寬。守門用**字距加寬**模擬，
+  不是真的在她的字型下量——這一點不可以寫成「已在她的環境驗過」。
+
+---
+
 ## v2.1.89（候選日期 2026-09-30；GPT 獨立驗證 2026-10-03）
 
 ### GPT 累積差異複查（基準：正式 v2.1.85）

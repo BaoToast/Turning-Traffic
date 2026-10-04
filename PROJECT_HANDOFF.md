@@ -1,6 +1,6 @@
 # Turning Traffic 長期工程交接基準
 
-最後更新：2026-10-03
+最後更新：2026-10-04
 
 適用系統：**Turning Traffic 路口尖峰轉向交通量分析系統**
 
@@ -21,6 +21,18 @@
 - 正式 GitHub Pages：<https://baotoast.github.io/Turning-Traffic/>
 - 帶版號的正式驗證網址：以最新已發布版本及第 12 節的線上證據為準。
 - 正式 branch：`main`
+- **本包為 v2.1.91**（Claude 2026-10-03 第二次複查產出，**尚未發布**）。
+  v2.1.90：使用者回報的兩件版面問題（轉向進階分析的「車種」壓住「全調查時段」切換鈕、
+  label 與自己的下拉間距 0px），根因都是「版面規則綁在特定容器上」，已改成通用規則並新增
+  `scripts/e2e-control-gaps.mjs`。
+  v2.1.91：`dompurify` 3.4.14 → **3.4.16**（GHSA-p98j-92pf-mc4p），
+  **只動 `package-lock.json`，`package.json` 的依賴一個字都沒有改**。
+  兩版都**沒有動任何交通量／PCU／尖峰／轉向的計算**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.83。
+  Claude 候選封關與 GPT 結果分開記錄；GPT 2026-10-04 已補正實際 CSS 缺口並完成
+  字面 npm test／npm run e2e（84 支瀏覽器通過、1 支真實附件條件略過，另 2 支種子成功）。
+  發布狀態及線上證據以第 12.9d 節為準，不把原候選聲明當作本輪結果。
+  ⚠️ `braces`（GHSA-vfj7-8cjw-p6xm）**上游至今沒有修補版**（最新即受影響的 3.0.3），
+  同時出現在 lint 與 vinext 建置工具鏈，不打包進靜態網站；不能宣稱完整依賴零風險。
 - 最新已發布版本：v2.1.89，功能提交 `53fc053662f0433dc9a0ce6fd64c9c458afa297c`，文件守門補正提交 `d2d643986db1b1a0c865f2dc89c4d813b868d91b`；2026-10-03 已完成 CI／Pages／線上雜湊驗證，證據見第 12.9 節。後續純交接證據提交以本檔所在 main 的實際 HEAD 為準，不把文件提交誤當新版交通計算。
 - 交接文件建立前的 `HEAD`／已發布文件基準：`a4f93f29c25242a0faddcdf562a38b16f1012ceb`（`Document v2.1.63 release verification`）
 - v2.1.63 功能發布 commit：`ef5e56e028dbbba87b4529b87b0ae40341dd66fe`
@@ -84,8 +96,9 @@
 - `github-pages-dist/`：`npm run build:github` 的輸出；正式發布前須把其 `index.html` 與 `assets/` 同步到 repository root。
 - 根目錄 `index.html`、`assets/`、`.nojekyll`：GitHub Pages 實際發布內容。
 - `scripts/`：手冊產製、2 支種子資料產生器（`seed-state.mjs`、`make-wide-seed.mjs`）
-  及 **85** 支 `e2e-*.mjs` 腳本；其中 `npm run e2e` 明列 **84** 支瀏覽器測試，
-  另加那 2 支種子資料產生器，合計 **86** 個執行步驟（不含前置 GitHub build）。
+  及 **86** 支 `e2e-*.mjs` 腳本；其中 `npm run e2e` 明列 **85** 支瀏覽器測試，
+  另加那 2 支種子資料產生器，合計 **87** 個執行步驟（不含前置 GitHub build）。
+  ⚠️ 2026-10-03（v2.1.90）新增 `e2e-control-gaps.mjs`，三個數字一起 +1。
   `e2e-tryout-smoke.mjs` 是單檔試用版的獨立 smoke，不在 `npm run e2e` 內，
   由 `npm run e2e:tryout` 另外跑（2026-09-25 第六輪抓到：例外表指名這個命令，
   而 `package.json` 裡當時根本沒有它——那支腳本其實**從來沒有任何方式會跑到**）。
@@ -335,10 +348,11 @@ npm run build:github
 - 備份完整性、儲存 race、匯入 revision／鎖定／審核。
 - trend metrics、缺季、資料別拆線、長期間圖寬與單位。
 - release metadata、release structure、manual version/copies、rendered HTML、dependency manifest。
-- `npm run e2e` 流程：84 支 `e2e-*.mjs` 瀏覽器測試（repo 裡共 85 支，另 1 支試用版 smoke 由 `npm run e2e:tryout` 跑），涵蓋轉向圖、名稱、報表、結論、拖放／顯示、重匯、日別、版面、備份、鎖定、趨勢、日期、XLSX 修復、儲存阻擋／IndexedDB、三岔、存在性裁決、revision batch、圖表版面、跨計畫趨勢、主工具列、篩選覆蓋、頁面隔離、尖峰判定、重複資料阻擋、sticky 遮蓋與八叉版面等；另有 2 支種子資料產生器，合計 85 個執行步驟（不含前置 GitHub build）。報告時必須分開描述，不能稱為「85 支瀏覽器 E2E」。
+- `npm run e2e` 流程：85 支 `e2e-*.mjs` 瀏覽器測試（repo 裡共 86 支，另 1 支試用版 smoke 由 `npm run e2e:tryout` 跑），涵蓋轉向圖、名稱、報表、結論、拖放／顯示、重匯、日別、版面、備份、鎖定、趨勢、日期、XLSX 修復、儲存阻擋／IndexedDB、三岔、存在性裁決、revision batch、圖表版面、跨計畫趨勢、主工具列、篩選覆蓋、頁面隔離、尖峰判定、重複資料阻擋、sticky 遮蓋與八叉版面等；另有 2 支種子資料產生器，合計 87 個執行步驟（不含前置 GitHub build）。報告時必須分開描述，不能稱為「87 支瀏覽器 E2E」。
   ⚠️ 2026-09-25 更正：這三個數字原本寫 82／84，與同一份文件第 3 節的 84／83／85 矛盾（第 3 節是對的）。
-  磁碟上 `scripts/e2e-*.mjs` 共 **84** 支，`npm run e2e` 明列 **83** 支（`e2e-tryout-smoke.mjs` 不在裡面），
-  加上 2 支種子產生器共 **85** 個執行步驟。**這三個數字每次新增／移除 e2e 腳本都要跟著改，兩處都要改。**另有不在此命令內的 `e2e-tryout-smoke.mjs`。
+  磁碟上 `scripts/e2e-*.mjs` 共 **86** 支，`npm run e2e` 明列 **85** 支（`e2e-tryout-smoke.mjs` 不在裡面），
+  加上 2 支種子產生器共 **87** 個執行步驟。
+  ⚠️ 2026-10-03（v2.1.90）新增 `e2e-control-gaps.mjs`，這一處與第 3 節兩邊都 +1。**這三個數字每次新增／移除 e2e 腳本都要跟著改，兩處都要改。**另有不在此命令內的 `e2e-tryout-smoke.mjs`。
 
 涉及交通工程或 Parser 時，必須額外逐層核對：**輸入 → 解析 → 驗證 → 資料結構 → 計算 → UI → 匯出**，並比較同一值在核對頁、轉向圖、摘要、趨勢與 Excel/PDF 中是否一致。
 
@@ -638,6 +652,37 @@ GitHub build／root 全部 5 資產、首頁與手冊 SHA 相同。以下是完�
 - 最新 audit 為 20 項（1 low／4 moderate／15 high），production-only 仍為 1 low；較早的 13 項只是歷史掃描。新增開發依賴鏈風險包含 braces `GHSA-vfj7-8cjw-p6xm`（公告目前無修補版本）；靜態 Pages 不執行 Node build server，但不能宣稱依賴零風險，列後續安全維護，不在本輪強制升依賴。
 - 尚未驗證的真實附件／真實別名案例、桌面 Excel 開啟匯出、業務匯出 PDF 逐頁閱讀仍未完成；手冊 PDF 全頁閱讀及合成種子測試不能代替這些證據。
 - 下一步僅是交付並等待 Claude Opus High 第二次獨立複查，不自行開始依賴更新或其他維護。正式工程資料留同一 Repository／GitHub；使用者副本另交 Downloads。
+
+### 12.9d v2.1.91 獨立複查檢查點（2026-10-04；尚未發布）
+
+唯一基準 v2.1.89／`7c8f08c6a4e7f6207a86fd88dabef3a246d7240f`，本輪以中風險追蹤
+共用控制列 CSS／Segmented 全部使用點與 jsPDF／DOMPurify 匯出依賴；Parser、交通
+量、PCU、尖峰、轉向、核心資料及持久化均無變更。保留最後計算口徑版本。
+
+GPT 實際發現並修正：共用 `.segmented{flex:none}` 未加入而舊特例已刪；row-gap
+被後面的 gap 簡寫覆蓋；VERSION_HISTORY 指名不存在的測試檔。加入共用防壓縮、
+明確 nowrap、調整 row-gap 順序及測試名稱。新版 E2E 除幾何與反證外，另確認
+computed flexShrink／whiteSpace／rowGap，防止換行掩蓋未實作的共用保護。
+新 CSS 契約 3 項及 DOMPurify lock／安裝／Pages 資產版本守門 2 項均已加入完整測試。
+
+本輪乾淨 npm ci 成功；完整 npm test 678 pass／4 真實附件條件 skip／0 fail，lint、
+glyph、TypeScript、production build 全過；發布結構／metadata 27 pass（Poppler 實算）。
+手冊 20 頁／15,579 字元、三份 SHA 一致，20 頁已點陣化檢視。完整字面 npm run e2e
+退出碼 0，85 支正式瀏覽器腳本串行完整覆蓋：84 pass、1 支別名檢查因缺真實附件
+條件 skip，另 2 支種子成功，共 87 個 Node 流程步驟。不得把條件略過記為通過，
+也不得把種子算成瀏覽器測試。背景日誌首次編碼錯誤中止並保留，不列成功。
+Windows Chrome 實際微軟正黑體另驗 1366×768、1536×864、1890×1080、900×768，
+控制列無重疊／水平溢出，8 張截圖已檢視。瀏覽器 DOMPurify 3.4.16 IN_PLACE＋
+afterSanitizeElements 移除父節點探針確認子樹事件屬性已清除；這不是完整資安滲透測試。
+只更正 VERSION_HISTORY 的 braces 依賴路徑後重建，所有 Pages 檔案逐位元相同，
+因此上述 E2E 驗證的網站成果未變；交通計算與持久化仍未修改。
+
+DOMPurify 3.4.16 已從 lock、實際安裝及網站 chunk 核對。production audit 0；完整
+audit 19 項（4 moderate／15 high），仍不宣稱零風險。候選「braces 只在 lint」不完整：
+實際也在 vinext／vite-plugin-commonjs／vite-plugin-dynamic-import 建置鏈；目前官方
+公告仍無修補版本，不以降外掛兩個大版冒充上游修補。來源、依賴路徑與原始 JSON
+保存在二次複查交付證據。真實附件、桌面 Excel／業務 PDF 逐頁人工開啟仍未完成，
+合成資料、手冊閱讀及安全探針不能代替這些證據。線上發布完成後補記同一段。
 
 ### 12.10 正式發布
 
