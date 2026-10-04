@@ -1112,7 +1112,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.91";
+export const VERSION = "v2.1.93";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -1258,9 +1258,19 @@ export function lockStatus(
 }
 export const VERSION_HISTORY = [
   {
+    version: "v2.1.93",
+    date: "2026-10-04",
+    note: "逐頁版面守門改由 DOM 列舉分頁，保留轉向進階分析深度情境，涵蓋三個寬度及全部分頁。GPT 獨立複查發現原掃描先排除子元素自身重疊，20px 真實重疊可假綠；另有零列跳過判定、浮層子孫污染 ink、收合 details 殘留矩形等缺口，已補強並加入獨立正反證。修正掃描後抓到 1024px 道路與流向管理的真實缺陷：數據卡位置自動落進 25px 欄，與刪除鈕重疊；已修正響應式欄位定位，撤掉修正的反證必須抓到重疊。重疊、切換器壓扁、label 間距三種判準分別必須證明可紅。交通量、PCU、尖峰、轉向核心計算未變，LAST_CALC_CHANGE_VERSION 維持 v2.1.83。",
+  },
+  {
+    version: "v2.1.92",
+    date: "2026-10-04",
+    note: "開發工具鏈鎖定檔修補：js-yaml 4.3.1→4.3.2、fast-uri 3.1.5→3.1.8、brace-expansion 1.1.18→1.1.21 與 5.0.9→5.0.12。package.json 的相依宣告保持不變，版本欄位另隨發布版更新。這些屬開發工具鏈；fast-uri 也在 webpack/schema-utils/ajv 的建置鏈，不只是 lint/typecheck。GPT 2026-10-04 實測完整 npm audit 為 16 項（4 moderate、12 high），production-only 為 0。剩餘 high 不全是 major 修復；部分 Cloudflare 工具鏈是非 major 建議，但需改動固定相依宣告，這次不擴大升級。Cloudflare 插件會由本機 vinext 建置載入，不在正式靜態 GitHub Pages 的瀏覽器執行路徑。braces GHSA-vfj7-8cjw-p6xm 當日公告仍無修補版，不以強制降版處理。另補回 v2.1.91 note 的四空格縮排。核心交通計算未變，LAST_CALC_CHANGE_VERSION 維持 v2.1.83。",
+  },
+  {
     version: "v2.1.91",
     date: "2026-10-03",
-note: "把網站會用到的 DOMPurify 從 3.4.14 升到 3.4.16（GHSA-p98j-92pf-mc4p：IN_PLACE 模式下，會移除節點的 afterSanitize hook 會讓被移除子樹上的事件處理器仍然活著，造成 DOM XSS）。它是 jspdf 的選用相依，會被打包進網站資產，所以是真的會送到使用者瀏覽器的那一個；本系統的程式碼從來沒有直接使用 DOMPurify，目前沒有觸發路徑，但那靠的是 jspdf 怎麼用它，不是我們擋得住的。⚠️ 3.4.16 落在 jspdf 宣告的 ^3.3.1 範圍內，所以只更新 package-lock.json，**package.json 的依賴一個字都沒有動**。另一個告警 braces（GHSA-vfj7-8cjw-p6xm）上游至今沒有修補版（最新就是有漏洞的 3.0.3），而且它位於 lint 與 vinext 建置的開發鏈上、不會進到靜態網站資產，維持現狀等上游。**交通量、PCU、尖峰、轉向的計算一行都沒有改，LAST_CALC_CHANGE_VERSION 維持 v2.1.83。**",
+    note: "把網站會用到的 DOMPurify 從 3.4.14 升到 3.4.16（GHSA-p98j-92pf-mc4p：IN_PLACE 模式下，會移除節點的 afterSanitize hook 會讓被移除子樹上的事件處理器仍然活著，造成 DOM XSS）。它是 jspdf 的選用相依，會被打包進網站資產，所以是真的會送到使用者瀏覽器的那一個；本系統的程式碼從來沒有直接使用 DOMPurify，目前沒有觸發路徑，但那靠的是 jspdf 怎麼用它，不是我們擋得住的。⚠️ 3.4.16 落在 jspdf 宣告的 ^3.3.1 範圍內，所以只更新 package-lock.json，**package.json 的依賴一個字都沒有動**。另一個告警 braces（GHSA-vfj7-8cjw-p6xm）上游至今沒有修補版（最新就是有漏洞的 3.0.3），而且它位於 lint 與 vinext 建置的開發鏈上、不會進到靜態網站資產，維持現狀等上游。**交通量、PCU、尖峰、轉向的計算一行都沒有改，LAST_CALC_CHANGE_VERSION 維持 v2.1.83。**",
   },
   {
     version: "v2.1.90",

@@ -2780,6 +2780,13 @@ input:focus {
   .geometry-expanded > div {
     grid-template-columns: 25px repeat(3, 1fr) !important;
   }
+  /* The fifth item must not auto-flow into the 25px source-code column. */
+  .geometry-expanded > div > .card-position-field {
+    grid-column: 2 / 4;
+  }
+  .geometry-expanded > div > .icon-danger {
+    grid-column: 4;
+  }
 }
 @media (max-width: 760px) {
   .project-layout,
@@ -3511,8 +3518,11 @@ input:focus {
   .geometry-expanded > div {
     grid-template-columns: 28px minmax(150px, 1fr) 92px 104px 30px !important;
   }
-  .card-position-field {
+  .geometry-expanded > div > .card-position-field {
     grid-column: 2 / 5;
+  }
+  .geometry-expanded > div > .icon-danger {
+    grid-column: 5;
   }
   .help-glossary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

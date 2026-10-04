@@ -1,6 +1,11 @@
 /**
  * 控制項的間距：不可以被壓扁、不可以互相重疊、label 不可以黏著自己的控制項
- *（2026-10-03，使用者連報兩件之後新增）
+ *（2026-10-03，使用者連報兩件之後新增；2026-10-04 加上**逐頁**掃描）
+ *
+ * 這一支分兩段：
+ *   ① 深度情境：「轉向進階分析」＋ 長路口名稱 ＋ 字距加寬，三個寬度，含反證
+ *   ② **逐頁掃描**：分頁清單**從 DOM 列舉**（抄姊妹系統交通服務水準的做法），
+ *      三個寬度 × 全部分頁，套同一組判準，另有自己的反證
  *
  * ── 使用者回報的那一件 ──────────────────────────────────────────
  *
@@ -205,6 +210,146 @@ const labelGaps = (page) =>
     return tight;
   });
 
+/**
+ * ── 第三組：**逐頁**掃描（2026-10-04 新增，使用者裁示「抄」）─────────
+ *
+ * ⚠️ 為什麼要加這一段：上面那一組判準沒有問題，但它**只跑「轉向進階分析」
+ *   一頁**（版號 v2.1.92 以前寫死 `names.findIndex(... "轉向進階分析")`）。
+ *   而「版面規則綁在特定容器上」這個坑已經出現**五次**——每出現一個新分頁
+ *   或新控制列，就又沒有人守。**守門釘在特定一頁，和守門釘在特定批次的
+ *   資料上，是同一種假的綠**（2026-10-04 的教訓，見大檢查規則零之八）。
+ *
+ * 做法抄姊妹系統**交通服務水準**的 `e2e-layout.mjs`／`e2e-control-spacing.mjs`：
+ *   **分頁清單從 DOM 列舉，不寫死**——新增分頁會自動被納入。
+ *
+ * 判準與上面同一套，只是不限容器：
+ *   ① 任何可見的 `.segmented` 不可以被壓到比內容窄、不可以撐出 `.segmented-wrap`
+ *   ② 任何**橫排的控制列**裡，視覺上同一列的兩塊不可以水平交疊
+ *   ③ 任何 `label` 的文字與它自己的控制項間距 ≥ 4px（`labelGaps()` 本來就是全頁的）
+ *
+ * 「橫排的控制列」的判準刻意寫成**行為**而不是 class 名稱：
+ *   display 是 flex／grid、主軸是橫的、至少兩個可見子元素，
+ *   而且子樹裡真的有控制項（`.segmented`／select／input／button／label）。
+ *   ⚠️ 用 class 名稱列舉就會回到「每出現一個新容器就要再補一次」的老路。
+ */
+const sweepRow = (page) =>
+  page.evaluate(() => {
+    const visible = (el) => {
+      // Closed details can retain geometry in Chromium; they are not painted.
+      for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+        if (parent.tagName === "DETAILS" && !parent.open) {
+          const summary = [...parent.children].find((child) => child.tagName === "SUMMARY");
+          if (!summary?.contains(el)) return false;
+        }
+      }
+      const r = el.getBoundingClientRect();
+      const s = getComputedStyle(el);
+      return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
+    };
+    /*
+     * ⚠️ 2026-10-04 實跑抓到的兩個洞（第一版這一段是**恆紅**的，6 個分頁全紅）：
+     *
+     *  ① 單欄的 grid 被當成「一列」。`.geometry-layout`／`.audit-stack` 是
+     *     `grid-template-columns: 1050px` 的**上下堆疊卡片**，每一張都是
+     *     282→1332，水平當然「重疊 1050px」——那是整個容器的寬度。
+     *     → 判準只排除垂直沒有交疊的上下堆疊。GPT 反證確認：不可要求
+     *       水平分離，否則兩塊自己的框真的重疊時，反而完全跳過。
+     *
+     *  ② `inkBox` 把**浮出去的子孫**也算進來。第一張卡片自己的框到 829，
+     *     但它底下掛了一個浮層（detached popover）到 1440，於是它的 ink
+     *     垂直吃到第二張卡片。
+     *     → `position` 是 absolute／fixed／sticky 的子孫不計入 ink。
+     *
+     *  ⚠️ ink box 這個做法本身要留著——使用者回報的那一件，被壓扁的是
+     *    `.segmented-wrap`、溢出去的是裡面的 `.segmented`，不取聯集就量不到。
+     */
+    // Exclude the entire positioned branch, not just its positioned root.
+    const floatingBranch = (el, boundary = null) => {
+      for (let node = el; node && node !== boundary; node = node.parentElement) {
+        if (["absolute", "fixed", "sticky"].includes(getComputedStyle(node).position)) return true;
+      }
+      return false;
+    };
+    const inkBox = (el) => {
+      let { left, right, top, bottom } = el.getBoundingClientRect();
+      for (const kid of el.querySelectorAll("*")) {
+        if (!visible(kid)) continue;
+        if (floatingBranch(kid, el)) continue;
+        const r = kid.getBoundingClientRect();
+        left = Math.min(left, r.left);
+        right = Math.max(right, r.right);
+        top = Math.min(top, r.top);
+        bottom = Math.max(bottom, r.bottom);
+      }
+      return { left, right, top, bottom };
+    };
+    const CONTROL = ".segmented, select, input, button, label";
+    const rows = [];
+    for (const el of document.querySelectorAll("*")) {
+      // A positioned toolbar still needs its own controls checked. Only exclude
+      // floating descendants from a parent's ink, not the entire scan subtree.
+      if (!visible(el)) continue;
+      const st = getComputedStyle(el);
+      const flexRow = st.display.includes("flex") && !st.flexDirection.startsWith("column");
+      const grid = st.display.includes("grid");
+      if (!flexRow && !grid) continue;
+      const kids = [...el.children].filter((kid) => visible(kid) && !floatingBranch(kid, el));
+      if (kids.length < 2) continue;
+      if (!el.querySelector(CONTROL)) continue;
+      /* 只排除上下不相交的堆疊；框已水平重疊正是要抓的缺陷。 */
+      const owns = kids.map((k) => k.getBoundingClientRect());
+      const sideBySide = owns.some((a, i) =>
+        owns.some((b, j) => j > i && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0),
+      );
+      if (!sideBySide) continue;
+      rows.push({ el, kids, owns });
+    }
+    const overlaps = [];
+    for (const { el, kids, owns } of rows) {
+      const boxes = kids.map((k) => ({ text: k.textContent.trim().slice(0, 14), ...inkBox(k) }));
+      for (let i = 0; i < boxes.length; i += 1)
+        for (let j = i + 1; j < boxes.length; j += 1) {
+          const a = boxes[i];
+          const b = boxes[j];
+          /*
+           * 只比兩塊自己的框垂直有交疊的同列。水平相交是缺陷，不是排除條件。
+           * 上下排不比；浮層整個分支已在前置過濾，不污染 ink。
+           */
+          const oa = owns[i];
+          const ob = owns[j];
+          if (Math.min(oa.bottom, ob.bottom) - Math.max(oa.top, ob.top) <= 0) continue;
+          if (Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) <= 0) continue;
+          const overlap = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+          if (overlap > 0.5)
+            overlaps.push({
+              row: (el.className || el.tagName).toString().slice(0, 28),
+              a: a.text,
+              b: b.text,
+              overlapPx: Number(overlap.toFixed(1)),
+            });
+        }
+    }
+    const squeezed = [];
+    for (const seg of document.querySelectorAll(".segmented")) {
+      if (!visible(seg)) continue;
+      if (seg.scrollWidth - seg.clientWidth > 1)
+        squeezed.push({ text: seg.textContent.trim().slice(0, 20), why: "內容比自己的框寬" });
+      const wrap = seg.closest(".segmented-wrap");
+      if (wrap && visible(wrap)) {
+        const a = seg.getBoundingClientRect();
+        const b = wrap.getBoundingClientRect();
+        const spill = Math.max(a.right - b.right, b.left - a.left);
+        if (spill > 1)
+          squeezed.push({
+            text: seg.textContent.trim().slice(0, 20),
+            why: "撐出 .segmented-wrap",
+            spillPx: Number(spill.toFixed(1)),
+          });
+      }
+    }
+    return { overlaps, squeezed, rowsChecked: rows.length };
+  });
+
 const server = await serve(PORT);
 const browser = await chromium.launch(launchOptions());
 
@@ -318,6 +463,163 @@ for (const width of [1366, 1536, 1890]) {
         (broken.overlaps[0] ? `：${JSON.stringify(broken.overlaps[0])}` : "")
       : "**沒抓到＝這一支是恆綠的**",
   );
+  await ctx.close();
+}
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ *  逐頁掃描：分頁從 DOM 列舉，不寫死（2026-10-04，使用者裁示「抄」）
+ * ══════════════════════════════════════════════════════════════════════
+ */
+const SWEEP_WIDTHS = [1366, 1280, 1024];
+let sweptPages = 0;
+for (const width of SWEEP_WIDTHS) {
+  let measuredRows = 0;
+  const ctx = await browser.newContext({ viewport: { width, height: 950 }, locale: "zh-TW" });
+  const page = await ctx.newPage();
+  await page.addInitScript((text) => {
+    try {
+      localStorage.setItem("turning-traffic-state-v2", text);
+    } catch {
+      /* 無痕或封鎖時就算了，下面的前置檢查會紅。 */
+    }
+  }, seed);
+  await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(1600);
+  await page.addStyleTag({ content: WIDER_GLYPHS });
+
+  /* ⚠️ 分頁清單**從 DOM 列舉**：新增分頁自動納入，這就是這一段存在的理由。 */
+  const names = await page.$$eval(
+    "nav button:not(.nav-collapse):not(.nav-section)",
+    (buttons) => buttons.map((b) => b.textContent.trim()),
+  );
+  ok(`${width}px：逐頁掃描——側欄列舉得到分頁`, names.length >= 8, `共 ${names.length} 頁`);
+
+  for (let i = 0; i < names.length; i += 1) {
+    await page.locator("nav button:not(.nav-collapse):not(.nav-section)").nth(i).click();
+    await page.waitForTimeout(700);
+    const active = await page.locator("nav button:not(.nav-collapse):not(.nav-section)").nth(i)
+      .evaluate((button) => button.classList.contains("active"));
+    if (!active) throw new Error(`${width}px：未切到 ${names[i]}，不能重複掃上一頁`);
+    const found = await sweepRow(page);
+    const tight = await labelGaps(page);
+    if (width === 1024 && names[i].includes("道路與流向管理")) {
+      const rows = await page.locator(".geometry-expanded > div").count();
+      ok("1024px：道路支線的響應式排版反證前置", rows >= 3, `共 ${rows} 條`);
+      const undo = await page.addStyleTag({ content: ".geometry-expanded > div > .card-position-field,.geometry-expanded > div > .icon-danger{grid-column:auto !important}" });
+      const broken = await sweepRow(page);
+      ok("⚠️ 反證——撤掉道路支線欄位定位必須抓到重疊", broken.overlaps.length >= rows, JSON.stringify(broken.overlaps));
+      await undo.evaluate((style) => style.remove());
+    }
+    sweptPages += 1;
+    measuredRows += found.rowsChecked;
+    // No eligible row is not permission to skip segmented or label results.
+    ok(
+      `${width}px／${names[i]}：切換器沒有被壓扁、同列沒有重疊（量了 ${found.rowsChecked} 列）`,
+      found.overlaps.length === 0 && found.squeezed.length === 0,
+      found.overlaps.length || found.squeezed.length
+        ? JSON.stringify({ overlaps: found.overlaps.slice(0, 3), squeezed: found.squeezed.slice(0, 3) })
+        : "逐對比過",
+    );
+    ok(
+      `${width}px／${names[i]}：label 的文字與自己的控制項間距 ≥ 4px`,
+      tight.length === 0,
+      tight.length ? JSON.stringify(tight.slice(0, 3)) : "逐個 label 量過",
+    );
+  }
+  ok(`${width}px：逐頁掃描確實量到控制列`, measuredRows > 0, `實測 ${measuredRows} 列`);
+  await ctx.close();
+}
+ok(
+  "逐頁掃描——真的掃到東西（前置，防止整段恆綠）",
+  sweptPages >= SWEEP_WIDTHS.length * 8,
+  `共掃了 ${sweptPages} 個 (寬度, 分頁) 組合`,
+);
+
+/*
+ * ── 逐頁掃描的反證 ──────────────────────────────────────────────
+ * 全綠的掃描與恆綠的掃描長得一樣，所以要證明它量得出來：
+ * 在同一組分頁上注入「可壓縮 ＋ 不換行 ＋ 間距 0」，判準必須抓到。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1024, height: 950 }, locale: "zh-TW" });
+  const page = await ctx.newPage();
+  await page.addInitScript((text) => {
+    try {
+      localStorage.setItem("turning-traffic-state-v2", text);
+    } catch {
+      /* 同上 */
+    }
+  }, seed);
+  await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(1600);
+  await page.addStyleTag({ content: WIDER_GLYPHS });
+  await page.addStyleTag({
+    content:
+      ".segmented{flex:0 1 auto !important;min-width:0 !important}" +
+      ".segmented button{white-space:nowrap !important}" +
+      "label{gap:0 !important}" +
+      "[class*='controls'],[class*='toolbar'],.head-buttons{flex-wrap:nowrap !important;gap:0 !important;max-width:560px !important}",
+  });
+  const names = await page.$$eval(
+    "nav button:not(.nav-collapse):not(.nav-section)",
+    (buttons) => buttons.map((b) => b.textContent.trim()),
+  );
+  let caught = 0;
+  const kinds = { overlaps: 0, squeezed: 0, tight: 0 };
+  const examples = [];
+  for (let i = 0; i < names.length; i += 1) {
+    await page.locator("nav button:not(.nav-collapse):not(.nav-section)").nth(i).click();
+    await page.waitForTimeout(600);
+    const found = await sweepRow(page);
+    const tight = await labelGaps(page);
+    kinds.overlaps += found.overlaps.length;
+    kinds.squeezed += found.squeezed.length;
+    kinds.tight += tight.length;
+    if (found.overlaps.length || found.squeezed.length || tight.length) {
+      caught += 1;
+      if (found.overlaps.length + found.squeezed.length > 0 && examples.length < 2)
+        examples.push({ page: names[i], overlaps: found.overlaps.slice(0, 1), squeezed: found.squeezed.slice(0, 1) });
+    }
+  }
+  ok(
+    "⚠️ 反證——把全站的控制列強制擠窄＋間距歸零之後，逐頁掃描必須抓到",
+    caught > 0,
+    caught ? `${caught} 個分頁被抓到` : "**沒抓到＝這一段是恆綠的**",
+  );
+  /*
+   * ⚠️ 三種判準要**各自**證明會紅。只證明其中一種，另外兩種可能已經恆綠
+   *   而沒有人發現——使用者原本回報的那一件就是 overlap／squeeze 那一種。
+   */
+  ok(
+    "⚠️ 反證——同列重疊必須獨立抓到",
+    kinds.overlaps > 0,
+    JSON.stringify({ ...kinds, examples }),
+  );
+  ok("⚠️ 反證——切換器壓扁必須獨立抓到", kinds.squeezed > 0, JSON.stringify(kinds));
+  ok("⚠️ 反證——label 間距必須獨立抓到", kinds.tight > 0, JSON.stringify(kinds));
+  await ctx.close();
+}
+
+// Minimal browser fixtures prove the generic scanner, independently of app seed data.
+{
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await page.setContent('<div style="display:flex"><button style="width:100px;height:40px;flex:none">A</button><button style="width:100px;height:40px;flex:none;margin-left:-20px">B</button></div>');
+  const ownOverlap = await sweepRow(page);
+  ok("⚠️ 反證——子元素自己的框已重疊也必須抓到", ownOverlap.overlaps.length > 0, JSON.stringify(ownOverlap));
+  await page.setContent('<div style="display:grid"><button style="height:40px">A</button><button style="height:40px">B</button></div>');
+  const stacked = await sweepRow(page);
+  ok("上下堆疊的單欄 grid 不得誤報", stacked.overlaps.length === 0, JSON.stringify(stacked));
+  await page.setContent('<div style="display:flex;gap:20px"><div style="width:100px;height:40px;position:relative"><button>A</button><div style="position:absolute;left:150px;top:0"><span style="display:block;width:300px;height:40px">浮層子孫</span></div></div><button style="width:100px;height:40px">B</button></div>');
+  const floating = await sweepRow(page);
+  ok("浮層的非定位子孫也不得污染 ink", floating.overlaps.length === 0, JSON.stringify(floating));
+  await page.setContent('<div style="position:fixed;display:flex"><button style="width:100px;height:40px;flex:none">A</button><button style="width:100px;height:40px;flex:none;margin-left:-20px">B</button></div>');
+  const fixedToolbar = await sweepRow(page);
+  ok("⚠️ 反證——固定工具列自己的控制項仍要掃描", fixedToolbar.overlaps.length > 0, JSON.stringify(fixedToolbar));
+  await page.setContent('<details><summary>收合</summary><div style="display:flex"><button style="width:100px;height:40px;flex:none">A</button><button style="width:100px;height:40px;flex:none;margin-left:-20px">B</button></div></details>');
+  const closed = await sweepRow(page);
+  ok("收合 details 保留矩形不代表可見", closed.overlaps.length === 0, JSON.stringify(closed));
   await ctx.close();
 }
 

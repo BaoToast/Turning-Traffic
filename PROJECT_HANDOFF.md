@@ -1,5 +1,34 @@
 # Turning Traffic 長期工程交接基準
 
+> **GPT v2.1.93 獨立複查（2026-10-04）目前基準：**承接 main
+> `3495cb03a96e385c13960790dc163578a2db96f8`，中風險：相依鎖定檔與跨頁瀏覽器守門。
+> Claude 原包未改 CSS，但 GPT 修正守門後發現並修復 1024px 道路支線欄位真實重疊，
+> 所以「本版樣式完全不變」只適用於 Claude 原候選，不適用於最後 GPT 發布產物。
+> 發布與封關結果以本文後續 GPT 證據區為準；下方 Claude 自述、數字與未發布說明
+> 保留作歷史來源，不能當作 GPT 本次重新驗證或最新發布狀態。
+
+### 本輪新增 Regression 注意事項
+
+- 原逐頁掃描先要求子元素自己的框水平分開，導致真正自身重疊的 pair 被跳過；
+  原候選對 20px 重疊的最小瀏覽器反證輸出零重疊、零列，假綠已實證。不得改回此篩選。
+- 量到零列不能跳過 segmented／label 的結果；逐頁切換必須確認 active，
+  並檢查每個寬度確實量到控制列。三種反證須各自斷言，不可用合併 OR 代替。
+- 排除浮層時需排除整個 absolute／fixed／sticky 分支，包含非定位子孫；
+  收合 details 中保留幾何不等於畫面可見。上下堆疊 grid 不得誤報。
+  但定位容器自身的控制列仍須掃描（固定工具列自身重疊有獨立反證），
+  不得把排除父層 ink 污染誤寫成跳過整個定位子樹。
+- 1024px 道路支線第五項曾自動落入 25px 代碼欄，170px 內容與刪除鈕重疊 137px；
+  修正 1100px 以下欄位定位、900px 以下覆寫，並以撤掉定位的反證守住。
+- npm audit 本次完整樹 16 項（4 moderate／12 high），production-only 0。
+  剩餘 high 不全是 major 建議；部分固定 Cloudflare 工具相依需改宣告才可升級，
+  本次維持既有固定依賴規則，不強制降版／擴大升級。fast-uri 在 dev/build 鏈
+  （webpack→schema-utils→ajv），不只是 lint/typecheck。
+  Cloudflare 插件由本機 vinext build 載入；靜態 Pages 執行路徑沒有它，
+  但不得宣稱本機建置完全不執行它，亦不得把 dev 告警當作零風險。
+- 真實調查附件的 4 項條件略過及瀏覽器真實 alias 條件略過仍不等於通過；
+  Excel／DOCX 桌面 Office 開啟、DOCX 獨立 LibreOffice 視覺驗證未補做。
+  不可把 Claude 容器的截圖、151 checks／2000 標記或歷史 Windows 截圖冒稱本次證據。
+
 最後更新：2026-10-04
 
 適用系統：**Turning Traffic 路口尖峰轉向交通量分析系統**
@@ -21,7 +50,14 @@
 - 正式 GitHub Pages：<https://baotoast.github.io/Turning-Traffic/>
 - 帶版號的正式驗證網址：以最新已發布版本及第 12 節的線上證據為準。
 - 正式 branch：`main`
-- **本包為 v2.1.91**（Claude 候選 2026-10-03，GPT 獨立複查修正並於 2026-10-04 正式發布）。
+- 本次 GPT 複查版本：**v2.1.93**，本機完整共同門檻已通過，CI／Pages 發布確認另見第 12.11 節。
+  三寬度逐頁控制項守門已修復假綠，並補修 1024px 道路支線真實重疊；正式 CSS 已改變，
+  不可把 Claude 原候選的「只改測試、CSS 不变」套在 GPT 最終版本。
+  相依鎖定檔四個 dev 節點修補，依賴宣告未變；fast-uri 也在 build 鏈，不只是 lint。
+  完整 audit 16（4 moderate／12 high），production-only 0，剩餘 high 不全是 major 建議。
+- v2.1.92 為同輪未發布候選；其 lockfile 修補與 v2.1.91 縮排補正已納入 v2.1.93。
+  Claude 原包自述及與 GPT 的證據差異保留於 VALIDATION_REPORT.md 歷史來源區。
+- **前一正式版 v2.1.91**（Claude 候選 2026-10-03，GPT 獨立複查修正並於 2026-10-04 正式發布）。
   v2.1.90：使用者回報的兩件版面問題（轉向進階分析的「車種」壓住「全調查時段」切換鈕、
   label 與自己的下拉間距 0px），根因都是「版面規則綁在特定容器上」，已改成通用規則並新增
   `scripts/e2e-control-gaps.mjs`。
@@ -33,7 +69,7 @@
   發布狀態及線上證據以第 12.9d 節為準，不把原候選聲明當作本輪結果。
   ⚠️ `braces`（GHSA-vfj7-8cjw-p6xm）**上游至今沒有修補版**（最新即受影響的 3.0.3），
   同時出現在 lint 與 vinext 建置工具鏈，不打包進靜態網站；不能宣稱完整依賴零風險。
-- 最新已發布版本：v2.1.91，功能提交 `142e82f002fda20b1fa1668dd1f3f00c2a3d5bb4`；2026-10-04 CI／Pages／線上雜湊驗證成功，見第 12.9d 節。後續純交接證據提交以本檔所在 main 的實際 HEAD 為準，不把文件提交誤當新版交通計算。
+- 最新已發布版本：**v2.1.91**（v2.1.92 與 v2.1.93 都尚未發布），功能提交 `142e82f002fda20b1fa1668dd1f3f00c2a3d5bb4`；2026-10-04 CI／Pages／線上雜湊驗證成功，見第 12.9d 節。後續純交接證據提交以本檔所在 main 的實際 HEAD 為準，不把文件提交誤當新版交通計算。
 - 交接文件建立前的 `HEAD`／已發布文件基準：`a4f93f29c25242a0faddcdf562a38b16f1012ceb`（`Document v2.1.63 release verification`）
 - v2.1.63 功能發布 commit：`ef5e56e028dbbba87b4529b87b0ae40341dd66fe`
 - v2.1.79 功能／發布 commit：`3a401d03d5e6bc8832733bbb5a3d744087269fad`（`Release Turning Traffic v2.1.79`）。本文件可能另有後續驗證提交；新 GPT 必須以 `git log -1`、`git rev-parse HEAD` 與遠端 `main` 實際核對當下最新基準。
@@ -653,6 +689,38 @@ GitHub build／root 全部 5 資產、首頁與手冊 SHA 相同。以下是完�
 - 尚未驗證的真實附件／真實別名案例、桌面 Excel 開啟匯出、業務匯出 PDF 逐頁閱讀仍未完成；手冊 PDF 全頁閱讀及合成種子測試不能代替這些證據。
 - 下一步僅是交付並等待 Claude Opus High 第二次獨立複查，不自行開始依賴更新或其他維護。正式工程資料留同一 Repository／GitHub；使用者副本另交 Downloads。
 
+### 12.9f v2.1.93 Claude 第二次複查續（2026-10-04，尚未發布）
+
+使用者裁示後追加：版面守門 `scripts/e2e-control-gaps.mjs` 的分頁清單改成
+**從 DOM 列舉**（`nav button`），3 個寬度 × 19 個分頁。做法抄姊妹系統交通服務水準的
+`e2e-layout.mjs`／`e2e-control-spacing.mjs`——那兩支本來就是從 DOM 列舉分頁、
+掃 9 個寬度 ＋ 4 個縮放比例，是三支裡覆蓋最廣的。
+原本那組深度情境（轉向進階分析 ＋ 長路口名稱 ＋ 字距加寬 ＋ 內建反證）完整保留。
+⚠️ 新掃描第一版是**恆紅**（6 個分頁、`overlapPx` 1050 ＝ 整個容器寬度）：
+①單欄 grid（`.geometry-layout`／`.audit-stack`）被當成「一列」②`inkBox` 把
+`position: absolute` 的浮層子孫也算進來。兩個都改掉之後才 0 ❌。
+⚠️ 反證補成**三種判準各自證明會紅**（重疊 3、壓扁 1、label 間距 93）；
+第一版只斷言「有抓到」，而抓到的全是 label 間距那一種。
+`index-BMxHnwvo.css` 與 `purify.es-Bvo9QlJ8.js` 的 SHA-256 與 v2.1.91 逐位元相同。
+手冊 **20 頁 / 15,579 字元**，四份副本逐位元相同。
+⚠️ 本節**沒有**線上證據——要等 GPT 發布。
+
+### 12.9e v2.1.92 Claude 第二次複查（2026-10-04，尚未發布）
+
+相對已發布 v2.1.91 的低風險增量：`npm audit fix`（**非 `--force`**）更新四個
+開發鏈套件的 lockfile 節點（`js-yaml`、`fast-uri`、兩處 `brace-expansion`），
+以及 `lib/traffic.ts` 一處縮排。`package.json` 逐位元相同（唯一不同的欄位是
+`version`）；`assets/index-BMxHnwvo.css` 與 `assets/purify.es-Bvo9QlJ8.js`
+的 SHA-256 與 v2.1.91 發布版**逐位元相同**，證明沒有碰樣式、DOMPurify 仍是 3.4.16。
+`npm audit --omit=dev` 前後都是 0；完整樹 19 項（4 moderate／15 high）→
+16 項（4 moderate／12 high）。⚠️ `braces` 2026-10-04 再查一次仍是「上游無修補版」
+（npm 最新發布版就是受影響的 3.0.3），維持「目前無法修」。
+⚠️ 本節**沒有**線上證據——Claude 的容器連不到 GitHub Pages，要等 GPT 發布。
+手冊 **20 頁 / 15,579 字元**，四份副本逐位元相同。
+版面沒有改動，但仍依規則「零之三」在容器內以字距加寬模擬寬字型，於
+1890／1536／1366／1280／1024／900 六個寬度逐頁量測並肉眼看過有分段切換器的
+五個分頁：溢出 0 筆、橫向捲軸 0 筆。
+
 ### 12.9d v2.1.91 獨立複查與正式發布（2026-10-04）
 
 唯一基準 v2.1.89／`7c8f08c6a4e7f6207a86fd88dabef3a246d7240f`，本輪以中風險追蹤
@@ -704,6 +772,38 @@ audit 19 項（4 moderate／15 high），仍不宣稱零風險。候選「braces
 7. 等待 GitHub「建置與測試」及內建 `pages build and deployment` 成功。
 8. 用帶版號首頁、該版唯一雜湊資產、帶版號 PDF 驗證 live/local SHA；再確認指定舊資產 404。
 9. 未完成上述證據不得回報「已正式發布」。
+
+### 12.11 v2.1.93 GPT 獨立複查與發布（2026-10-04）
+
+正式基準 main／v2.1.91：`3495cb03a96e385c13960790dc163578a2db96f8`。
+風險中等：dev lockfile 与跨頁控制項守門；發現假綠後主動擴大到最小瀏覽器反證、
+跨頁幾何及真正響應式 CSS。核心計算、Parser、shared storage、匯入及 PCU/PCE 未改。
+`LAST_CALC_CHANGE_VERSION` 維持 v2.1.83；相依宣告、xlsx 0.20.3 vendor、固定保護檔案不變。
+
+原始附件：`Downloads/Claude outputs/交通系統交付_20261004b/`，來源 ZIP 284 entries，
+SHA-256 `7fcaa2f0f97193dc413d0d2633767ca2f4c8a1e52f6e5b14eac0c102f6445f34`；
+給 GPT 說明 ZIP 1 entry，全文讀取，SHA-256
+`76c8ce1a7662d66a88ac97e40d32764c0c642cd5eb154ffa798c7bc195687822`。
+
+本輪實證缺陷與禁止改回事項見文件最前 Regression 注意事項。
+Claude 原掃描對自身 20px 重疊回報 0 rows／0 overlaps；修復後抓到，
+並曝露 1024px 道路支線 137px 真實重疊。修復定位後，撤掉 CSS 必須抓到4條支線的重疊。
+三寬度×19頁=57組合全過，實測178／178／172列；定位容器自己仍要被掃描。
+Cloudflare 開發相依不在靜態 Pages runtime，但會由本機 vinext build 載入；不得略報其風險。
+
+本機封關：乾淨字面 npm ci 成功（509 added、510 audited）；字面 npm test 退出0，
+296 mjs pass +382 TS pass／4 真實附件條件 skip／0 fail，合計678 pass／4 skip。
+字面 npm run e2e 退出0：85個瀏覽器腳本中84 pass／1真實alias附件條件skip，
+另2個種子成功，共87個Node流程步驟，不能全稱為瀏覽器E2E通過。
+最終日志2012個行首成功標記、0個失敗標記；不把日志標記當測試案例數。
+完整audit16（4moderate／12high），production-only0，未force升級或改固定宣告。
+Windows本輪控制列與道路／核對視覺確認、PDF20頁／15,579字元與逐頁點陣目視確認完成。
+真實附件與桌面Office／DOCX LibreOffice視覺界線保留，詳見VALIDATION_REPORT最新GPT區。
+
+目前本機封關通過；功能提交、精確HEAD CI／Pages、線上SHA及舊版404待發布後回填。
+首次E2E為補入定位工具列反證主動中斷，及首次metadata檢查失敗紀錄另存，不混入最終結果。
+工程基準在Repository+GitHub；原始交付／完整日志／ZIP等交換成果另以Downloads交付，
+關鍵來源hash、差異、實證、規則与驗證界線已在本正式文件與VALIDATION_REPORT長期保存。
 
 ## 13. 固定 Claude ↔ GPT 開發流程
 

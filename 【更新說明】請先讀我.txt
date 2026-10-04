@@ -1,5 +1,48 @@
-路口轉向 — 完整專案 v2.1.91
+路口轉向 — 完整專案 v2.1.93
+GPT 2026-10-04 補修：逐頁守門假綠／幾何誤報與獨立反證，並修復 1024px 道路支線
+數據卡位置與刪除鈕真實重疊。以下 Claude 原候選的「樣式不變」與測試數字僅為歷史來源。
+完整 audit 16（4 moderate／12 high），production-only 0；剩餘 high 非全部 major 建議。
+fast-uri 屬 dev/build，Cloudflare 插件在本機 vinext 建置仍會載入，不在 Pages 靜態 runtime。
+GPT 本次實測與最終發布資料請看 VALIDATION_REPORT.md 的最前 GPT 區段。
 =================================================
+
+■ Claude v2.1.93 第二次複查（2026-10-04；前一正式版 v2.1.91，GPT 已發布上線）
+  ⚠️ v2.1.92 從未發布——它與本版都是 2026-10-04 的同一輪產出，使用者在交給 GPT
+    之前裁示再加這一項，所以升到 v2.1.93，不是就地改掉 v2.1.92。
+  這一版**只動測試腳本與版號，程式與樣式一個位元都沒有改**：
+  ・版面守門 scripts/e2e-control-gaps.mjs 從「只跑轉向進階分析一頁、三個寬度」
+    改成「**分頁清單從 DOM 列舉、逐頁掃描**」（3 個寬度 × 19 個分頁 ＝ 57 個組合）。
+    ⚠️ 原因：判準沒問題，但每出現一個新分頁就又沒有人守——這正是 v2.1.90
+      那兩件版面問題的根因。做法抄姊妹系統交通服務水準的 e2e-layout.mjs。
+    原本那組深度情境（長路口名稱＋字距加寬＋內建反證）完整保留。
+  ⚠️ 新掃描第一版是**恆紅**的（6 個分頁、overlapPx 1050 ＝ 整個容器寬度），
+    原因是①單欄 grid 被當成「一列」②inkBox 把浮出去的子孫也算進來。
+    兩個都改掉之後才是 0 ❌——**恆綠與恆紅兩個方向都證明過**。
+  ⚠️ 反證補成**三種判準各自證明會紅**（重疊 3、壓扁 1、label 間距 93）。
+    第一版只斷言「有抓到」，而抓到的全是 label 間距那一種。
+  ⚠️ 樣式表 index-BMxHnwvo.css 與 purify.es-Bvo9QlJ8.js 的雜湊與 v2.1.91
+    逐位元相同——沒有碰任何樣式，DOMPurify 仍然是 3.4.16。
+  ⚠️ 沒有線上發布證據（Claude 的容器連不到 GitHub Pages），要等 GPT 發布。
+  交通量、PCU、尖峰、轉向與涵蓋單位計算未變，LAST_CALC_CHANGE_VERSION 維持 v2.1.83。
+  以下 v2.1.92 與更早各段是歷史紀錄，不是本輪重新驗證。
+
+■ Claude v2.1.92 第二次複查（2026-10-04；前一正式版 v2.1.91，GPT 已發布上線）
+  兩件，網站行為一行都沒有改：
+  ・開發鏈三個 high 安全告警，`npm audit` 的 fixAvailable 是 true（＝宣告範圍內
+    就有修補版），所以修：js-yaml 4.3.1→4.3.2、fast-uri 3.1.5→3.1.8、
+    brace-expansion 1.1.18→1.1.21 與 5.0.9→5.0.12。
+    ⚠️ 只動 package-lock.json 的 12 行，package.json 逐位元相同。
+    這四個都在 lint／typecheck 的開發鏈上，不會進到網站的五個資產；
+    只看會送到瀏覽器那一棵的 npm audit --omit=dev 前後都是 0。
+    完整依賴樹 19 項（4 moderate／15 high）→ 16 項（4 moderate／12 high）。
+  ・lib/traffic.ts 裡 v2.1.91 那一筆的 note: 縮排被打掉（頂到第 0 欄），補回來。
+  ⚠️ braces（GHSA-vfj7-8cjw-p6xm）2026-10-04 再查一次：npm 上最新版仍然是受影響的
+    3.0.3，上游沒有修補版——維持「目前無法修」，不是「決定不做」，下一輪再查。
+  ⚠️ 樣式表 index-BMxHnwvo.css 與 purify.es-Bvo9QlJ8.js 的雜湊與 v2.1.91 逐位元相同
+    ——這一版沒有碰任何樣式，DOMPurify 仍然是 3.4.16。
+  ⚠️ 沒有線上發布證據（Claude 的容器連不到 GitHub Pages），要等 GPT 發布。
+  交通量、PCU、尖峰、轉向與涵蓋單位計算未變，LAST_CALC_CHANGE_VERSION 維持 v2.1.83。
+  以下 v2.1.91 與更早各段是歷史紀錄，不是本輪重新驗證。
 
 ■ GPT v2.1.91 獨立複查（2026-10-04；基準正式 v2.1.89）
   補正候選漏加的共用 flex:none、明確按鈕 nowrap、row-gap 順序及測試檔名。
@@ -296,22 +339,20 @@
   本包已使用內附且雜湊驗證通過的官方 SheetJS 0.20.3 重新建置，並把
   github-pages-dist/ 的 index.html 與 assets/ 同步到發布根目錄。
 本版網站資產：
-  html2canvas-DWeOSTQC.js
-    SHA-256 = 344483bfcf6132a50412dd3d21be186d2de59b284cac244d09b4a498fa88b1b3
-  index-BMxHnwvo.css
-    SHA-256 = 6cc6f2e20e509301d8732e99e57796cddcaad59d61274d478a229cb71992b9e4
-  index-BXYO8mCW.js
-    SHA-256 = fff4b339d52f345712713201e805be0404c14144a9d8821b7c003df2677bf823
-  index.es-njjM1LUH.js
-    SHA-256 = ff44532acee9dd444913b2acba3b36bbba8f12da6d1b7336205c2926543b1597
+  html2canvas-B51e6KFI.js
+    SHA-256 = a44f2c7f9bec5a3aa7694bd8843599f0b383bafe2a57f71dd69a65080ab054c8
+  index-DrMgC51R.css
+    SHA-256 = c94f0d42bdfc0350b3f943b539dc3211a7aab2f7b72468c50d960cc497d74722
+  index-BNw0nyjL.js
+    SHA-256 = 8a34cd640e07ddbed5f177f78131cb2cf8b5152780d07e47cbdab95f7f678ea7
+  index.es-CuDqbtpL.js
+    SHA-256 = 2fef8927984997c9710bb586439b58dbcc86d80dd9faddbde7b5299f7a110e86
   purify.es-Bvo9QlJ8.js
     SHA-256 = aa9ba8b5e16bc0f8a0fdfc2f31e221edb21a1f469d02474a76557cf16bbc7f30
-  DOMPurify 已鎖定 3.4.16。GPT 補正共用防壓縮規則及 row-gap 順序後，
-  重新建置全部資產；上列為 GPT 本機正式發布清單，不沿用 Claude 原候選雜湊。
   交通量、PCU、尖峰、轉向與涵蓋單位計算未變。
 本版手冊：
-  路口轉向程式手冊_v2.1.91.pdf
-    SHA-256 = 664b32e892d7f2fb6fce26ec995ea8d7a04ebf6301d5a3ddbcf46572c309472b
+  路口轉向程式手冊_v2.1.93.pdf
+    SHA-256 = 295dc63d341388f2bf530c663216549ce2861dfbf5161cf22f55def0af374df3
     20 頁 / 15,579 字元（`pdftotext -enc UTF-8` 的輸出，**換行統一為 LF** 後
     NFKC 正規化、含空白）
     ⚠️ 這個字元數是「在哪一台機器**產生**這份 PDF」決定的，不是內容的指紋：
@@ -2206,16 +2247,16 @@
     而不是把左邊的切換器壓扁
 
 部署完成後請確認：
-  ・左側欄下方顯示「v2.1.91」
-  ・https://baotoast.github.io/Turning-Traffic/?v=2.1.91 開得起來
+  ・左側欄下方顯示「v2.1.93」
+  ・https://baotoast.github.io/Turning-Traffic/?v=2.1.93 開得起來
   ・包內每一個網站資產與手冊的 SHA-256，列在這份說明上面的
     「本版網站資產」那一段（五個資產 ＋ 手冊，全部列出）。
     ⚠️ 另外交付的 `SHA256SUMS.txt` 是**與三個 zip 放在一起**的
     （在同一個交付資料夾裡，不在任何一個 zip 內），它算的是
     **三個 zip 檔本身**的雜湊，用來確認「你手上這三包就是我交出去的那三包」。
     兩者的用途不同，不要互相代替。
-  ・路口轉向程式手冊_v2.1.91.pdf 可下載（不是 404）
-  ・手冊封面戳記與頁尾都是 v2.1.91 ｜ 2026-10-03
+  ・路口轉向程式手冊_v2.1.93.pdf 可下載（不是 404）
+  ・手冊封面戳記與頁尾都是 v2.1.93 ｜ 2026-10-04
   ・到「各路口車種組成」，主工具列的尖峰選「上午＋下午並列」：
     那一句不適用說明寫的是「一次只讀得出一個時段的組成…各車種的百分比
     不能跨時段相加」，**不再**提到任何環狀圖形

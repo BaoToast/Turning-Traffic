@@ -1,11 +1,105 @@
 # 更新紀錄
 
-> **完整的逐版紀錄在 `lib/traffic.ts` 的 `VERSION_HISTORY`**（畫面上「版本紀錄」看得到的那一份），
+> v2.1.93 GPT 補修（2026-10-04）：修復逐頁守門排除自身重疊的假綠、零列跳過、
+> 浮層子孫與收合 details 幾何误報；三類反證獨立斷言。修正掃描再抓到並修復
+> 1024px 道路支線數據卡位置與刪除鈕重疊。核心交通計算未變。
+> 下方 Claude 原候選「CSS 不變」「只改測試」及原數字屬歷史自述；GPT 封關見驗證報告。
+
+> **完整的逐版紀錄在 `lib/traffic.ts` 的 `VERSION_HISTORY`**（工程原始碼內保留；網站版本紀錄介面已移除，不可改回），
 > 那是唯一來源。本檔只留重點版本的詳細說明；兩邊如果對不上，以 `VERSION_HISTORY` 為準。
 >
 > 之所以要這樣寫：本檔曾經漏掉 v2.1.5～v2.1.25 共 21 個版本而沒有人發現——同一份歷史有
 > 兩個來源，就一定會漂移。`tests/release-structure.test.mjs` 現在會檢查本檔最新一則的版號
 > 等於程式版號，避免它再次靜靜落後。
+
+## v2.1.93（2026-10-04）版面守門從「只跑一頁」改成「逐頁」
+
+**網站資產的行為一行都沒有改。** 樣式表的雜湊與 v2.1.91／v2.1.92 **逐位元相同**
+（`index-BMxHnwvo.css` ＝ `6cc6f2e2…`），`purify.es` 也沒換——這一版只動測試腳本與版號。
+
+### 為什麼要做
+
+`scripts/e2e-control-gaps.mjs` 原本只量「轉向進階分析」**一頁**、三個寬度
+（`names.findIndex(... "轉向進階分析")` 寫死）。判準沒有問題，但
+**每出現一個新分頁或新控制列，就又沒有人守**。
+
+⚠️ 這正是 v2.1.90 那兩件（「車種」壓住「全調查時段」切換鈕、label 與自己的下拉
+間距 0px）的根因：「**版面規則綁在特定容器上**」已經出現**五次**，而
+「**守門綁在特定一頁**」是它的孿生版本——兩個都是假的綠。
+
+做法抄姊妹系統**交通服務水準**的 `e2e-layout.mjs`／`e2e-control-spacing.mjs`：
+**分頁清單從 DOM 列舉（`nav button`），不寫死**，新增分頁會自動納入。
+
+### 改了什麼
+
+- 原本那組深度情境（轉向進階分析 ＋ 長路口名稱 ＋ 字距加寬 ＋ 內建反證）**完整保留**。
+- 另外加一輪掃描：**3 個寬度（1366／1280／1024）× 19 個分頁**，共 57 個組合。
+  判準相同但**不限容器**——判準寫成行為（`display` 是 flex／grid、主軸是橫的、
+  至少兩個可見子元素、子樹裡真的有控制項），**不是列舉 class 名稱**；
+  用 class 名稱列舉就會回到「每出現一個新容器就要再補一次」的老路。
+- 新掃描有自己的反證，而且**三種判準各自證明會紅**。
+
+### ⚠️ 新掃描第一版是恆紅的，記下來
+
+實跑之後 6 個分頁全紅，`overlapPx` 是 1050——等於整個容器的寬度，那是假的紅的
+典型長相。診斷後找到兩個原因：
+
+1. **單欄的 grid 被當成「一列」**。`.geometry-layout`／`.audit-stack` 是
+   `grid-template-columns: 1050px` 的**上下堆疊卡片**，每一張都是 282→1332，
+   水平當然「重疊 1050px」。
+   → 判準改成只比**真的並排**的那一對（兩塊自己的框垂直有交疊、水平是分開的）；
+   全部子元素左右緣都一樣＝上下堆疊，整個容器跳過。
+2. **`inkBox` 把浮出去的子孫也算進來**。第一張卡片自己的框到 829，但它底下掛了一個
+   浮層到 1440，於是它的 ink 垂直吃到第二張卡片。
+   → `position` 是 `absolute`／`fixed`／`sticky` 的子孫不計入 ink。
+
+⚠️ `inkBox` 這個做法本身要留著——使用者回報的那一件，被壓扁的是 `.segmented-wrap`、
+溢出去的是裡面的 `.segmented`，不取聯集就量不到。
+
+### ⚠️ 反證要三種判準各自證明
+
+第一版的反證只斷言「有抓到」，而實際抓到的全部是 label 間距那一種
+（`overlaps: 0`、`squeezed: 0`、`tight: 93`）——**另外兩種可能已經恆綠而沒有人發現**，
+而使用者原本回報的那一件正是 overlap／squeeze 那一種。
+現在三種分開斷言：注入破壞後 **重疊 3、壓扁 1、label 間距 93**，三種都會紅。
+
+**交通量、PCU、尖峰、轉向的計算一行都沒有改**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.83。
+
+## v2.1.92（2026-10-04）開發鏈三個 high 安全告警（可相容修補）＋ 一個縮排缺陷
+
+**網站資產的行為一行都沒有改。** 樣式表的雜湊與 v2.1.91 **逐位元相同**
+（`index-BMxHnwvo.css`），`purify.es` 也沒換——改的只有 lockfile、手冊版號與一處縮排。
+
+### （一）三個 high：`fixAvailable` 是 `true`，所以修
+
+`npm audit` 的 `fixAvailable` 欄位是權威判準：`true` 代表**宣告範圍內就有修補版**，
+不必降大版、也不必改 `package.json`。這一輪有三個落在這一類：
+
+| 套件 | 原本 | 本版 | 位置 |
+| --- | --- | --- | --- |
+| `js-yaml` | 4.3.1 | **4.3.2** | `eslint` → `@eslint/eslintrc` |
+| `fast-uri` | 3.1.5 | **3.1.8** | `react-server-dom-webpack` → `webpack` → `schema-utils` → `ajv` |
+| `brace-expansion` | 1.1.18 | **1.1.21** | `eslint-plugin-jsx-a11y` → `minimatch` |
+| `brace-expansion` | 5.0.9 | **5.0.12** | `typescript-eslint` → `@typescript-eslint/typescript-estree` → `minimatch` |
+
+⚠️ **只動 `package-lock.json`（12 行），`package.json` 逐位元相同**（`dependencies`／
+`devDependencies`／`overrides`／`engines`／`scripts` 全部比對過，唯一不同是 `version`）。
+這四個都在 lint／typecheck 的開發鏈上，**一個位元都不會進到網站的五個資產**；
+`npm audit --omit=dev`（只看會送到瀏覽器的那一棵）v2.1.91 是 0，本版還是 0。
+完整依賴樹 **19 項（4 moderate／15 high）→ 16 項（4 moderate／12 high）**。
+
+⚠️ **`braces`（GHSA-vfj7-8cjw-p6xm）2026-10-04 又查了一次：npm 上最新版仍然是
+受影響的 3.0.3，上游沒有出修補版**——維持「**目前無法修**」，不是「決定不做」，
+下一輪還要再回頭確認一次。它的 `fixAvailable` 寫的是把 `@next/eslint-plugin-next`
+往回降兩個大版（`isSemVerMajor: true`），那是降版不是修補。
+剩下 12 項 high 的 `fixAvailable` 也全部是 `isSemVerMajor: true`，同樣不做。
+
+### （二）`lib/traffic.ts` 的縮排被打掉
+
+v2.1.91 那一筆 `VERSION_HISTORY` 的 `note:` 頂到第 0 欄，其他每一筆都是 4 欄。
+語法合法，`eslint` 與 `tsc` 都不會紅，所以一路跟著發布出去了。本版補回來。
+
+**交通量、PCU、尖峰、轉向的計算一行都沒有改**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.83。
 
 ## v2.1.91（2026-10-03）把網站會用到的 DOMPurify 升到已修補版
 
