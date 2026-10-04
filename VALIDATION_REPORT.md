@@ -1,19 +1,29 @@
 # Turning Traffic 驗證報告（累積，最新一段在最前面）
 
-## v2.1.93 GPT 獨立複查：本機封關通過，發布待確認（2026-10-04）
+## v2.1.93 GPT 獨立複查：本機封關與正式發布回驗通過（2026-10-04）
 
 以下 Claude v2.1.93／v2.1.92 段落是原候選歷史自述，不是 GPT 本次執行結果。
 GPT 已證實原掃描會漏掉自身框 20px 重疊，修正後另抓到道路支線 1024px 真實重疊，
-因此最後發布會包含響應式 CSS 修正，資產雜湊不再與 Claude 原包相同。
+因此最後發布已包含響應式 CSS 修正，資產雜湊不再與 Claude 原包相同。
 目標守門修復後 57 個寬度／分頁組合全過；三類独立反證及最小瀏覽器正反證全過。
 本次 clean npm ci 成功；完整 audit 16（4 moderate／12 high），production-only 0。
 fast-uri 位於 dev/build 鏈，Cloudflare 插件會由 vinext build 載入；不在 Pages 靜態 runtime
 不等於它完全不執行。剩餘 high 並非全是 major 修復，不擴大固定依賴宣告升級。
-本機完整 test／E2E 已封關，CI／Pages 與線上結果仍待發布後確認，不以 Claude 數字代替。
+本機完整test／E2E與功能提交CI／Pages已封關，不以Claude數字代替，線上證據如下。
 GPT 本次字面 npm test 已退出 0：296 mjs pass；TS 386 中 382 pass／4 skip／0 fail，
 合計 678 pass／4 skip／0 fail，lint／glyph／TypeScript／vinext build 也通過。
 字面 npm run e2e 最終退出 0，85 個正式瀏覽器腳本中 84 pass、1 缺真實 alias 附件條件 skip；
 另 2 個種子產生器成功，共 87 個 Node 流程步驟，不把種子或略過稱作瀏覽器通過。
+功能提交 `630ae1c58f1f5db3c45eeab0b5d9a5c094712fad`：CI `37201650868`、Pages `37201650347` 均success。
+CI job `111434399907` 原始日志TAP回報296mjs+382TS=678pass／4skip／0fail；
+但CI缺pdfinfo/pdftotext，手冊重算子驗證印出工具不可用後返回、TAP未標skip，
+所以不可聲稱CI也重算過手冊。此項由本機Poppler實際驗證補足，與框架計數分開說明。
+2026-10-04 20:20:18 Asia/Taipei，cache-busting下載首頁、全部5assets及v2.1.93PDF，
+7檔SHA-256與正式根目錄相同；舊v2.1.91三個JS、CSS及PDF共5個URL均404。
+shared purify不刪除，200／SHA一致。首頁SHA：
+`a762767363248e3215a469287a3a1ab5f59ad3ab77104de00567fb9f92cf8d92`。
+後續純證據提交仍需精確最終HEAD CI／Pages／線上SHA回驗，最終對應清單在交付release-evidence.json，
+不把較早功能提交綠燈當成最終HEAD綠燈。
 最終完整日志以行首成功標記統計：2012 個 ✅、0 個 ❌。這是日志標記，非脚本／測試案例數。
 最終 targeted 守門退出 0，三寬度量到 178／178／172 列，57 個分頁組合全過；
 日志 163 個 ✅ 標記包含結束標記，不是瀏覽器脚本數量。

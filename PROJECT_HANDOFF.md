@@ -1,6 +1,6 @@
 # Turning Traffic 長期工程交接基準
 
-> **GPT v2.1.93 獨立複查（2026-10-04）目前基準：**承接 main
+> **GPT v2.1.93 獨立複查並正式發布（2026-10-04）目前基準：**承接 main
 > `3495cb03a96e385c13960790dc163578a2db96f8`，中風險：相依鎖定檔與跨頁瀏覽器守門。
 > Claude 原包未改 CSS，但 GPT 修正守門後發現並修復 1024px 道路支線欄位真實重疊，
 > 所以「本版樣式完全不變」只適用於 Claude 原候選，不適用於最後 GPT 發布產物。
@@ -50,7 +50,7 @@
 - 正式 GitHub Pages：<https://baotoast.github.io/Turning-Traffic/>
 - 帶版號的正式驗證網址：以最新已發布版本及第 12 節的線上證據為準。
 - 正式 branch：`main`
-- 本次 GPT 複查版本：**v2.1.93**，本機完整共同門檻已通過，CI／Pages 發布確認另見第 12.11 節。
+- 本次 GPT 複查並正式發布版本：**v2.1.93**，本機完整門檻與功能提交 CI／Pages 已通過，另見第 12.11 節。
   三寬度逐頁控制項守門已修復假綠，並補修 1024px 道路支線真實重疊；正式 CSS 已改變，
   不可把 Claude 原候選的「只改測試、CSS 不变」套在 GPT 最終版本。
   相依鎖定檔四個 dev 節點修補，依賴宣告未變；fast-uri 也在 build 鏈，不只是 lint。
@@ -69,7 +69,10 @@
   發布狀態及線上證據以第 12.9d 節為準，不把原候選聲明當作本輪結果。
   ⚠️ `braces`（GHSA-vfj7-8cjw-p6xm）**上游至今沒有修補版**（最新即受影響的 3.0.3），
   同時出現在 lint 與 vinext 建置工具鏈，不打包進靜態網站；不能宣稱完整依賴零風險。
-- 最新已發布版本：**v2.1.91**（v2.1.92 與 v2.1.93 都尚未發布），功能提交 `142e82f002fda20b1fa1668dd1f3f00c2a3d5bb4`；2026-10-04 CI／Pages／線上雜湊驗證成功，見第 12.9d 節。後續純交接證據提交以本檔所在 main 的實際 HEAD 為準，不把文件提交誤當新版交通計算。
+- 最新已發布版本：**v2.1.93**，功能提交 `630ae1c58f1f5db3c45eeab0b5d9a5c094712fad`；
+  CI `37201650868`／Pages `37201650347` 成功，2026-10-04 20:20 Asia/Taipei 線上逐檔SHA與舊版404核對成功。
+  v2.1.92未獨立發布。後續純交接證據提交以本檔所在main實際HEAD為準，並核對該HEAD最新CI／Pages，
+  不把文件提交當新版交通計算，不用較早功能提交的成功代替最終HEAD驗證。
 - 交接文件建立前的 `HEAD`／已發布文件基準：`a4f93f29c25242a0faddcdf562a38b16f1012ceb`（`Document v2.1.63 release verification`）
 - v2.1.63 功能發布 commit：`ef5e56e028dbbba87b4529b87b0ae40341dd66fe`
 - v2.1.79 功能／發布 commit：`3a401d03d5e6bc8832733bbb5a3d744087269fad`（`Release Turning Traffic v2.1.79`）。本文件可能另有後續驗證提交；新 GPT 必須以 `git log -1`、`git rev-parse HEAD` 與遠端 `main` 實際核對當下最新基準。
@@ -800,7 +803,16 @@ Cloudflare 開發相依不在靜態 Pages runtime，但會由本機 vinext build
 Windows本輪控制列與道路／核對視覺確認、PDF20頁／15,579字元與逐頁點陣目視確認完成。
 真實附件與桌面Office／DOCX LibreOffice視覺界線保留，詳見VALIDATION_REPORT最新GPT區。
 
-目前本機封關通過；功能提交、精確HEAD CI／Pages、線上SHA及舊版404待發布後回填。
+功能提交 `630ae1c58f1f5db3c45eeab0b5d9a5c094712fad` 已推送main；
+精確該HEAD CI `37201650868`、Pages `37201650347` 均success。
+CI實際TAP回報296mjs+382TS=678pass／4skip／0fail；但CI沒有pdfinfo/pdftotext，
+手冊重算子驗證內部印出工具不可用後返回（TAP未標為skip），不可稱CI重驗PDF成功。
+本機有Poppler，頁數／LF正規化15,579字元是本輪實際重算通過，不以CI內部返回取代。
+2026-10-04 20:20:18 Asia/Taipei，cache-busted首頁、5assets、v2.1.93PDF皆與本機SHA相同，
+首頁SHA `a762767363248e3215a469287a3a1ab5f59ad3ab77104de00567fb9f92cf8d92`。
+舊v2.1.91主JS／html2canvas／index.es／CSS與手冊皆404；shared purify仍200且SHA吻合。
+後續純證據提交仍須確認最終HEAD CI／Pages與遠端main，交付release-evidence.json承載最終HEAD，
+避免把自身hash硬寫回同一提交。本文最新區與VALIDATION_REPORT不以Claude歷史數字替代本輪證據。
 首次E2E為補入定位工具列反證主動中斷，及首次metadata檢查失敗紀錄另存，不混入最終結果。
 工程基準在Repository+GitHub；原始交付／完整日志／ZIP等交換成果另以Downloads交付，
 關鍵來源hash、差異、實證、規則与驗證界線已在本正式文件與VALIDATION_REPORT長期保存。
