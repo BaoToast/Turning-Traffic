@@ -1,6 +1,6 @@
 # Turning Traffic 驗證報告（累積，最新一段在最前面）
 
-## v2.1.94 GPT 獨立複查（2026-10-05，本機封關完成）
+## v2.1.94 GPT 獨立複查與正式發布（release commit 日期2026-10-05）
 
 正式基準 main / v2.1.93：`cc1d5b617f615ee23063e33535b820db3f354a5e`。
 三份原始 ZIP SHA-256 已與交付清單核對：完整專案
@@ -61,7 +61,28 @@ release metadata／structure定向27項全過。CI若缺工具仍不能冒稱重
 1支e2e-alias因無真實附件條件略過；另2支種子產生器成功。
 本輪日誌2,016個✅／0個❌（成功標記不等於測試支數），不是Claude原包的2,015。
 追加定向瀏覽器與12張真UI正反證為獨立證據，不重複加進正式85支數字。
-發布／線上回驗須於提交後確認，不用本機成功冒稱已發布。
+最後一次字面npm test（包含最終fixture）仍687pass／4skip／0fail，
+lint／glyph／TypeScript／vinext build全過；文件更新後metadata／structure另27/27pass。
+
+功能提交 `2ee151a8dbedbbdcaa7766368acfa2d6d52f8c8c`，Git日期2026-10-05 21:47:51 +08:00。
+該提交CI [37319599803](https://github.com/BaoToast/Turning-Traffic/actions/runs/37319599803)
+與Pages [37319598740](https://github.com/BaoToast/Turning-Traffic/actions/runs/37319598740) 均success。
+2026-10-05 21:51:30 Asia/Taipei完成cache-busted線上回驗：7檔200且SHA與本機逐一相同；
+4個汰換資產與v2.1.93手冊共5舊URL均404；共用purify仍200且雜湊未變。
+新瀏覽器context線上載入v2.1.94，無JS例外／失敗網站資源，實際截圖已檢視。
+
+| 線上檔案 | SHA-256 |
+| --- | --- |
+| index.html | a7705000bb3333dd84ff82238763a86373d48ba975b435741cf908d22aa45933 |
+| assets/index-CEwBxqTy.js | b25ad0f32e527d53d7e0d403e9670734ef7a284565524f9038880fc59b969e3f |
+| assets/index-NBpDPm_U.css | 13e14ab65335d6b07691bf2ebf23cd27f20c22cf6f260b0ebe3352a574abb3d2 |
+| assets/html2canvas-BeDwErI9.js | b1baa74da384cf327e695cf6deca29052d2651517e81b5ac88a5e8eaa2e8392c |
+| assets/index.es-CxZeUBLK.js | 81f7659316bcb3ade6df2b803c0f268f38d4e1cba25b97e96c476a5baf2a4791 |
+| assets/purify.es-Bvo9QlJ8.js | aa9ba8b5e16bc0f8a0fdfc2f31e221edb21a1f469d02474a76557cf16bbc7f30 |
+| 路口轉向程式手冊_v2.1.94.pdf | dc63519a29a597da156dc72ead4fe7ba7950924687529e6a3c36c30de2b502b4 |
+
+純交接證據提交不變更程式或上述資產；最終交付還須核對該main實際HEAD的CI／Pages、
+線上SHA及HEAD=origin/main=遠端main，不能以較早功能提交的成功代替最終HEAD驗證。
 真實附件／桌面Office等既有未驗證界線保留；不執行或交付試用版HTML。
 
 以下為 Claude 原候選歷史自述；最新 GPT 證據以本節為準。

@@ -1,6 +1,6 @@
 # Turning Traffic 長期工程交接基準
 
-> **v2.1.94 GPT 獨立複查（2026-10-05，本機封關完成）**：承接正式基準 main
+> **v2.1.94 GPT 獨立複查並正式發布（2026-10-05）**：承接正式基準 main
 > `cc1d5b617f615ee23063e33535b820db3f354a5e`／v2.1.93。除 Claude 的局部內距修正，
 > GPT 補強換頁必須 active、空狀態必查 IndexedDB、CSS selector 不可被字串騙、
 > 四值 padding 左右都必須核對與建置產物存在性。不得改回這些守門。
@@ -9,10 +9,11 @@
 > 完整 npm test 已687pass／4真實附件條件skip／0fail；字面串行E2E exit0，
 > 84支瀏覽器通過、1支真實附件條件略過，另2支種子成功，2,016成功標記／0失敗。
 > 兩種真正UI提示×六寬度12張畫面檢視完成；第一處實為content下，不是兩處皆panel下。
-> 發布回驗須以提交後CI／Pages／線上SHA為準，不將本機封關冒稱已發布。
+> 功能提交2ee151a8dbedbbdcaa7766368acfa2d6d52f8c8c已CI／Pages成功、7檔線上SHA相同，
+> 5舊URL404，線上新context載入正常。純證據提交最終HEAD亦須再核對，詳見12.12。
 > Claude 來源自述與本輪實證須分開，詳見 VALIDATION_REPORT.md 最前 GPT 區。
 
-> **v2.1.94（2026-10-05，Claude 交付候選，尚未發布）**
+> **以下為v2.1.94 Claude原交付候選歷史自述（當時尚未發布）**
 > 前一正式版：v2.1.93（GPT 2026-10-04 已發布）。
 >
 > `.empty-inline` 兩處貼著面板邊線：這個 class 用了兩次卻**一條 CSS 規則都沒有**。
@@ -23,7 +24,7 @@
 > 另新增 `tests/empty-inline-spacing.test.mjs`（5 項）與 `tests/test-call-count.test.mjs`（4 項）。
 > 詳見 `VALIDATION_REPORT.md` 的 v2.1.94 那一節。
 
-> **GPT v2.1.93 獨立複查並正式發布（2026-10-04）目前基準：**承接 main
+> **GPT v2.1.93 獨立複查並正式發布（2026-10-04）歷史基準：**承接 main
 > `3495cb03a96e385c13960790dc163578a2db96f8`，中風險：相依鎖定檔與跨頁瀏覽器守門。
 > Claude 原包未改 CSS，但 GPT 修正守門後發現並修復 1024px 道路支線欄位真實重疊，
 > 所以「本版樣式完全不變」只適用於 Claude 原候選，不適用於最後 GPT 發布產物。
@@ -73,7 +74,10 @@
 - 正式 GitHub Pages：<https://baotoast.github.io/Turning-Traffic/>
 - 帶版號的正式驗證網址：以最新已發布版本及第 12 節的線上證據為準。
 - 正式 branch：`main`
-- 本次 GPT 複查並正式發布版本：**v2.1.93**，本機完整門檻與功能提交 CI／Pages 已通過，另見第 12.11 節。
+- 本次 GPT 複查並正式發布版本：**v2.1.94**，本機完整門檻與功能提交 CI／Pages 已通過，另見第 12.12 節。
+  局部提示內距修正與跨頁／空狀態／CSS／條數守門補強；核心計算及相依樹未變。
+  687pass／4真實附件skip；84支瀏覽器pass／1真實附件skip，另2種子成功。
+  以下v2.1.93資訊保留作上一正式版的工程基準，不代表本輪新增計算或依賴修改。
   三寬度逐頁控制項守門已修復假綠，並補修 1024px 道路支線真實重疊；正式 CSS 已改變，
   不可把 Claude 原候選的「只改測試、CSS 不变」套在 GPT 最終版本。
   相依鎖定檔四個 dev 節點修補，依賴宣告未變；fast-uri 也在 build 鏈，不只是 lint。
@@ -92,8 +96,8 @@
   發布狀態及線上證據以第 12.9d 節為準，不把原候選聲明當作本輪結果。
   ⚠️ `braces`（GHSA-vfj7-8cjw-p6xm）**上游至今沒有修補版**（最新即受影響的 3.0.3），
   同時出現在 lint 與 vinext 建置工具鏈，不打包進靜態網站；不能宣稱完整依賴零風險。
-- 最新已發布版本：**v2.1.93**，功能提交 `630ae1c58f1f5db3c45eeab0b5d9a5c094712fad`；
-  CI `37201650868`／Pages `37201650347` 成功，2026-10-04 20:20 Asia/Taipei 線上逐檔SHA與舊版404核對成功。
+- 最新已發布版本：**v2.1.94**，功能提交 `2ee151a8dbedbbdcaa7766368acfa2d6d52f8c8c`；
+  CI `37319599803`／Pages `37319598740` 成功，2026-10-05 21:51:30 Asia/Taipei 線上7檔SHA與5舊URL404核對成功。
   v2.1.92未獨立發布。後續純交接證據提交以本檔所在main實際HEAD為準，並核對該HEAD最新CI／Pages，
   不把文件提交當新版交通計算，不用較早功能提交的成功代替最終HEAD驗證。
 - 交接文件建立前的 `HEAD`／已發布文件基準：`a4f93f29c25242a0faddcdf562a38b16f1012ceb`（`Document v2.1.63 release verification`）
@@ -839,6 +843,34 @@ CI實際TAP回報296mjs+382TS=678pass／4skip／0fail；但CI沒有pdfinfo/pdfto
 首次E2E為補入定位工具列反證主動中斷，及首次metadata檢查失敗紀錄另存，不混入最終結果。
 工程基準在Repository+GitHub；原始交付／完整日志／ZIP等交換成果另以Downloads交付，
 關鍵來源hash、差異、實證、規則与驗證界線已在本正式文件與VALIDATION_REPORT長期保存。
+
+### 12.12 v2.1.94 GPT 獨立複查與發布（2026-10-05）
+
+- 承接main／v2.1.93 `cc1d5b617f615ee23063e33535b820db3f354a5e`。
+  功能提交 `2ee151a8dbedbbdcaa7766368acfa2d6d52f8c8c`（21:47:51 Asia/Taipei）；
+  CI37319599803／Pages37319598740均success。純證據文件更新不再推進版本／計算版本。
+- 本輪中風險：UI本身局部低風險，但守門涵蓋換頁、遷移後資料狀態與發布完整性。
+  正式核心／Parser／持久化／PCU／PCE／尖峰未改，LAST_CALC_CHANGE_VERSION仍v2.1.83，
+  xlsx官方0.20.3與.openai/hosting.json均保留，不執行或交付試用版。
+- 原候選四值padding左0仍5pass，GPT守門會失敗；CSS宣告字串假class、缺head、
+  無CSS產物不放行。換頁必active；已遷移IDB有資料／legacy鍵null不得冒稱乾淨。
+  條數第一項fixture補強後舊regex第一／第三／第四項各自失敗。不得改回假綠。
+- 真正UI兩種提示×1890/1536/1366/1280/1024/900px（高864）共12張已檢視，
+  移除padding反證成立；內緣21/21/20px，不報成含border的22/22/21。
+  第一處實在content下，第二處才在panel下，Claude歷史自述兩者皆panel不精確。
+- Node22.23.3/npm10.9.9：乾淨npm ci成功；最終字面npm test687pass／4真實附件skip／0fail，
+  lint／glyph／TypeScript／vinext build全過。串行npm run e2e exit0：
+  84支瀏覽器pass／1支真實alias附件skip，另2種子成功；2,016成功標記／0失敗標記。
+  兩種數字不可混稱支數；追加定向證據不重複算進85正式腳本。
+- 手冊20頁/15,579字元完整Poppler當場重算、逐頁點陣檢視完成；首輪缺PATH內部略過
+  不當作重算通過。背景首輪中文編碼中止日誌不算成功，UTF-8後完整重跑。
+- 完整audit16（4moderate/12high），production-only0；dev/build告警仍有風險，未強制升降相依。
+  真實附件與桌面Office／DOCX獨立LibreOffice未驗證界線保留，不以種子代替真實附件。
+- 21:51:30線上7檔200且SHA相同，4舊資產＋v2.1.93手冊共5URL404，共用purify仍200／SHA未變。
+  新context載入v2.1.94無JS例外／網站資源失敗、截圖已檢視。完整SHA保存在VALIDATION_REPORT.md。
+- 最終main以本交接檔所在Git HEAD為準，交付前須再驗該HEAD的CI／Pages與線上SHA，
+  並確認HEAD=origin/main=GitHub遠端main及工作樹乾淨。正式工程基準在同份文件與GitHub；
+  完整專案／Pages／Claude二次複查證據包／SHA清單另交付Downloads，不只留下深層工作區副本。
 
 ## 13. 固定 Claude ↔ GPT 開發流程
 

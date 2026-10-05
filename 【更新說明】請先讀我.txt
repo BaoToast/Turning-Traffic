@@ -1,6 +1,8 @@
 路口轉向 — 完整專案 v2.1.94
 
-■ GPT 獨立複查（2026-10-05）：本機封關完成，發布狀態以 VALIDATION_REPORT.md 最前節為準。
+■ GPT 獨立複查並正式發布（2026-10-05）：功能提交2ee151a，CI／Pages均success。
+  線上7檔200且SHA相同、5舊URL404、新context載入v2.1.94正常。
+  純證據提交最終HEAD仍須核對；完整發布證據以VALIDATION_REPORT.md最前節為準。
   補強逐頁active、遷移後IndexedDB空狀態、CSS字串假selector、四值padding左邊、
   缺標題／CSS產物不能略過，以及條數計數器原fixture的假綠。
   真正UI兩種提示×六寬度12張已檢視；第一處父容器為content，不是兩處皆panel下。
