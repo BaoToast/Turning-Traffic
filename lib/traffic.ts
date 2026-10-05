@@ -1112,7 +1112,7 @@ export function resolveSurveyType(input: {
   return "待設定";
 }
 
-export const VERSION = "v2.1.93";
+export const VERSION = "v2.1.94";
 
 /**
  * 最後一次「動到計算口徑」的版本。
@@ -1257,6 +1257,11 @@ export function lockStatus(
   return { conflicts, note };
 }
 export const VERSION_HISTORY = [
+  {
+    version: "v2.1.94",
+    date: "2026-10-05",
+    note: "使用者 2026-10-05 附截圖回報姊妹系統全日交通量「還沒有任何計畫」那一句貼著外框，用同一套判準回頭掃這一支，掃到 .empty-inline：它在 app/traffic-app.tsx 用了兩處，而樣式表裡一條規則都沒有（app/globals.css 0 處、建置後的 assets 也 0 處）。本專案用 Tailwind preflight，沒有規則不等於瀏覽器預設值，preflight 會把預設邊距歸零；而 .panel 自己沒有 padding（內距一律由 .panel-head 這類子元素各自帶），所以那兩句話左右與下方都是 0。用出貨的那份樣式表實測：左 1.0px／右 1.0px／下 1.0px，那 1px 就是外框線本身。補 .empty-inline{margin:0;padding:0 21px 20px}，21px 跟著這一支自己的 .panel-head（20px 21px）取，不照抄姊妹系統的 18px；只補間距，字級與顏色刻意不動。守門兩支：scripts/e2e-class-coverage.mjs 增加「沒有種子資料的乾淨瀏覽器」那一輪（前置＝真的沒有種子資料才算數，找不到就紅不是略過）並直接量文字框到面板左／右／下三個內緣與 .panel-head 是否切齊；新增 tests/empty-inline-spacing.test.mjs（5 項），用 TypeScript 語法樹取出每一個 className，要求每個元素至少有一個 class 在樣式表找得到規則，刻意沒有樣式的寫進 INTENTIONALLY_UNSTYLED 並說明來源、而且清單每一筆都要還在用。另把 tests/release-metadata.test.mjs 的條數計數改走語法樹（scripts/test-call-count.mjs，typescript 本來就在 devDependencies，沒有新增依賴）：原本用正規式刪註解會被字串裡的註解符號騙，而且 /^\\s*test\\(/gm 釘在行首，寫成 });test( 同一行的數不到（v170-features 實測 13 vs 14）。⚠️ 照實記：那一支當時沒有造成任何紅錯，因為四份現況文件都沒有宣稱它的條數。交通量、PCU、尖峰、轉向核心計算未變，LAST_CALC_CHANGE_VERSION 維持 v2.1.83。",
+  },
   {
     version: "v2.1.93",
     date: "2026-10-04",

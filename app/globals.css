@@ -571,6 +571,32 @@ button {
   border-radius: 13px;
   box-shadow: var(--shadow);
 }
+
+/*
+ * ── .empty-inline：面板裡「這一塊算不出來／沒有資料」的那一句 ──────
+ *
+ * v2.1.94（2026-10-05）。姊妹系統全日交通量 v20.98 修掉同一種病（`.inline-note`），
+ * 用同一套判準回頭掃這一支，掃到這一個。
+ *
+ * ⚠️ 當時這個 class 在 app/traffic-app.tsx 用了兩次，而**樣式表裡一條規則都沒有**
+ *   ——app/globals.css 0 處、建置後的 assets/*.css 也 0 處。
+ *   本專案用 Tailwind preflight，沒有規則**不等於**瀏覽器預設值：preflight 會把
+ *   <div>／<p> 的預設邊距歸零。而 .panel 自己沒有 padding（內距一律由
+ *   .panel-head 這類子元素各自帶），所以這兩句話左右與下方都是 0，
+ *   直接貼著面板的邊線。用出貨的那份樣式表實測：**左 1.0px／右 1.0px／下 1.0px**
+ *   （那 1px 就是外框線本身）。
+ *
+ * ⚠️ 21px 是跟著**這一支自己的** .panel-head（padding: 20px 21px）取的，
+ *   不是照抄姊妹系統的 18px。兩支的面板內距本來就不一樣，抄過來會對不齊。
+ *
+ * ⚠️ 只補間距，**不動字級與顏色**。那兩項各自有別的規則與守門在管，
+ *   順手改會把這一次的修正範圍擴大到沒有被回報、也沒有被量過的地方。
+ */
+.empty-inline {
+  margin: 0;
+  padding: 0 21px 20px;
+}
+
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

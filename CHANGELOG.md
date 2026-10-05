@@ -1,5 +1,22 @@
 # 更新紀錄
 
+> **v2.1.94（2026-10-05）**：`.empty-inline` 兩處貼著面板邊線——這個 class 用了兩次卻
+> **一條 CSS 規則都沒有**（Tailwind preflight 把預設邊距歸零，而 `.panel` 自己沒有 padding）。
+> 用出貨的樣式表實測：左 1.0px／右 1.0px／下 1.0px。補 `padding: 0 21px 20px`（跟著這一支
+> 自己的 `.panel-head` 取，不照抄姊妹系統的 18px），只補間距、不動字級與顏色。
+> ⚠️ 既有的 `scripts/e2e-class-coverage.mjs` 一直是綠的——它開頭就塞種子資料，
+> 「算不出來」那一類區塊從來沒渲染過。已補「沒有種子資料的乾淨瀏覽器」那一輪並直接量間距，
+> 另新增 `tests/empty-inline-spacing.test.mjs`（5 項）。
+> 順手把條數守門改走語法樹（體質問題，當時沒有造成紅錯）。
+> **交通量、PCU、尖峰、轉向計算未變**，`LAST_CALC_CHANGE_VERSION` 維持 v2.1.83。
+
+> GPT 獨立補強（2026-10-05）：逐頁必須切到真正active；空環境必查遷移後IndexedDB，
+> CSS selector不接受宣告字串假class，四值padding左右各自驗證、缺標題／CSS產物必須失敗。
+> 條數計數反證第一項原fixture對舊regex仍綠，已補強為確實失敗。
+> 兩種實際提示、六種視窗寬度共12張畫面已檢視；第一處父容器其實是content，
+> 不是兩處都是panel子元素。內距21/21/20px，不把含邊框的22/22/21當CSS內距。
+> 本輪結果與Claude來源自述分開，完整封關／發布證據以VALIDATION_REPORT.md為準。
+
 > v2.1.93 GPT 補修（2026-10-04）：修復逐頁守門排除自身重疊的假綠、零列跳過、
 > 浮層子孫與收合 details 幾何误報；三類反證獨立斷言。修正掃描再抓到並修復
 > 1024px 道路支線數據卡位置與刪除鈕重疊。核心交通計算未變。
@@ -11,6 +28,30 @@
 > 之所以要這樣寫：本檔曾經漏掉 v2.1.5～v2.1.25 共 21 個版本而沒有人發現——同一份歷史有
 > 兩個來源，就一定會漂移。`tests/release-structure.test.mjs` 現在會檢查本檔最新一則的版號
 > 等於程式版號，避免它再次靜靜落後。
+
+## v2.1.94（2026-10-05）`.empty-inline` 兩處貼著面板邊線：class 寫了，樣式表沒有規則
+
+使用者附截圖回報姊妹系統全日交通量的同型缺陷，要我用同一套判準回頭掃這一支。
+`.empty-inline` 在 `app/traffic-app.tsx` 用了**兩處**，而樣式表裡**一條規則都沒有**
+（`app/globals.css` 0 處、建置後的 `assets` 也 0 處）。本專案用 Tailwind preflight，
+沒有規則會把預設邊距歸零，而 `.panel` 自己沒有 padding——用出貨的樣式表實測：
+**左 1.0px／右 1.0px／下 1.0px**，那 1px 就是外框線本身。
+
+修正：`.empty-inline { margin: 0; padding: 0 21px 20px; }`。
+21px 跟著**這一支自己的** `.panel-head`（`20px 21px`）取，不照抄姊妹系統的 18px。
+**只補間距，字級與顏色不動**；交通量、PCU、尖峰、轉向計算一行都沒改，
+`LAST_CALC_CHANGE_VERSION` 維持 v2.1.83。
+
+⚠️ **既有的 `scripts/e2e-class-coverage.mjs` 一直是綠的**，而它的職責正是這件事——
+它開頭就把 `seed-wide.json` 塞進 `localStorage`，於是「算不出來」那一類區塊
+**從來沒有渲染過**，也就從來沒被掃到。已補「沒有種子資料的乾淨瀏覽器」那一輪
+（前置＝真的沒有種子資料才算數，**找不到就紅不是略過**）並直接量三個間距與對齊。
+另新增 `tests/empty-inline-spacing.test.mjs`（5 項）做靜態檢查。
+
+順手把 `tests/release-metadata.test.mjs` 的條數守門改走語法樹
+（`scripts/test-call-count.mjs`，沒有新增依賴），並新增 `tests/test-call-count.test.mjs`（4 項）。
+⚠️ 那是**體質問題不是現行缺陷**：70 支測試檔只有 `v170-features` 兩種數法不一致
+（13 vs 14），而四份現況文件都沒有宣稱它的條數，當時沒有造成任何紅錯。
 
 ## v2.1.93（2026-10-04）版面守門從「只跑一頁」改成「逐頁」
 

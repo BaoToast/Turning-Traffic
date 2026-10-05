@@ -261,10 +261,17 @@ test("文件寫的測試條數必須等於那支檔案裡 test() 的數量", asy
       const full = join(ROOT, "tests", file);
       if (!existsSync(full)) continue; /* 檔案不在包裡由另一支守門管 */
       seen += 1;
-      const body = (await rf(full, "utf8"))
-        .replace(/\/\*[\s\S]*?\*\//g, " ")
-        .replace(/^[ \t]*\/\/[^\n]*$/gm, " ");
-      const real = (body.match(/^\s*test\(/gm) || []).length;
+      /*
+       * ⚠️ 不可以用正規式刪註解再數（2026-10-05，姊妹系統全日交通量實際踩到）：
+       *   測試標題裡只要出現 `scripts/*.mjs` 這種字串，裡面的註解開頭符號就會
+       *   被當成真的註解，把後面整段吃掉——實測把真正 3 項數成 2 項。
+       *   這一支原本還多一個毛病：`/^\s*test\(/gm` 釘在行首，
+       *   寫成 `});test(` 同一行的就數不到（v170-features 實測 13 vs 14）。
+       *   改成語法樹辨識直接的 test() 呼叫。typescript 本來就在 devDependencies，
+       *   沒有新增依賴。
+       */
+      const { countTestCalls } = await import("../scripts/test-call-count.mjs");
+      const real = countTestCalls(await rf(full, "utf8"), full);
       const claimed = CJK[raw] ?? Number(raw);
       if (claimed !== real)
         bad.push(`${doc}：${file} 寫 ${raw}，實際 ${real}`);

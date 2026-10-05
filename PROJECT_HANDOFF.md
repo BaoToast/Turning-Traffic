@@ -1,5 +1,28 @@
 # Turning Traffic 長期工程交接基準
 
+> **v2.1.94 GPT 獨立複查（2026-10-05，本機封關完成）**：承接正式基準 main
+> `cc1d5b617f615ee23063e33535b820db3f354a5e`／v2.1.93。除 Claude 的局部內距修正，
+> GPT 補強換頁必須 active、空狀態必查 IndexedDB、CSS selector 不可被字串騙、
+> 四值 padding 左右都必須核對與建置產物存在性。不得改回這些守門。
+> 空狀態舊鍵缺失不等於沒資料（遷移會刪 localStorage）；正式儲存與業務計算未改。
+> 條數計數第一項fixture亦補強，換回舊regex第一／第三／第四項各自紅。
+> 完整 npm test 已687pass／4真實附件條件skip／0fail；字面串行E2E exit0，
+> 84支瀏覽器通過、1支真實附件條件略過，另2支種子成功，2,016成功標記／0失敗。
+> 兩種真正UI提示×六寬度12張畫面檢視完成；第一處實為content下，不是兩處皆panel下。
+> 發布回驗須以提交後CI／Pages／線上SHA為準，不將本機封關冒稱已發布。
+> Claude 來源自述與本輪實證須分開，詳見 VALIDATION_REPORT.md 最前 GPT 區。
+
+> **v2.1.94（2026-10-05，Claude 交付候選，尚未發布）**
+> 前一正式版：v2.1.93（GPT 2026-10-04 已發布）。
+>
+> `.empty-inline` 兩處貼著面板邊線：這個 class 用了兩次卻**一條 CSS 規則都沒有**。
+> 實測左 1.0／右 1.0／下 1.0px。只補間距（`padding: 0 21px 20px`），字級與顏色不動，
+> 交通量／PCU／尖峰／轉向計算未改。
+> ⚠️ 既有的 `scripts/e2e-class-coverage.mjs` 當時是綠的——它開頭就塞 `seed-wide.json`，
+> 「算不出來」那一類區塊從來沒渲染過。已補乾淨環境那一輪並直接量間距；
+> 另新增 `tests/empty-inline-spacing.test.mjs`（5 項）與 `tests/test-call-count.test.mjs`（4 項）。
+> 詳見 `VALIDATION_REPORT.md` 的 v2.1.94 那一節。
+
 > **GPT v2.1.93 獨立複查並正式發布（2026-10-04）目前基準：**承接 main
 > `3495cb03a96e385c13960790dc163578a2db96f8`，中風險：相依鎖定檔與跨頁瀏覽器守門。
 > Claude 原包未改 CSS，但 GPT 修正守門後發現並修復 1024px 道路支線欄位真實重疊，
@@ -29,7 +52,7 @@
   Excel／DOCX 桌面 Office 開啟、DOCX 獨立 LibreOffice 視覺驗證未補做。
   不可把 Claude 容器的截圖、151 checks／2000 標記或歷史 Windows 截圖冒稱本次證據。
 
-最後更新：2026-10-04
+最後更新：2026-10-05
 
 適用系統：**Turning Traffic 路口尖峰轉向交通量分析系統**
 
